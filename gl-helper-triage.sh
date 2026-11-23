@@ -63,7 +63,10 @@ etc/uci-defaults etc/kvmd/user/scripts etc/crontabs root/.ssh etc/dropbear
 etc/sysupgrade.conf lib/upgrade/keep.d etc/udhcpc.user.d"
 # etc/udhcpc.user.d: the router runs every script there on each DHCP event, and the keep
 # list carries the directory across an update (read by RemoteToHome in two images).
-IOC_RE='gl-helper|/\.gl/|/\.cache/gb|/\.cache/(watch|run|wake|boot|rtty_keep)\.sh|gl_nas/\.cache'
+# The name gl-helper counts as a word of its own: not gl-helper-triage.sh (this script, which
+# owners also start from cron), not a gl-helper.log of the owner's. Files are matched on
+# their active lines only, see active() (review of 2.53).
+IOC_RE='(^|[^-[:alnum:]_.])gl-helper([^-[:alnum:]_.]|$)|/\.gl/|/\.cache/gb|/\.cache/(watch|run|wake|boot|rtty_keep)\.sh|gl_nas/\.cache'
 # Firewall configuration: files that fw3/fw4 and GL.iNet's scripts build the rules from.
 FW_PATHS="etc/config/firewall etc/firewall.user etc/firewall.d etc/nftables.d usr/share/nftables.d"
 # The command users found started with this rule (see SHELL_RE below): it is what is left
@@ -105,12 +108,6 @@ KVM_NETS='65.20.71.131 66.245.219.252'
 KVM_IP_RE='65\.20\.71\.131|66\.245\.219\.252|gl-inet\.top'
 CONN_RE='/(nc|netcat|socat|sh|ash|bash)$'
 SHELL_RE="170\\.39\\.226\\.|/tmp/f([ ;|>]|\$)"
-# A process that names the shell's address or its pipe is the shell only when it is made of
-# what the reported shell is made of: nc, netcat or socat, a pipe made with mkfifo, an
-# interactive shell, or cat reading the pipe. The reported process lines all have one of
-# these (sh -c "... mkfifo /tmp/f ...", nc 170.39.226.219 <port>, cat /tmp/f). An owner's
-# tcpdump or grep for the address has none, and is listed for review instead (issue 7).
-SHELL_USE_RE="$TOOL_RE|(^|[ /])(ba|a)?sh -i|(^|[ /])cat /tmp/f([ ;|>]|\$)"
 # A second, older backdoor that is not part of GL.iNet's notice of 2026-11-20. Users of
 # GL.iNet's forum found it on a GL-AX1800 (4.8.3) and a GL-X2000 (4.7.13), dated back to
 # 2025 (topic 73097 by ehidle; posts 26, 63 and 65 of the notice's topic 73056):
@@ -167,6 +164,13 @@ BD_BLOCK_RE="^[[:space:]]*(($BD_NULL)[[:space:]]|(address|server|local)=/[^[:spa
 # as in BD_BLOCK_RE. That is an owner who keeps the device away from these servers. A line
 # that does both counts as fetching.
 SRV_FETCH_RE='(^|[^[:alnum:]_.-])(wget|curl|uclient-fetch|tftp|ftpget|nc|netcat|ncat|socat|telnet|rtty)([[:space:]]|$)|[|][[:space:]]*([^[:space:]|]*/)?(ba|a)?sh([[:space:]]|$)'
+# A process that names the shell's address or its pipe is the shell only when it is made of
+# what such a shell is made of: a tool that talks to a server (SRV_FETCH_RE: nc, ncat,
+# socat, telnet, ...), a pipe made with mkfifo, an interactive shell, or cat reading the
+# pipe. The reported process lines all have one of these (sh -c "... mkfifo /tmp/f ...",
+# nc 170.39.226.219 <port>, cat /tmp/f). An owner's tcpdump or grep for the address has
+# none, and is listed for review instead (issue 7).
+SHELL_USE_RE="$SRV_FETCH_RE|$TOOL_RE|(^|[ /])(ba|a)?sh -i|(^|[ /])cat /tmp/f([ ;|>]|\$)"
 SRV_BLOCK_RE="$BD_BLOCK_RE|-j[[:space:]]+(DROP|REJECT)|(^|[[:space:]])(drop|reject)([[:space:];]|\$)|(^|[[:space:]])(blackhole|unreachable|prohibit)([[:space:]]|\$)|($BD_NULL)[[:space:]]+gl-inet\\.top"
 BD_HOST_PATHS="etc/hosts etc/config etc/dnsmasq.conf etc/dnsmasq.d etc/rc.local etc/crontabs etc/init.d etc/hotplug.d"
 BD_LOG_PATHS="etc/AdGuardHome/data/querylog.json etc/AdGuardHome/data/querylog.json.1 tmp/AdGuardHome/data/querylog.json"
@@ -188,7 +192,7 @@ gl-helper-triage.sh - check, archive and remediate the GL.iNet "gl-helper" impla
                        restore replaced base files from the read-only image
   -o, --out DIR        output directory for the archive
   --color, --no-color  force or disable coloured output (default: only on a terminal)
-  --report             send the short anonymous report without asking (it is shown first)
+  --report             send the short anonymous report without asking (a summary is shown)
   --update             replace this script by the current version, after checking its
                        signature. Changes nothing else and checks nothing
   --unsigned           with --update on firmware that has no tool to check the
@@ -224,6 +228,7 @@ palette() {
 }
 palette 0
 die() { printf '%sERROR:%s %s\n' "$RED" "$N" "$*" >&2; exit 4; }
+archive_failed() { progress_end; printf '%sERROR:%s %s\n' "$RED" "$N" "$*" >&2; ARCHIVE=; }
 
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -474,6 +479,15 @@ TRUST_LIBS=unchecked
 # does not look behind a NUL byte, and a program or compiled Lua is full of them: a name
 # stands behind its length or between NUL bytes (issue 24). So NUL becomes a line end first.
 strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
+# The active text of a script, crontab or command line, one command per line: lines that
+# are comments and comments at the end of a line are dropped, and lines are split at ;
+# && || and &, so that a name and a tool count together only in the same command. A
+# comment that names the malware or its server is the owner's note (review of 2.53).
+active_in() { grep -vE '^[[:space:]]*#' | sed 's/[[:space:]]#.*$//' | awk '{ gsub(/[0-9]*>&[0-9-]*|&>/, " "); gsub(/\|\||&&|;|&/, "\n"); print }'; }
+active() { strs "$1" | active_in; }
+# The lines of a file that a base file does not have. busybox grep -f with an empty file
+# matches every line, GNU grep none; an empty base file has no line, so all lines are new.
+not_in() { if [ -s "$1" ]; then grep -vxFf "$1" "$2"; else cat "$2"; fi; }
 base_libs() {
 	local ld n d
 	ld=$(strs "$1" | grep -o '/lib/ld-[A-Za-z0-9._-]*' | head -n 1)
@@ -559,7 +573,7 @@ check_backdoor() {
 			[ -n "$(pkg_new "/$p")" ] && continue
 			# only lines the base image's version does not have count
 			if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then
-				grep -vxFf "$(l "$p")" "$f" 2>/dev/null | grep -qE "$BD_RE" || continue
+				not_in "$(l "$p")" "$f" 2>/dev/null | grep -qE "$BD_RE" || continue
 			fi
 			sha=
 			[ "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" = "$BD_INIT_SHA" ] && sha=", the same file as on other reported devices"
@@ -615,7 +629,7 @@ check_backdoor() {
 		same_as_lower "$p" && continue
 		[ -n "$(pkg_new "/$p")" ] && continue
 		if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then
-			grep -vxFf "$(l "$p")" "$f" 2>/dev/null | grep -qE "$BD_KEEP_RE" || continue
+			not_in "$(l "$p")" "$f" 2>/dev/null | grep -qE "$BD_KEEP_RE" || continue
 		fi
 		add IOC backdoor-keep "/$p" "older backdoor: keeps its files across firmware updates"
 	done
@@ -624,13 +638,15 @@ check_backdoor() {
 	#    another, so that is for a human to judge.
 	for p in $BD_HOST_PATHS; do
 		exists "$(r "$p")" || continue
-		find "$(r "$p")" -xdev -type f -exec grep -lE "$BD_HOST_RE" {} + 2>/dev/null | head -n 5 | while IFS= read -r f; do
+		find "$(r "$p")" -xdev -type f -exec grep -lE "$BD_HOST_RE" {} + 2>/dev/null | head -n 20 | while IFS= read -r f; do
 			p=${f#"${ROOT%/}"/}
 			grep -q "${TAB}/$p${TAB}" "$FIND" && continue
 			n=$(grep -oE "[a-z0-9.-]*($BD_HOST_RE)" "$f" | sort -u | head -n 4 | tr '\n' ' ' | sed 's/ $//')
-			if grep -E "$BD_HOST_RE" "$f" | grep -qvE "$BD_BLOCK_RE"; then
+			# active lines only: not a comment, not the name of a firewall rule (review of 2.53)
+			active "$f" | grep -E "$BD_HOST_RE" | grep -vE "^[[:space:]]*option[[:space:]]+(name|label)[[:space:]]" >"$TMP/bdhost"
+			if grep -qvE "$BD_BLOCK_RE" "$TMP/bdhost"; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
-			else
+			elif [ -s "$TMP/bdhost" ]; then
 				add INFO backdoor-block "/$p" "blocks a server of the older backdoor ($n): that is the advice, not the backdoor"
 			fi
 		done
@@ -763,17 +779,17 @@ check_applets() {
 }
 
 # What a file, or a command line saved to one, does with the malware's servers (issue 20):
-#   fetch  an active line that names a server fetches from it or pipes into a shell
-#   block  every active line that names a server blocks it, and no line fetches anything
+#   fetch  a command that names a server fetches from it or pipes into a shell
+#   block  every command that names a server blocks it, and no command fetches anything
 #   name   anything else, also a server named only in a comment or in a binary
-# Nothing when it names none. A line that starts with # is not active.
+# Nothing when it names none. Commands as active() splits them.
 srv_use() {
-	strs "$1" | grep -E "$KVM_IP_RE" | grep -vE '^[[:space:]]*#' >"$TMP/srv"
+	active "$1" | grep -E "$KVM_IP_RE" >"$TMP/srv"
 	if [ ! -s "$TMP/srv" ]; then
 		strs "$1" | grep -qE "$KVM_IP_RE" && echo name
 	elif grep -qE "$SRV_FETCH_RE" "$TMP/srv"; then
 		echo fetch
-	elif ! grep -qvE "$SRV_BLOCK_RE" "$TMP/srv" && ! strs "$1" | grep -vE '^[[:space:]]*#' | grep -qE "$SRV_FETCH_RE"; then
+	elif ! grep -qvE "$SRV_BLOCK_RE" "$TMP/srv" && ! active "$1" | grep -qE "$SRV_FETCH_RE"; then
 		echo block
 	else
 		echo name
@@ -781,10 +797,16 @@ srv_use() {
 	return 0
 }
 srv_names() { strs "$1" | grep -oE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
-# The lines of a crontab that start the malware or fetch from its servers: what --fix drops
+# The lines of a crontab, keep list or start script that start the malware or fetch from
+# its servers, as they stand in the file: what --fix drops
 cron_bad() {
-	grep -E "$IOC_RE" "$1" 2>/dev/null
-	grep -E "$KVM_IP_RE" "$1" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -E "$SRV_FETCH_RE"
+	local line
+	grep -E "$IOC_RE|$KVM_IP_RE" "$1" 2>/dev/null | while IFS= read -r line; do
+		printf '%s\n' "$line" | active_in >"$TMP/cronline"
+		if grep -qE "$IOC_RE" "$TMP/cronline" || grep -E "$KVM_IP_RE" "$TMP/cronline" | grep -qE "$SRV_FETCH_RE"; then
+			printf '%s\n' "$line"
+		fi
+	done
 	return 0
 }
 
@@ -794,16 +816,21 @@ check_persist() {
 		f=$(src "$p")
 		exists "$f" || continue
 		same_as_lower "$p" && continue
+		# deleted in the overlay: the owner's doing, and nothing in it can start anything
+		if whiteout "$f"; then
+			add INFO deleted "/$p" "deleted on this device (the firmware image has it)"
+			continue
+		fi
 		if ! safe "$f"; then
 			add REVIEW odd-file "/$p" "not a regular file ($(ls -ld "$f" 2>/dev/null | cut -c1-10)), not read"
 			continue
 		fi
 		u=$(srv_use "$f")
-		if grep -qE "$IOC_RE" "$f" 2>/dev/null; then
+		if active "$f" | grep -qE "$IOC_RE"; then
 			add IOC persist-ref "/$p" "references gl-helper paths"
 		elif [ "$u" = fetch ]; then
 			add IOC persist-ref "/$p" "fetches from a server of the malware ($(srv_names "$f"))"
-		elif [ "$p" = etc/rc.local ] && ! { if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then grep -vxFf "$(l "$p")" "$f"; else cat "$f"; fi 2>/dev/null |
+		elif [ "$p" = etc/rc.local ] && ! { if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then not_in "$(l "$p")" "$f"; else cat "$f"; fi 2>/dev/null |
 			sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -vE '^(#.*)?$' | grep -qvxF -e 'exit 0' -e '. /lib/functions/gl_util.sh' -e 'remount_ubifs'; }; then
 			# GL.iNet's firmware writes these lines into rc.local itself on some models; a
 			# file that differs from the base image by nothing else is not a change of yours
@@ -846,7 +873,7 @@ check_review() {
 				[ -n "$(pkg_new "/$rel")" ] && continue
 				case $rel in etc/rc.d/*) known_service_link "$f" && continue ;; esac
 				# any autostart/config file that starts the implant is persistence too
-				if [ -f "$f" ] && [ ! -L "$f" ] && grep -qE "$IOC_RE" "$f" 2>/dev/null; then
+				if [ -f "$f" ] && [ ! -L "$f" ] && active "$f" | grep -qE "$IOC_RE"; then
 					case $rel in
 					etc/sysupgrade.conf | lib/upgrade/keep.d/*)
 						add IOC keep-ref "/$rel" "keeps gl-helper paths across firmware updates" ;;
@@ -1018,7 +1045,7 @@ check_procs() {
 	: >"$TMP/procs"
 	: >"$TMP/sockets"
 	: >"$TMP/exes"
-	local d pid exe comm cmd sha known
+	local d pid exe comm cmd sha known prog
 	for d in /proc/[0-9]*; do
 		pid=${d#/proc/}
 		[ "$pid" = $$ ] && continue
@@ -1033,14 +1060,18 @@ check_procs() {
 		# shellcheck disable=SC2012 # fd names are numbers
 		ls -l "$d/fd" 2>/dev/null | awk -v p="$pid" -v c="$comm" \
 			'/socket:\[/ {s=$NF; gsub(/[^0-9]/,"",s); print s "\t" p "\t" c}' >>"$TMP/sockets"
-		case "$cmd" in *gl-helper-triage*) continue ;; esac
+		# The program a process runs: its first word, or for a shell the script it runs
+		# (also with . or source in sh -c).
+		prog=$(printf '%s\n' "$cmd" | awk '{ p = $1; n = split(p, a, "/")
+			if (a[n] ~ /^-?(sh|ash|bash|busybox)$/) { for (i = 2; i <= NF; i++) if ($i !~ /^-/ && $i != "sh" && $i != "ash" && $i != "." && $i != "source") { p = $i; break } }
+			print p }')
+		# this script and its own subshells, known by the file they run; a name somewhere
+		# on a command line does not hide a process (review of 2.53)
+		case ${prog##*/} in gl-helper-triage*) continue ;; esac
 		# The malware is a process that runs one of its files: as the program, under its
 		# name, or as the script a shell runs. A command that only names such a path, as
 		# less or tail on a log does, is for review and is not stopped (issue 20).
-		if printf '%s\n%s\n' "$exe" "$comm" | grep -qE "$IOC_RE" ||
-			printf '%s\n' "$cmd" | awk '{ p = $1; n = split(p, a, "/")
-				if (a[n] ~ /^-?(sh|ash|bash|busybox)$/) { for (i = 2; i <= NF; i++) if ($i !~ /^-/ && $i != "sh" && $i != "ash") { p = $i; break } }
-				print p }' | grep -qE "$IOC_RE"; then
+		if printf '%s\n%s\n%s\n' "$exe" "$comm" "$prog" | grep -qE "$IOC_RE"; then
 			add IOC process "$pid" "comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
@@ -1061,7 +1092,7 @@ check_procs() {
 			continue
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$SHELL_RE"; then
-			if printf '%s\n' "$cmd" | grep -qE "$SHELL_USE_RE"; then
+			if printf '%s\n' "$cmd" | active_in | grep -E "$SHELL_RE" | grep -qE "$SHELL_USE_RE"; then
 				add IOC process "$pid" "remote shell reported by users (GL.iNet staff: treat the router as compromised): started $(proc_start "$pid") comm=$comm cmd=$cmd"
 				continue
 			fi
@@ -1211,8 +1242,18 @@ check_firewall() {
 				rel=${f#"${base%/}"/}
 				same_as_lower "$rel" && continue
 				[ -n "$(pkg_new "/$rel")" ] && continue
+				# The firewall runs /etc/firewall.user (fw3) and what lies in /etc/firewall.d as
+				# shell scripts at every start: there the malware's commands count as in an
+				# autostart file. --fix drops only those lines (review of 2.53).
+				case $rel in etc/firewall.user | etc/firewall.d/*)
+					if [ ! -L "$f" ] && active "$f" | grep -qE "$IOC_RE"; then
+						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it starts the malware"
+					elif [ ! -L "$f" ] && [ "$(srv_use "$f")" = fetch ]; then
+						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it fetches from a server of the malware ($(srv_names "$f"))"
+					fi ;;
+				esac
 				if [ -n "$LOWER" ] && [ -f "$(l "$rel")" ]; then
-					grep -vxFf "$(l "$rel")" "$f" 2>/dev/null | grep -v '^[[:space:]]*\(#.*\)\{0,1\}$' >"$TMP/fw-lines"
+					not_in "$(l "$rel")" "$f" 2>/dev/null | grep -v '^[[:space:]]*\(#.*\)\{0,1\}$' >"$TMP/fw-lines"
 					n=$(wc -l <"$TMP/fw-lines" | tr -d ' ')
 					add REVIEW fw-config "/$rel" "differs from the firmware image: $n lines that are not in it (listed under Firewall)"
 				else
@@ -1455,7 +1496,9 @@ report_head() {
 	else
 		kv Released "$RELEASED"
 	fi
-	if [ "${age:-0}" -ge 24 ]; then kv Update "${YEL}a newer version is likely.${N} Get it with: sh $0 --update"
+	# started as "sh -s" through ssh or triage-remote.sh there is no file to replace
+	if [ ! -f "$0" ]; then kv Update "${D}runs from a pipe, not a file: fetch the script again for the current version${N}"
+	elif [ "${age:-0}" -ge 24 ]; then kv Update "${YEL}a newer version is likely.${N} Get it with: sh $0 --update"
 	else kv Update "sh $0 --update  ${D}(gets the current version and checks its signature)${N}"; fi
 	kv Host "$HOST"
 	kv Platform "$PLATFORM"
@@ -1545,7 +1588,7 @@ result_block() {
 	has_ioc rtty-server && say "   ${RED}IOC${N}      rtty-server: --fix does NOT change /etc/rtty_conf. A factory reset or reflash does."
 	[ "$(count_cmd)" -gt 0 ] && say "   ${RED}IOC${N}      cloud-command, fw-rule, installer-trace: the attack reached this device."
 	[ "$(count_bd)" -gt 0 ] && say "   ${RED}IOC${N}      backdoor-*: a trace of the older backdoor. --fix does NOT remove it, see below."
-	[ "$(count PERSIST)" -gt 0 ] && say "   ${YEL}PERSIST${N}  a changed rc.local or root crontab. --fix resets it only when an IOC was found."
+	[ "$(count PERSIST)" -gt 0 ] && say "   ${YEL}PERSIST${N}  a changed rc.local or root crontab. --fix resets it only when the malware itself was found."
 	[ "$(count REVIEW)" -gt 0 ] && say "   ${CYA}REVIEW${N}   an unusual change, not proof of an infection. Check whether it is yours. Never modified."
 	[ "$(count INFO)" -gt 0 ] && say "   ${D}INFO     context, for example files installed by a package.${N}"
 	say ""
@@ -1757,10 +1800,12 @@ collect() {
 		say "   Evidence archive written to stdout."
 		return 0
 	fi
-	mkdir -p "$OUTDIR" || die "cannot create $OUTDIR"
+	# Without an archive the run still ends with its result (and --fix changes nothing):
+	# the findings are what the owner needs most, also on a router whose /tmp is full.
+	mkdir -p "$OUTDIR" || { archive_failed "cannot create $OUTDIR"; return 1; }
 	ARCHIVE=$OUTDIR/gl-triage-$HOST-$STAMP.tar.gz
-	tar -C "$TMP" -czf "$ARCHIVE" evidence || { rm -f "$ARCHIVE"; die "writing $ARCHIVE failed"; }
-	tar -tzf "$ARCHIVE" >/dev/null 2>&1 || die "archive verification failed: $ARCHIVE"
+	tar -C "$TMP" -czf "$ARCHIVE" evidence || { rm -f "$ARCHIVE"; archive_failed "writing $ARCHIVE failed"; return 1; }
+	tar -tzf "$ARCHIVE" >/dev/null 2>&1 || { archive_failed "archive verification failed: $ARCHIVE"; return 1; }
 	(cd "$OUTDIR" && sha256sum "${ARCHIVE##*/}" >"${ARCHIVE##*/}.sha256")
 	progress_end
 	section "Evidence archive"
@@ -1809,7 +1854,17 @@ fix() {
 	fi
 	section "Remediation"
 	# 1. processes: freeze all first so they cannot restart each other, then kill
-	awk -F '\t' '$1=="IOC" && $2=="process" {print $3}' "$FIND" | sort -u >"$TMP/pids"
+	#    Only a process that still runs the command that was found: its number can have gone
+	#    to another process since the check (review of 2.53).
+	awk -F '\t' '$1=="IOC" && $2=="process" { i = index($4, " cmd="); print $3 "\t" (i ? substr($4, i + 5) : "") }' "$FIND" | sort -u >"$TMP/pids.found"
+	: >"$TMP/pids"
+	while IFS="$TAB" read -r pid c; do
+		if [ -n "$c" ] && [ "$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ')" != "$c" ]; then
+			say "   left pid $pid: it no longer runs the command that was found"
+			continue
+		fi
+		echo "$pid" >>"$TMP/pids"
+	done <"$TMP/pids.found"
 	while read -r pid; do kill -STOP "$pid" 2>/dev/null; done <"$TMP/pids"
 	while read -r pid; do kill -KILL "$pid" 2>/dev/null && act "killed pid $pid"; done <"$TMP/pids"
 	# 2. the implant's own files
@@ -1831,6 +1886,7 @@ fix() {
 		for p in $PERSIST; do
 			exists "$(src "$p")" || continue
 			same_as_lower "$p" && continue
+			whiteout "$(src "$p")" && continue
 			restore_from_lower "$p" || failed=1
 			say "     ${D}(previous version: files/merged/$p in the archive)${N}"
 		done
@@ -1848,6 +1904,19 @@ fix() {
 		while IFS= read -r p; do
 			case " $PERSIST " in *" $p "*) continue ;; esac
 			exists "$(r "$p")" || continue
+			case $p in etc/firewall.user | etc/firewall.d/*)
+				# the firewall's start script: the owner's rules stay, the malware's lines go
+				f=$(r "$p")
+				safe "$f" || continue
+				cron_bad "$f" >"$TMP/fw.bad"
+				not_in "$TMP/fw.bad" "$f" >"$TMP/fw.new"
+				if [ -s "$TMP/fw.bad" ] && cat "$TMP/fw.new" >"$f"; then
+					act "removed the malware's lines from /$p"
+				else
+					echo fail >>"$TMP/fixfail"
+				fi
+				continue ;;
+			esac
 			restore_from_lower "$p" || echo fail >>"$TMP/fixfail"
 			case $p in etc/init.d/*) exists "$(r "$p")" || echo "${p##*/}" >>"$TMP/removed-init" ;; esac
 		done
@@ -1869,14 +1938,15 @@ fix() {
 			grep -v 'gl-agent' "$f" >"$TMP/keep.new"
 		else
 			cron_bad "$f" >"$TMP/cron.bad"
-			grep -vxFf "$TMP/cron.bad" "$f" >"$TMP/keep.new"
+			not_in "$TMP/cron.bad" "$f" >"$TMP/keep.new"
 		fi
 		cat "$TMP/keep.new" >"$f" && act "removed the malware's lines from /$p" || echo fail >>"$TMP/fixfail"
 	done
 	awk -F '\t' '$1=="IOC" && $2=="keep-ref" {print substr($3,2)}' "$FIND" | while IFS= read -r p; do
 		f=$(r "$p")
 		safe "$f" || continue
-		grep -vE "$IOC_RE" "$f" >"$TMP/keep.new"
+		cron_bad "$f" >"$TMP/keep.bad"
+		not_in "$TMP/keep.bad" "$f" >"$TMP/keep.new"
 		cat "$TMP/keep.new" >"$f" && act "removed gl-helper lines from /$p" || echo fail >>"$TMP/fixfail"
 	done
 	[ -f "$TMP/fixfail" ] && failed=1
@@ -2036,14 +2106,14 @@ build_report() {
 				safe "$(r "${f#/}")" || continue
 				n=20
 				if [ "$kind" = keep-ref ]; then
-					grep -E "$IOC_RE" "$(r "${f#/}")"
+					cron_bad "$(r "${f#/}")"
 				elif [ "$kind" = backdoor-keep ]; then
 					grep -E "$BD_KEEP_RE" "$(r "${f#/}")"
 				elif [ "$f" = /etc/rc.local ]; then
 					# the whole file: what stands around the attacker's line matters too
 					n=60; cat "$(r "${f#/}")"
 				elif [ -n "$LOWER" ] && [ -f "$(l "${f#/}")" ]; then
-					grep -vxFf "$(l "${f#/}")" "$(r "${f#/}")"
+					not_in "$(l "${f#/}")" "$(r "${f#/}")"
 				else
 					cat "$(r "${f#/}")"
 				fi 2>/dev/null | grep -v '^[[:space:]]*$' | head -n "$n" >"$TMP/plines"
@@ -2199,17 +2269,26 @@ offer_report() {
 		ysay "known traces above${extra:+; also ${extra#, }}."
 	fi
 	[ "$nr" -gt 0 ] && ysay "Also what was listed for review: $nr paths, with fingerprints of the files."
+	# Lines and names of the owner's that the report carries as they are: said in bold, so
+	# that nobody sends them unawares. They stay in the report because they can be what
+	# the attacker left (Aaron, 2026-11-23).
 	if [ "$nl" -gt 0 ]; then
 		ysay "${B}Also $nl lines of your own autostart files and firewall, word for word.${N}"
-		ysay "Look at them with v first: if one holds a password or token of yours, do not send."
+		na=$(grep -vE "$KVM_IP_RE|170\\.39\\.226\\." "$TMP/rlines" | grep -cE '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)')
+		[ "${na:-0}" -gt 0 ] && ysay "${B}$na of them hold IP addresses that are not the attacker's, for example of your own network.${N}"
+		ysay "They can also hold names, passwords or tokens. Look at them with v first, and answer n"
+		ysay "if you would not post one of them in a public forum."
 	fi
+	acc=$(grep -E '^(new-account|uid0-account)  ' "$TMP/revlines" 2>/dev/null | sed -n 's/.* name=\([^ ]*\).*/\1/p' | sort -u | head -n 5 | tr '\n' ' ' | sed 's/ $//')
+	[ -n "$acc" ] && ysay "${B}Also the name of each account the firmware does not have: $acc${N}"
 	# the note leaves the device: show it as the report holds it, after jstr's filter
 	note=$(sed -n 's/^"note": "\(.*\)",$/\1/p' "$TMP/report.json")
 	if [ -n "$note" ]; then
 		ysay "And your note, as it will be sent:"
 		printf '        %s\n' "$note" >&3
 	fi
-	ysay "Not sent: host name, IP or MAC addresses, keys, account names."
+	ysay "Not sent: host name, keys, passwords, other files. Addresses and names go only where"
+	ysay "they stand in the lines and paths above (v shows them)."
 	# everything, for "v"
 	report_details() {
 		say ""
@@ -2220,6 +2299,7 @@ offer_report() {
 		ysay "- whether GoodCloud and AstroWarp are on, whether the device is bound to a GoodCloud"
 		ysay "  account (yes or no, never the account), whether remote SSH and web access are on"
 		ysay "- whether the firmware brings GL.iNet's own cleanup"
+		ysay "- for an account the firmware does not have: its name, number and shell, never a password"
 		if [ -s "$TMP/rlines" ]; then
 			ysay "- these lines from your autostart files (rc.local in full) and firewall:"
 			sed 's/^/        /' "$TMP/rlines" >&3
@@ -2230,7 +2310,8 @@ offer_report() {
 			sed 's/^/        /' "$TMP/revlines" >&3
 			ysay "  If a path here says more about you than you want to share, do not send."
 		fi
-		ysay "Not sent: host name, IP or MAC addresses, keys, the content of any other file."
+		ysay "Not sent: host name, keys, passwords, the content of any other file. Addresses and names"
+		ysay "go only where they stand in the lines and paths above."
 		say ""
 		ysay "The complete report, as it would be sent:"
 		sed 's/^/      /' "$TMP/report.json" >&3
@@ -2503,7 +2584,7 @@ check)
 	;;
 archive)
 	report_body
-	collect
+	collect || { cloud_advice; result_block; finish 4; }
 	cloud_advice
 	result_block
 	[ "$(count IOC)" -gt 0 ] && finish 1
@@ -2512,7 +2593,13 @@ archive)
 fix)
 	report_body
 	collect
-	{ [ -n "$ARCHIVE" ] && [ -s "$ARCHIVE" ]; } || die "no verified archive, refusing to change anything"
+	if [ -z "$ARCHIVE" ] || [ ! -s "$ARCHIVE" ]; then
+		say "   ${RED}No verified archive, so nothing was changed.${N} Free some space or choose another directory with -o."
+		cloud_advice
+		result_block
+		[ "$(count IOC)" -gt 0 ] && recommend
+		finish 4
+	fi
 	if [ "$(count_gl)" = 0 ]; then
 		fix
 		cloud_advice

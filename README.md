@@ -91,13 +91,20 @@ This script also detects:
     one of them together with `wget`, `curl`, `uclient-fetch`, `nc`, `rtty` or a pipe into
     a shell. One user's network logs and the installer name the same servers. Since 2.53 a
     server that is only named is no indicator any more ([#20](https://github.com/admonstrator/glinet-csa-2026-01/issues/20)):
-    a line that blocks it (`-j DROP`, `-j REJECT`, `drop`, a route to nowhere, a hosts
-    entry to a null address) is `INFO` (`server-block`) and stays, anything else that names
-    it is `REVIEW` (`server-ref`) and stays. A script that keeps the address in a
-    variable and fetches from it on another line is therefore only `REVIEW`,
+    an autostart file that only blocks it (`-j DROP`, `-j REJECT`, `drop`, a route to
+    nowhere, a hosts entry to a null address) is `INFO` (`server-block`) and stays, any
+    other file that names it is `REVIEW` (`server-ref`) and stays. In `rc.local` and the
+    root crontab such a line is your change like any other (`PERSIST`, see below). Tool and
+    server count together only within one command: a comment, `||`, `;` or `&&` in between
+    separates them. A script that keeps the address in a variable and fetches from it in
+    another command is therefore only `REVIEW`,
   - a process that runs one of the malware's files: as the program, under its name or as
     the script a shell runs. A command that only names such a path, such as `less` on a
     log, is `REVIEW` and is not stopped,
+
+  In files only active lines count, never a comment. The name `gl-helper` counts as a word
+  of its own: a cron job that starts `gl-helper-triage.sh`, or a note that mentions the
+  malware, is no trace of it (since 2.53).
   - the replaced `netstat`: a two-line script that calls the real one and hides the
     connections to its server.
 
@@ -258,6 +265,11 @@ image is that configuration (`/etc/config/firewall`, `/etc/firewall.user`,
 lines that are not in the image are printed under "Firewall". Your own port forwards and
 rules show up there too.
 
+`/etc/firewall.user` and the files in `/etc/firewall.d` are run as shell scripts when the
+firewall starts (fw3). A line there that starts the malware or fetches from its servers is
+an `IOC` (`persist-ref`) as in any autostart file, and `--fix` removes that line and no
+other (since 2.53).
+
 From the running rules the report prints the ones that redirect traffic (`DNAT`,
 `REDIRECT` and the chain `SDWAN_IP_MAPPING`). The complete rule set (`iptables-save`,
 `nft list ruleset`) goes into the evidence archive. A rule in `SDWAN_IP_MAPPING` that
@@ -409,7 +421,7 @@ through GoodCloud, and by reports of 22 November devices are still being hit.
 The head of the report appears at once. It includes whether GoodCloud is switched on
 now, with the version of its client; that is the setting at the time of the check, not
 during the attack. While the checks run, a line shows which of the
-nine steps is in progress. The report groups its findings by label and ends with a summary and a verdict. Under a
+ten steps is in progress. The report groups its findings by label and ends with a summary and a verdict. Under a
 clean verdict on a running device the script says when the device last started. If that
 was on or after 19 November 2026 it adds that the result says little about the time
 before: a remote shell and what it left in memory are gone after a restart, and on a KVM
@@ -541,7 +553,12 @@ as the script sends it could find the hardware address behind it by trying them 
 server could do that before it applies its own secret; it does not, and it does not keep
 the value it received. If that is not good enough for you, use `--no-device-id`.
 
-It does not contain the host name, IP or MAC addresses, or any other file. `REVIEW` findings are only counted.
+Apart from the lines and paths described above, it contains no host name, no key, no
+password and no other file. Those lines and paths can hold addresses of your network and
+names, and an account the firmware does not have goes with its name. They stay in the
+report because they can be what the attacker left; before it asks, the script says in
+bold how many lines it sends, how many of them hold IP addresses that are not the
+attacker's, and which account names.
 The receiving [worker](worker/) stores no IP address.
 
 ---
@@ -549,15 +566,19 @@ The receiving [worker](worker/) stores no IP address.
 ## 🧹 What `--fix` Does
 
 1. Writes and verifies the evidence archive. No archive, no changes.
-2. Stops implant processes (SIGSTOP all, then SIGKILL).
+2. Stops implant processes (SIGSTOP all, then SIGKILL), each only if it still runs the
+   command that was found.
 3. Removes `/etc/glinet/.cache/` and `/etc/config/.gl/`, and a fallback directory of the
    installer when one of the malware's files was found in it.
 4. Resets `rc.local` and the root crontab to the base image version, or removes them
-   if the base image has none. The previous versions are in the archive.
+   if the base image has none, but only when the malware itself was found (its files,
+   autostart entries or processes). The previous versions are in the archive.
 5. Restores replaced applets from the base image and removes other autostart files that
    start the implant, including OpenWrt `rc.d` links to removed init scripts.
-6. Removes only the implant lines from sysupgrade keep lists, from the running crontab
-   `/tmp/gl_crontabs/root` and, for a key named `gl-agent`, from `authorized_keys`.
+6. Removes only the implant's lines (and lines that fetch from its servers) from sysupgrade
+   keep lists, from the running crontab `/tmp/gl_crontabs/root`, from the firmware's
+   crontab files in `/etc/gl_crontabs/crontabs.d`, from `/etc/firewall.user` and
+   `/etc/firewall.d`, and, for a key named `gl-agent`, from `authorized_keys`.
    `/etc/rtty_conf` is not changed: the script cannot tell what belongs there. When it names
    the attacker's server, `--fix` says so and exits 1 if that was the only finding, or 3
    after removing the others. A factory reset or reflash puts the file right.
