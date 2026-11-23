@@ -824,7 +824,15 @@ if [ -n "$SIGNIFY" ] && command -v python3 >/dev/null 2>&1; then
 	expect "without a signature nothing is replaced" '[ $rc = 4 ] && grep -q "no signature is served" "$W/out.txt" && [ "$(ver)" = 2.62 ]'
 	serve 2.63 k1
 	env PATH="$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update >"$W/out.txt" 2>&1; rc=$?
-	expect "without usign nothing is replaced, and the script says how to get the new one by hand" '[ $rc = 4 ] && grep -q "has no usign" "$W/out.txt" && grep -q "curl -fsSL" "$W/out.txt" && [ "$(ver)" = 2.62 ]'
+	expect "without usign the script says so and replaces nothing where nobody can be asked" '[ $rc = 4 ] && grep -q "has no usign" "$W/out.txt" && grep -q "add --unsigned" "$W/out.txt" && [ "$(ver)" = 2.62 ]'
+	env PATH="$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update --unsigned >"$W/out.txt" 2>&1; rc=$?
+	expect "with --unsigned it updates all the same and says that nothing was checked" '[ $rc = 0 ] && [ "$(ver)" = 2.63 ] && grep -q "signature was NOT checked" "$W/out.txt"'
+	serve 2.50 k1
+	env PATH="$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update --unsigned >"$W/out.txt" 2>&1; rc=$?
+	expect "an older version is refused without the check as well" '[ $rc = 4 ] && grep -q "older than this one" "$W/out.txt" && [ "$(ver)" = 2.63 ]'
+	serve 2.64 k1; echo 'echo added on the way' >>"$W/www/fix"
+	env PATH="$W/bin:$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update --unsigned >"$W/out.txt" 2>&1; rc=$?
+	expect "where usign is there, --unsigned is not a way around a signature that does not fit" '[ $rc = 4 ] && [ "$(ver)" = 2.63 ]'
 	kill "$SRV" 2>/dev/null
 else
 	echo "  SKIP: needs signify (signify-openbsd) and python3"

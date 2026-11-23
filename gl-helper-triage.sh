@@ -155,7 +155,7 @@ BD_LOG_PATHS="etc/AdGuardHome/data/querylog.json etc/AdGuardHome/data/querylog.j
 FULL_UPPER_MAX_KB=65536
 TAB=$(printf '\t')
 
-SECRETS=0 MODE=check STDOUT=0 OUTDIR=/tmp ROOT=/ UPPER='' LOWER='' UPPER_SET=0 LOWER_SET=0 COLOR=auto REPORT=ask DEVICE_ID=1 NOTE=''
+SECRETS=0 MODE=check STDOUT=0 OUTDIR=/tmp ROOT=/ UPPER='' LOWER='' UPPER_SET=0 LOWER_SET=0 COLOR=auto REPORT=ask DEVICE_ID=1 NOTE='' UNSIGNED=0
 REPORT_URL=${GL_TRIAGE_REPORT_URL:-https://app.gl-i.net/csa-2026-01-report}
 
 usage() {
@@ -173,6 +173,8 @@ gl-helper-triage.sh - check, archive and remediate the GL.iNet "gl-helper" impla
   --report             send the short anonymous report without asking (it is shown first)
   --update             replace this script by the current version, after checking its
                        signature. Changes nothing else and checks nothing
+  --unsigned           with --update on firmware that has no tool to check the
+                       signature: update all the same, without asking
   --no-report          never offer to send a report
   --show-report        print the complete report and send nothing
   --no-device-id       leave the device ID out of the report
@@ -211,6 +213,7 @@ while [ $# -gt 0 ]; do
 	--archive) MODE=archive ;;
 	--fix) MODE=fix ;;
 	--update) MODE=update ;;
+	--unsigned) UNSIGNED=1 ;;
 	--stdout) STDOUT=1 ;;
 	--color) COLOR=1 ;;
 	--no-color) COLOR=0 ;;
@@ -2299,6 +2302,10 @@ finish() { cloud_advice; offer_report; exit "$1"; }
 # it could be an old one with known gaps, sent on purpose. The signature is checked with
 # usign, the tool OpenWrt checks its package lists with, and only when it is the
 # firmware's own. Whatever fails, the script that is here stays as it is.
+# Not every firmware has usign. Where it is missing the script says so and what that
+# means, and replaces itself only when its user agrees: at the question, or with
+# --unsigned where nobody can be asked. A signature that is there and does not fit is
+# never passed over.
 # The keys: the base64 line of each public key file, separated by spaces. The second is a
 # spare whose other half is kept offline, to replace the first if it is lost.
 UPDATE_URL=${GL_TRIAGE_UPDATE_URL:-https://app.gl-i.net/csa-2026-01-fix}
@@ -2309,7 +2316,7 @@ fetch() {
 	else return 2; fi
 }
 do_update() {
-	local self new sig k ok nv
+	local self new sig k ok nv check answer
 	self=$0 new=$TMP/update.sh sig=$TMP/update.sig
 	section "Update"
 	say "   This version   $VERSION, released $RELEASED"
@@ -2317,17 +2324,37 @@ do_update() {
 	[ -n "$UPDATE_KEYS" ] || { no "this version carries no key to check an update with."; return 4; }
 	{ [ -f "$self" ] && [ ! -L "$self" ]; } || { no "the script was not started from a file of its own ($self)."; return 4; }
 	{ [ -w "$self" ] && [ -w "$(dirname "$self")" ]; } || { no "$self cannot be written."; return 4; }
-	command -v usign >/dev/null 2>&1 || { no "this firmware has no usign, the tool that checks the signature."; return 4; }
-	tool_ok usign || { no "usign on this device is not the firmware's own, so its answer would prove nothing."; return 4; }
+	check=usign
+	if ! command -v usign >/dev/null 2>&1; then
+		check=none
+		say "   ${YEL}This firmware has no usign, the tool that checks the signature of an update.${N}"
+		say "   Without that check only the encrypted connection protects the download: whoever"
+		say "   controls the connection, or the service that hands the script out, could send another file."
+		if [ "$UNSIGNED" = 1 ]; then
+			say "   Going on without the check, as --unsigned says."
+		elif [ -t 0 ] && [ -t 3 ]; then
+			printf '   %sUpdate without checking the signature? [y/N]%s ' "$B" "$N" >&3
+			read -r answer || answer=
+			case $answer in y | Y | yes | Yes | YES) ;; *) no "not confirmed."; return 4 ;; esac
+		else
+			no "the signature cannot be checked here. To update all the same, add --unsigned."
+			return 4
+		fi
+	elif ! tool_ok usign; then
+		no "usign on this device is not the firmware's own, so its answer would prove nothing."
+		return 4
+	fi
 	fetch "$UPDATE_URL" "$new"
 	case $? in 0) ;; 2) no "neither curl nor wget of the firmware is here to download with."; return 4 ;; *) no "the download failed."; return 4 ;; esac
-	fetch "$UPDATE_URL.sig" "$sig" || { no "no signature is served for the current version yet. Try again in a few minutes."; return 4; }
-	ok=0
-	for k in $UPDATE_KEYS; do
-		printf 'untrusted comment: update key\n%s\n' "$k" >"$TMP/update.pub"
-		usign -V -q -m "$new" -p "$TMP/update.pub" -x "$sig" >/dev/null 2>&1 && { ok=1; break; }
-	done
-	[ "$ok" = 1 ] || { no "the signature does not fit the download. The file was not used."; return 4; }
+	if [ "$check" = usign ]; then
+		fetch "$UPDATE_URL.sig" "$sig" || { no "no signature is served for the current version yet. Try again in a few minutes."; return 4; }
+		ok=0
+		for k in $UPDATE_KEYS; do
+			printf 'untrusted comment: update key\n%s\n' "$k" >"$TMP/update.pub"
+			usign -V -q -m "$new" -p "$TMP/update.pub" -x "$sig" >/dev/null 2>&1 && { ok=1; break; }
+		done
+		[ "$ok" = 1 ] || { no "the signature does not fit the download. The file was not used."; return 4; }
+	fi
 	nv=$(sed -n 's/^VERSION=\([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$new" | head -n 1)
 	case $(awk -v a="$nv" -v b="$VERSION" 'BEGIN { split(a, x, "."); split(b, y, "."); if (a == "") print "bad"; else if (x[1] + 0 > y[1] + 0 || (x[1] + 0 == y[1] + 0 && x[2] + 0 > y[2] + 0)) print "newer"; else if (x[1] + 0 == y[1] + 0 && x[2] + 0 == y[2] + 0) print "same"; else print "older" }') in
 	newer) ;;
@@ -2338,7 +2365,8 @@ do_update() {
 	sh -n "$new" 2>/dev/null || { no "the download does not read as a script."; return 4; }
 	cp "$self" "$self.old" 2>/dev/null
 	if cat "$new" >"$self.new" 2>/dev/null && mv -f "$self.new" "$self" 2>/dev/null; then
-		say "   ${GRN}${B}Updated to version $nv.${N} Its signature was checked."
+		if [ "$check" = usign ]; then say "   ${GRN}${B}Updated to version $nv.${N} Its signature was checked."
+		else say "   ${GRN}${B}Updated to version $nv.${N} ${YEL}Its signature was NOT checked.${N}"; fi
 		say "   The version from before is kept as $self.old"
 		say "   Run it now: sh $self"
 		return 0
