@@ -43,10 +43,10 @@
 # --fix only touches IOC items and their persistence. REVIEW items are archived and
 # reported, never changed. This is a stopgap: a factory reset is still recommended.
 
-VERSION=2.49
+VERSION=2.50
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
 # website reads both lines to show the current version and how long ago it came out.
-RELEASED='2026-11-23 10:00 UTC'
+RELEASED='2026-11-23 10:39 UTC'
 
 # Where the malware lives and what it puts there. The first two directories are the ones
 # GL.iNet's cleanup in the KVM firmware knows. The rest comes from the installer itself
@@ -2311,7 +2311,7 @@ finish() { cloud_advice; offer_report; exit "$1"; }
 # The keys: the base64 line of each public key file, separated by spaces. The second is a
 # spare whose other half is kept offline, to replace the first if it is lost.
 UPDATE_URL=${GL_TRIAGE_UPDATE_URL:-https://app.gl-i.net/csa-2026-01-fix}
-UPDATE_KEYS=''
+UPDATE_KEYS='RWT3i36dVR3XndIzvtu600f1No34ytWkFYphv+5p49dLKtEUUy3IfIDx RWTjqtEa0VPVvTR3x0I/d2cCw3rN4ly+mVAnwgaEzL3j36CPwUTGhqn1'
 fetch() {
 	if tool_ok curl; then curl -fsSL -m 60 -o "$2" "$1" 2>/dev/null
 	elif tool_ok wget; then wget -q -T 60 -O "$2" "$1" 2>/dev/null

@@ -796,7 +796,7 @@ if [ -n "$SIGNIFY" ] && command -v python3 >/dev/null 2>&1; then
 	keys="$(sed -n 2p "$W/k1.pub") $(sed -n 2p "$W/k2.pub")"
 	# usign as the firmware has it takes the options signify takes
 	printf '#!/bin/sh\nexec %s "$@"\n' "$SIGNIFY" >"$W/bin/usign"; chmod +x "$W/bin/usign"
-	mkver() { sed -e "s|^UPDATE_KEYS=''\$|UPDATE_KEYS='$keys'|" -e "s|^VERSION=.*|VERSION=$1|" "$T" >"$2"; }
+	mkver() { sed -e "s|^UPDATE_KEYS='.*'\$|UPDATE_KEYS='$keys'|" -e "s|^VERSION=.*|VERSION=$1|" "$T" >"$2"; }
 	serve() { mkver "$1" "$W/www/fix"; "$SIGNIFY" -S -s "$W/$2.sec" -m "$W/www/fix" -x "$W/www/fix.sig"; }
 	upd() { env PATH="$W/bin:$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update >"$W/out.txt" 2>&1; }
 	ver() { sed -n 's/^VERSION=//p' "$W/dev/t.sh"; }

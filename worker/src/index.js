@@ -411,7 +411,7 @@ async function script(request, env, ctx, pathname) {
 // bytes that name the key, and the signature (in a public key file: the key).
 const SIG_KEY = 'script/csa-2026-01-fix.sig';
 // the base64 lines of the public keys, the same as UPDATE_KEYS in the script
-export const UPDATE_KEYS = [];
+export const UPDATE_KEYS = ['RWT3i36dVR3XndIzvtu600f1No34ytWkFYphv+5p49dLKtEUUy3IfIDx', 'RWTjqtEa0VPVvTR3x0I/d2cCw3rN4ly+mVAnwgaEzL3j36CPwUTGhqn1'];
 const unbase64 = (s) => { try { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); } catch { return null; } };
 const sha256hex = async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 async function signatureFits(env, sigText, body) {
