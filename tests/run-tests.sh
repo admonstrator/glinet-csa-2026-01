@@ -517,7 +517,17 @@ run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
 expect "--fix removes the fallback directory with the malware, leaves the other" '[ ! -e "$D/m/etc/gl_nas/.cache" ] && [ -f "$D/m/userdata/.gl/my-notes" ]'
 expect "--fix strips only the malware's lines from crontab and authorized_keys" 'grep -q own-job "$D/m/tmp/gl_crontabs/root" && ! grep -q watch.sh "$D/m/tmp/gl_crontabs/root" && grep -q AAAAOWNER "$D/m/etc/dropbear/authorized_keys" && ! grep -q gl-agent "$D/m/etc/dropbear/authorized_keys"'
 expect "--fix strips only the malware's line from the firmware's crontab file" 'grep -q gl-own-task "$D/m/etc/gl_crontabs/crontabs.d/tasks" && ! grep -q watch.sh "$D/m/etc/gl_crontabs/crontabs.d/tasks" && grep -q other-task "$D/m/etc/gl_crontabs/crontabs.d/clean"'
-expect "--fix leaves rtty_conf alone and says so (exit $rc)" '[ $rc = 2 ] && grep -q "65.20.71.131" "$D/m/etc/rtty_conf" && grep -q "rtty_conf still names" "$D/fix.txt"'
+expect "--fix leaves rtty_conf alone, says so and ends incomplete (exit $rc, issue 22)" '[ $rc = 3 ] && grep -q "65.20.71.131" "$D/m/etc/rtty_conf" && grep -q "rtty_conf still names" "$D/fix.txt" && grep -q "Verdict: remediation INCOMPLETE" "$D/fix.txt" && ! grep -q "no gl-helper indicators left" "$D/fix.txt"'
+umount "$D/m"
+
+echo "=== rtty_conf alone, as GL.iNet's cleanup can leave it (issue 22)"
+D=$(mkscen rtty "$OWL"); U=$D/u
+mkdir -p "$U/etc"; printf 'host 65.20.71.131\nport 5912\n' >"$U/etc/rtty_conf"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "IOC, verdict INFECTED, and the result does not promise that --fix removes it (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *rtty-server  */etc/rtty_conf" "$D/check.txt" && grep -q "Verdict: INFECTED" "$D/check.txt" && grep -q "rtty-server: --fix does NOT change /etc/rtty_conf" "$D/check.txt" && ! grep -qF -- "--fix removes it" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix changes nothing, says why and exits 1, not 0 (exit $rc)" '[ $rc = 1 ] && grep -q "65.20.71.131" "$D/m/etc/rtty_conf" && grep -q "Nothing was changed" "$D/fix.txt" && grep -q "rtty_conf still names" "$D/fix.txt" && ! grep -q "No IOC found" "$D/fix.txt"'
 umount "$D/m"
 
 echo "=== rc.local with only the firmware's own lines is not a change"
@@ -566,7 +576,7 @@ expect "the netstat link alone: IOC, verdict ATTACKED by the installer, exit 1" 
 expect "the updater's Tailscale in /usr/bin is waved through" 'grep -q "INFO  *updater-file  */usr/bin/tailscaled" "$D/check.txt"'
 expect "an rc.local that is a link to a regular file is not called odd" '! grep -q "odd-file" "$D/check.txt"'
 run "$D" "$OWK" --fix >"$D/fix.txt"; rc=$?
-expect "--fix leaves the link and exits 1" '[ $rc = 1 ] && [ -L "$D/m/usr/bin/netstat" ]'
+expect "--fix leaves the link, exits 1 and names no state file (issue 22)" '[ $rc = 1 ] && [ -L "$D/m/usr/bin/netstat" ] && grep -q "Nothing to remove for installer-trace" "$D/fix.txt" && ! grep -q "state file" "$D/fix.txt"'
 umount "$D/m"
 D=$(mkscen wg "$OWL"); U=$D/u
 mkdir -p "$U/bin" "$U/etc/config"; printf '\033LuaQ loader\n' >"$U/bin/ulogd"; echo cfg >"$U/etc/config/wireguard_server"

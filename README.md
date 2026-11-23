@@ -546,7 +546,9 @@ The receiving [worker](worker/) stores no IP address.
    start the implant, including OpenWrt `rc.d` links to removed init scripts.
 6. Removes only the implant lines from sysupgrade keep lists, from the running crontab
    `/tmp/gl_crontabs/root` and, for a key named `gl-agent`, from `authorized_keys`.
-   `/etc/rtty_conf` is not changed; the script says so when it names the attacker's server.
+   `/etc/rtty_conf` is not changed: the script cannot tell what belongs there. When it names
+   the attacker's server, `--fix` says so and exits 1 if that was the only finding, or 3
+   after removing the others. A factory reset or reflash puts the file right.
 7. Deletes the firewall rule that the command of the user-reported remote shell left
    behind. Other firewall rules and the firewall configuration are not changed.
 8. Restarts cron and checks again.

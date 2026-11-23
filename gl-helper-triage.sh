@@ -43,10 +43,10 @@
 # --fix only touches IOC items and their persistence. REVIEW items are archived and
 # reported, never changed. This is a stopgap: a factory reset is still recommended.
 
-VERSION=2.51
+VERSION=2.52
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
 # website reads both lines to show the current version and how long ago it came out.
-RELEASED='2026-11-23 10:50 UTC'
+RELEASED='2026-11-23 15:20 UTC'
 
 # Where the malware lives and what it puts there. The first two directories are the ones
 # GL.iNet's cleanup in the KVM firmware knows. The rest comes from the installer itself
@@ -1267,6 +1267,14 @@ count_hard() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-comm
 # and the root crontab alone when those are all there is (issue 5).
 count_implant() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "rtty-server" && $2 != "installer-trace" && $2 != "fw-rule" && $2 != "pipe" && !(($2=="process" || $2=="connection") && $4 ~ /reported remote shell|^remote shell reported/)' "$FIND" | wc -l | tr -d ' '; }
 count_bd() { awk -F '\t' '$1=="IOC" && $2 ~ /^backdoor-/' "$FIND" | wc -l | tr -d ' '; }
+has_ioc() { grep -q "^IOC${TAB}$1${TAB}" "$FIND"; }
+# /etc/rtty_conf is counted for the verdict but --fix does not change it: the script cannot
+# tell what belongs there. Whatever --fix did, this finding is still there (issue 22).
+rtty_note() {
+	has_ioc rtty-server || return 0
+	say "   ${YEL}/etc/rtty_conf still names the attacker's server. --fix does not change it: the script${N}"
+	say "   ${YEL}cannot tell what belongs there. A factory reset or reflash puts it right.${N}"
+}
 
 # Under a clean verdict on a running device: when it last started. The remote shell, its
 # pipe and the firewall rule live in memory only, and a KVM firmware update can remove
@@ -1472,7 +1480,8 @@ report_body() {
 result_block() {
 	section "Result"
 	say "   Summary: $(tally IOC) $(tally PERSIST) $(tally REVIEW) $(tally INFO)"
-	[ "$(count_hard)" -gt 0 ] && say "   ${RED}IOC${N}      a known trace of the malware or of a remote shell. --fix removes it."
+	[ "$(count_hard)" -gt "$(count "IOC${TAB}rtty-server")" ] && say "   ${RED}IOC${N}      a known trace of the malware or of a remote shell. --fix removes it."
+	has_ioc rtty-server && say "   ${RED}IOC${N}      rtty-server: --fix does NOT change /etc/rtty_conf. A factory reset or reflash does."
 	[ "$(count_cmd)" -gt 0 ] && say "   ${RED}IOC${N}      cloud-command, fw-rule, installer-trace: the attack reached this device."
 	[ "$(count_bd)" -gt 0 ] && say "   ${RED}IOC${N}      backdoor-*: a trace of the older backdoor. --fix does NOT remove it, see below."
 	[ "$(count PERSIST)" -gt 0 ] && say "   ${YEL}PERSIST${N}  a changed rc.local or root crontab. --fix resets it only when an IOC was found."
@@ -1719,12 +1728,21 @@ fix() {
 	if [ "$LIVE" = 1 ] && [ "$(id -u)" != 0 ]; then die "--fix needs root"; fi
 	if [ "$(count_gl)" = 0 ]; then
 		say ""
-		if [ "$(count_bd)" -gt 0 ]; then
-			say "   ${YEL}Nothing was changed. --fix does not remove the older backdoor: reflash the firmware.${N}"
-		elif [ "$(count_cmd)" -gt 0 ]; then
-			say "   Nothing to remove: the state file only shows that the command ran. It was left in place."
-		else
+		if [ "$(count IOC)" = 0 ]; then
 			say "   No IOC found, nothing to remediate. REVIEW items were not touched."
+			return 0
+		fi
+		# what is left are IOCs that --fix does not remove: one line for each kind
+		say "   Nothing was changed."
+		[ "$(count_bd)" -gt 0 ] && say "   ${YEL}--fix does not remove the older backdoor: reflash the firmware.${N}"
+		rtty_note
+		if has_ioc cloud-command; then
+			say "   Nothing to remove for cloud-command: the state file only shows that the command ran."
+			say "   It was left in place."
+		fi
+		if has_ioc installer-trace; then
+			say "   Nothing to remove for installer-trace: the link to busybox only shows that the"
+			say "   installer was at work. It was left in place."
 		fi
 		return 0
 	fi
@@ -2433,7 +2451,8 @@ fix)
 		fix
 		cloud_advice
 		result_block
-		{ [ "$(count_bd)" -gt 0 ] || [ "$(count_cmd)" -gt 0 ]; } && { recommend; finish 1; }
+		# IOCs that --fix leaves (older backdoor, rtty_conf, traces of a command): exit 1, as --check
+		[ "$(count IOC)" -gt 0 ] && { recommend; finish 1; }
 		finish 0
 	fi
 	fix
@@ -2445,21 +2464,33 @@ fix)
 	if [ "$(count_gl)" -gt 0 ]; then
 		grep "^IOC${TAB}" "$FIND" | awk -F '\t' '{printf "   still present: %s %s %s\n", $2, $3, $4}' >&3
 		say "   ${RED}Verdict: remediation INCOMPLETE${N}"
+		rtty_note
 		result_link 3
 		recommend
 		finish 3
 	fi
 	if [ "$(count_bd)" -gt 0 ]; then
-		grep "^IOC${TAB}backdoor-" "$FIND" | awk -F '\t' '{printf "   still present: %s %s %s\n", $2, $3, $4}' >&3
+		grep -E "^IOC${TAB}(backdoor-|rtty-server${TAB})" "$FIND" | awk -F '\t' '{printf "   still present: %s %s %s\n", $2, $3, $4}' >&3
 		say "   ${RED}Verdict: gl-helper indicators removed, the older backdoor is STILL THERE${N}"
+		rtty_note
+		result_link 3
+		recommend
+		finish 3
+	fi
+	# rtty_conf still naming the attacker's server: not done, whatever else --fix removed
+	if has_ioc rtty-server; then
+		grep "^IOC${TAB}rtty-server${TAB}" "$FIND" | awk -F '\t' '{printf "   still present: %s %s %s\n", $2, $3, $4}' >&3
+		say "   ${RED}Verdict: remediation INCOMPLETE - the other gl-helper indicators were removed${N}"
+		rtty_note
+		[ "$FIXRC" != 0 ] && say "   ${YEL}Some steps also reported errors, see above.${N}"
 		result_link 3
 		recommend
 		finish 3
 	fi
 	if [ "$FIXRC" != 0 ]; then say "   ${YEL}Verdict: IOCs gone, but some steps reported errors${N}"; result_link 3; recommend; finish 3; fi
 	say "   ${GRN}${B}Verdict: no gl-helper indicators left${N}"
-	[ "$(count_cmd)" -gt 0 ] && say "   ${D}The state file /etc/mp_ip_mapping_info was left in place: it only shows that the command ran.${N}"
-	grep -q "^IOC${TAB}rtty-server${TAB}" "$FIND" && say "   ${YEL}/etc/rtty_conf still names the attacker's server and was not changed. A factory reset or reflash puts it right.${N}"
+	has_ioc cloud-command && say "   ${D}The state file /etc/mp_ip_mapping_info was left in place: it only shows that the command ran.${N}"
+	has_ioc installer-trace && say "   ${D}The installer's link to busybox was left in place: it only shows that the installer was at work.${N}"
 	result_link 2
 	recommend
 	finish 2
