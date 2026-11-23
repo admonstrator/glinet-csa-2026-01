@@ -516,13 +516,77 @@ strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
 # that a \ there cannot hide the next line); lines are split at ; && || and &, so that a
 # name and a tool count together only in the same command. A comment that names the
 # malware or its server is the owner's note (review of 2.53).
+# Quotes are read as sh reads them (review of 2.54): a ; & | or # inside a quoted string
+# neither splits nor starts a comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh,
+# unless the string is a command itself: after sh -c, su -c, eval or trap, and from $( or
+# a backtick on in a string in double quotes. A string that goes on over several lines is
+# one line here. The text of a here-document is dropped unless a shell reads it or it goes
+# into a file that starts programs (crontab, rc.local, ...); where its end is not found,
+# it is read after all. A quote that stays open for more than 20 lines is taken as
+# closed. $2 is 1 for the command line of a process: it has no comments.
 active_in() {
-	awk -v nj="${1:-0}" 'function out(l) { gsub(/[0-9]*>&[0-9-]*/, " ", l); gsub(/&>/, " >", l); gsub(/\|\||&&|;|&/, "\n", l); print l }
-		b == "" && /^[[:space:]]*#/ { next }
-		{ l = b $0; b = ""; sub(/(^|[[:space:]])#.*$/, "", l) }
-		!nj && l ~ /(^|[^\\])(\\\\)*\\$/ { sub(/\\$/, "", l); b = l " "; next }
-		{ out(l) }
-		END { if (b != "") out(b) }'
+	awk -v nj="${1:-0}" -v pc="${2:-0}" '
+	function out(l) {
+		gsub(/[0-9]*>&[0-9-]*/, " ", l); gsub(/&>/, " >", l); gsub(/\|\||&&|;|&/, "\n", l)
+		gsub(/\001/, ";", l); gsub(/\002/, "\\&", l); gsub(/\003/, "|", l); gsub(/\004/, "#", l)
+		print l
+	}
+	# the line with ; & | # inside data strings replaced, a comment cut off; sets q (the
+	# open quote) and hd (the word that ends a here-document)
+	function scan(l,   i, n, c, o, r) {
+		o = ""; n = length(l)
+		if (n > 4096) q = ""
+		# without quotes, and on a very long line (a binary file), the plain way
+		if (q == "" && (l !~ /["\047]/ || n > 4096)) {
+			if (!pc) sub(/(^|[[:space:]])#.*$/, "", l)
+			if (match(l, /<<-?[[:space:]]*[^[:space:];&|<>()]+/) && substr(l, RSTART, 3) != "<<<") {
+				hd = substr(l, RSTART + 2, RLENGTH - 2); sub(/^-/, "", hd); sub(/^[[:space:]]*/, "", hd); gsub(/["\047\\]/, "", hd)
+			}
+			return l
+		}
+		for (i = 1; i <= n; i++) {
+			c = substr(l, i, 1)
+			if (q == "") {
+				if (c == "\\") { o = o substr(l, i, 2); i++; continue }
+				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:]]/)) break
+				if (c == "\"" || c == "\047") { code = (o ~ /(^|[[:space:]])(-[A-Za-z]*c|eval|trap)[[:space:]]*$/); q = c; o = o c; continue }
+				if (c == "<" && substr(l, i, 2) == "<<" && substr(l, i, 3) != "<<<") {
+					# the word as sh takes it, its quotes removed: <<"E"OF ends at EOF
+					r = substr(l, i + 2); sub(/^-/, "", r); sub(/^[[:space:]]*/, "", r)
+					if (match(r, /^[^[:space:];&|<>()]+/)) { hd = substr(r, 1, RLENGTH); gsub(/["\047\\]/, "", hd) }
+				}
+				o = o c; continue
+			}
+			if (c == q) { q = ""; o = o c; continue }
+			if (q == "\"" && c == "\\") { o = o substr(l, i, 2); i++; continue }
+			if (q == "\"" && (c == "`" || substr(l, i, 2) == "$(")) code = 1
+			if (!code) { if (c == ";") c = "\001"; else if (c == "&") c = "\002"; else if (c == "|") c = "\003"; else if (c == "#") c = "\004" }
+			o = o c
+		}
+		return o
+	}
+	# the text of a here-document: drop it, or read it as commands
+	body != "" { t = $0; sub(/^[[:space:]]*/, "", t); sub(/[[:space:]]*$/, "", t); if (t == body) { body = ""; nd = 0; next } if (!keep) { drop[++nd] = $0; next } }
+	q == "" && b == "" && !pc && /^[[:space:]]*#/ { next }
+	{
+		l = scan($0)
+		if (q != "") {
+			if (nj || ++open > 20) { q = ""; open = 0 }
+			else { b = b l " "; next }
+		}
+		open = 0; l = b l; b = ""
+		if (!nj && l ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", l); b = l " "; next }
+		out(l)
+		if (hd != "") {
+			body = hd; hd = ""
+			keep = (l ~ /(^|[[:space:]\/])(ba|a|da)?sh([[:space:]]|$)|[|]|crontab|>>?[[:space:]]*[^[:space:]]*(crontabs?\/|rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|profile)/)
+		}
+	}
+	END {
+		if (b != "") out(b)
+		# a here-document without its end: read what was dropped after all
+		for (i = 1; i <= nd; i++) { q = ""; hd = ""; t = scan(drop[i]); if (t ~ /[^[:space:]]/) out(t) }
+	}'
 }
 # Files that are read line by line: crontabs and the lists of files a firmware update keeps
 linewise() { case $1 in *crontabs/* | *crontabs.d/* | *sysupgrade.conf | */keep.d/*) return 0 ;; esac; return 1; }
@@ -544,7 +608,7 @@ ran() {
 		if ($1 ~ /^@[a-z]+$/) i = 2
 		else if (NF > 5 && ($1 $2 $3) ~ /^[0-9*\/,-]+$/ && ($4 $5) ~ /^[0-9A-Za-z*\/,-]+$/) i = 6
 		if ($0 ~ /[|][[:space:]]*([^[:space:]|]*\/)?(ba|a)?sh([[:space:]]|$)/) { for (; i <= NF; i++) print unq($i); next }
-		pre = 0; sh = 0; skip = 0; arg = 0
+		pre = 0; sh = 0; skip = 0; arg = 0; aq = ""
 		for (; i <= NF; i++) {
 			r = $i
 			# the words of a $( ) or ` ` that is still open: its arguments
@@ -552,6 +616,13 @@ ran() {
 			if (r ~ /\$\(|`/) {
 				s = r; sub(/^[^`$]*(\$\(|`)/, "", s); print unq(s)
 				if (s !~ /[)`]/) skip = 1
+				continue
+			}
+			# the rest of a quoted value: DIRS="/etc/config/.gl/ /etc/glinet/.cache/gb" (review of 2.54)
+			if (aq != "") { if (index(r, aq)) aq = ""; continue }
+			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+				t = r
+				if (gsub(/"/, "", t) % 2) aq = "\""; else { t = r; if (gsub(/\047/, "", t) % 2) aq = "\047" }
 				continue
 			}
 			if (arg) { arg = 0; continue }
@@ -600,7 +671,7 @@ writes() {
 		sub(/^[[:space:](!{]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l)
 		sub(/[[:space:]]*[|][[:space:]]*crontab([[:space:]].*)?$/, "", l)
 		sub(/[[:space:]]*[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l)
-		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n/, "\n", l); gsub(/["\047]/, "", l)
+		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n|\|\||&&|;|&/, "\n", l); gsub(/["\047]/, "", l)
 		n = split(l, a, "\n")
 		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/) print a[k] }
 	}'
@@ -1397,7 +1468,7 @@ check_procs() {
 		# this script and its own subshells, known by the file they run, when that file is a
 		# copy of this script. A name on a command line hides nothing (review of 2.53).
 		case $cmd in *gl-helper-triage*)
-			prog=$(printf '%s\n' "$cmd" | active_in | head -n 1 | ran | grep -vE '(^|/)-?(sh|ash|bash|dash|busybox)$' | head -n 1)
+			prog=$(printf '%s\n' "$cmd" | active_in 0 1 | head -n 1 | ran | grep -vE '(^|/)-?(sh|ash|bash|dash|busybox)$' | head -n 1)
 			case ${prog##*/} in gl-helper-triage*)
 				case $prog in /*) f=$prog ;; *) f=$d/cwd/$prog ;; esac
 				self_copy "$f" && continue ;;
@@ -1411,7 +1482,7 @@ check_procs() {
 		named=0
 		if printf '%s\n' "$cmd" | grep -qE "$IOC_RE"; then
 			named=1
-			printf '%s\n' "$cmd" | active_in | ran >"$TMP/pran"
+			printf '%s\n' "$cmd" | active_in 0 1 | ran >"$TMP/pran"
 		fi
 		if printf '%s\n%s\n' "$exe" "$comm" | cat - "$TMP/pran" | grep -qE "$IOC_RE"; then
 			ioc_proc "$pid" "comm=$comm exe=$exe cmd=$cmd"
@@ -1434,7 +1505,7 @@ check_procs() {
 			continue
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$SHELL_RE"; then
-			if printf '%s\n' "$cmd" | active_in | grep -E "$SHELL_RE" | grep -qE "$SHELL_USE_RE"; then
+			if printf '%s\n' "$cmd" | active_in 0 1 | grep -E "$SHELL_RE" | grep -qE "$SHELL_USE_RE"; then
 				ioc_proc "$pid" "remote shell reported by users (GL.iNet staff: treat the router as compromised): started $(proc_start "$pid") comm=$comm cmd=$cmd"
 				continue
 			fi

