@@ -153,15 +153,17 @@ if (process.argv[2] === 'serve') {
   globalThis.fetch = async (u) => {
     gh.calls++;
     if (gh.down) return new Response('rate limited', { status: 403 });
-    if (/^https:\/\/github\.com\/admonstrator\/glinet-csa-2026-01\.git\/info\/refs\?service=git-upload-pack&t=\d+$/.test(String(u)))
+    if (!gh.norefs && /^https:\/\/github\.com\/admonstrator\/glinet-csa-2026-01\.git\/info\/refs\?service=git-upload-pack&t=\d+$/.test(String(u)))
       return new Response(`001e# service=git-upload-pack\n0000015a${'f'.repeat(40)} HEAD\0multi_ack symref=HEAD:refs/heads/main\n003d${'e'.repeat(40)} refs/heads/feature\n003f${gh.commit} refs/heads/main\n0000`);
+    if (gh.norefs && String(u).includes('/info/refs')) return new Response('slow down', { status: 429 });
+    if (/^https:\/\/api\.github\.com\/repos\/admonstrator\/glinet-csa-2026-01\/commits\/main\?t=\d+$/.test(String(u)) && gh.api) return new Response(gh.commit + '\n');
     if (String(u) === `https://raw.githubusercontent.com/admonstrator/glinet-csa-2026-01/${gh.commit}/gl-helper-triage.sh`) return new Response(SH(gh.commit[0]));
     return new Response('not found', { status: 404 });
   };
   const waits = [];
   const ctx = { waitUntil: (p) => waits.push(p) };
   const fix = (method = 'GET', path = '/csa-2026-01-fix') => worker.fetch(new Request(`https://example.org${path}`, { method }), env, ctx);
-  const age = (ms) => { const v = JSON.parse(store.get('script/csa-2026-01-fix')); v.checked -= ms; store.set('script/csa-2026-01-fix', JSON.stringify(v)); };
+  const age = (ms) => { const v = JSON.parse(store.get('script/csa-2026-01-fix')); v.checked -= ms; store.set('script/csa-2026-01-fix', JSON.stringify(v)); store.delete('script/csa-2026-01-fix.tried'); };
   let r = await fix();
   expect('first download fetches the script from main', r.status === 200 && (await r.text()).startsWith('#!/bin/sh\n# version a') && r.headers.get('x-script-commit') === gh.commit);
   expect('it is not cached by clients', r.headers.get('cache-control') === 'no-store');
@@ -174,6 +176,11 @@ if (process.argv[2] === 'serve') {
   expect('refresh picks up the new commit', r.status === 200 && (await r.text()).trim() === gh.commit && (await (await fix()).text()).includes('# version b'));
   gh.commit = 'c'.repeat(40); age(601_000); r = await fix(); await Promise.all(waits);
   expect('an old copy is served at once and renewed in the background', (await r.text()).includes('# version b') && (await (await fix()).text()).includes('# version c'));
+  gh.norefs = true; gh.commit = 'd'.repeat(40); age(31_000); r = await fix('POST', '/csa-2026-01-fix/refresh');
+  expect('git’s way fails and nothing else answers: the copy stays, and the answer says why', (await r.text()).trim() === 'c'.repeat(40) && /refs: 429.*api: 404/.test(r.headers.get('x-refresh-error') || '') && JSON.parse(store.get('script/csa-2026-01-fix')).commit === 'c'.repeat(40));
+  gh.api = true; age(31_000); r = await fix('POST', '/csa-2026-01-fix/refresh');
+  expect('git’s way fails: the commit comes from GitHub’s API', (await r.text()).trim() === gh.commit && !r.headers.get('x-refresh-error') && (await (await fix()).text()).includes('# version d'));
+  gh.norefs = false; gh.api = false; gh.commit = 'c'.repeat(40); age(31_000); await fix('POST', '/csa-2026-01-fix/refresh');
   gh.down = true; age(601_000); r = await fix(); await Promise.all(waits);
   expect('GitHub down: the stored copy keeps being served', r.status === 200 && (await r.text()).includes('# version c') && (await fix()).status === 200);
   store.delete('script/csa-2026-01-fix'); r = await fix();

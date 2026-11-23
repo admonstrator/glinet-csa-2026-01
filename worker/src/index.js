@@ -358,30 +358,51 @@ const SCRIPT = 'gl-helper-triage.sh';
 const SCRIPT_KEY = 'script/csa-2026-01-fix';
 const RAW_MAIN = `https://raw.githubusercontent.com/${REPO}/main/${SCRIPT}`;
 
+// Which commit main points to. First the way git asks; where that fails, GitHub's API.
+// Both addresses change with every call, so that no cache in between can answer.
+async function newestCommit(errors) {
+  try {
+    const refs = await fetch(`https://github.com/${REPO}.git/info/refs?service=git-upload-pack&t=${Date.now()}`, { headers: { 'user-agent': 'git/2.43.0', 'cache-control': 'no-cache' } });
+    const commit = ((await refs.text()).match(/([0-9a-f]{40}) refs\/heads\/main\n/) || [])[1];
+    if (refs.ok && commit) return commit;
+    errors.push(`refs: ${refs.status}${commit ? '' : ', no main in the answer'}`);
+  } catch (e) { errors.push('refs: ' + String((e && e.message) || e)); }
+  try {
+    const api = await fetch(`https://api.github.com/repos/${REPO}/commits/main?t=${Date.now()}`, { headers: { 'user-agent': 'csa-2026-01-worker', accept: 'application/vnd.github.sha' } });
+    const commit = (await api.text()).trim();
+    if (api.ok && /^[0-9a-f]{40}$/.test(commit)) return commit;
+    errors.push(`api: ${api.status}`);
+  } catch (e) { errors.push('api: ' + String((e && e.message) || e)); }
+  return '';
+}
+// When a refresh was last tried without success. Kept apart from the script: writing the
+// copy back to note the time could put an older script over a newer one stored meanwhile.
+const TRIED_KEY = 'script/csa-2026-01-fix.tried';
 async function refreshScript(env, force) {
   const have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
-  if (have && !force && Date.now() - have.checked < 600_000) return have;
-  if (have && Date.now() - have.checked < 30_000) return have;
+  const last = Math.max(have ? have.checked : 0, Number((await env.REPORTS.get(TRIED_KEY)) || 0));
+  if (have && !force && Date.now() - last < 600_000) return have;
+  if (have && Date.now() - last < 30_000) return have;
+  const errors = [];
   try {
-    // The address changes with every call, and nothing may be kept: a cache between this
-    // worker and GitHub once handed out the commit of half an hour before, and the new
-    // script was not served until it ran out.
-    const refs = await fetch(`https://github.com/${REPO}.git/info/refs?service=git-upload-pack&t=${Date.now()}`, { headers: { 'user-agent': 'git/2.43.0', 'cache-control': 'no-cache' }, cache: 'no-store' });
-    const commit = ((await refs.text()).match(/([0-9a-f]{40}) refs\/heads\/main\n/) || [])[1];
-    if (!refs.ok || !commit) throw new Error('no commit');
+    const commit = await newestCommit(errors);
+    if (!commit) throw new Error('no commit');
     let body = have && have.commit === commit ? have.body : null;
     if (body === null) {
       const raw = await fetch(`https://raw.githubusercontent.com/${REPO}/${commit}/${SCRIPT}`);
       body = await raw.text();
-      if (!raw.ok || !body.startsWith('#!/bin/sh') || body.length < 1000 || body.length > 500_000) throw new Error('no script');
+      if (!raw.ok) throw new Error(`file: ${raw.status}`);
+      if (!body.startsWith('#!/bin/sh') || body.length < 1000 || body.length > 500_000) throw new Error(`file: not the script (${body.length} characters)`);
     }
     const next = { commit, body, checked: Date.now() };
     await env.REPORTS.put(SCRIPT_KEY, JSON.stringify(next));
     return next;
-  } catch {
-    // GitHub not reachable or rate limited: keep what we have, try again later
-    if (have) await env.REPORTS.put(SCRIPT_KEY, JSON.stringify({ ...have, checked: Date.now() - 570_000 }));
-    return have;
+  } catch (e) {
+    // GitHub not reachable or rate limited: keep what there is, try again in half a minute,
+    // and say why to whoever asked for the refresh
+    errors.push(String((e && e.message) || e));
+    try { await env.REPORTS.put(TRIED_KEY, String(Date.now() - 570_000)); } catch { /* the next call tries again */ }
+    return have ? { ...have, error: errors.join('; ').replace(/[^\x20-\x7e]/g, '?').slice(0, 300) } : null;
   }
 }
 
@@ -389,7 +410,9 @@ async function script(request, env, ctx, pathname) {
   if (pathname.endsWith('/refresh')) {
     if (request.method !== 'POST') return text('method not allowed', 405);
     const now = await refreshScript(env, true);
-    return now ? text(now.commit) : text('could not reach GitHub', 502);
+    if (!now) return text('could not reach GitHub', 502);
+    // the commit served now; when the refresh failed, the header says why
+    return new Response(now.commit + '\n', { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...(now.error ? { 'x-refresh-error': now.error } : {}) } });
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
   let have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
