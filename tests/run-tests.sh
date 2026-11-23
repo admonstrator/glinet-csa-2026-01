@@ -429,6 +429,19 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "a string over two lines and a here-document are not commands: no IOC (exit 0)" '[ $rc = 0 ] && ! grep -q "^ *IOC " "$D/check.txt" && grep -q "PERSIST  *persistence  */etc/rc.local" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== owners who block the older backdoor's servers their own way (review of 2.54)"
+D=$(mkscen ownblock "$OWL"); U=$D/u
+mkdir -p "$U/etc/config" "$U/etc/crontabs"
+printf "config adblock-fast 'config'\n\tlist blocked_domain 'adguardns.com'\n\tlist blocked_domain 'adsanalypro.com'\n" >"$U/etc/config/adblock-fast"
+printf 'address=/adguardns.com/192.168.8.1\naddress=/lede-openproject.org/10.0.0.1\n' >"$U/etc/dnsmasq.conf"
+printf '0 4 * * * /usr/bin/check-dns.sh adguardns.com\n' >"$U/etc/crontabs/root"
+printf '/etc/ulogd.conf\n#/bin/ulogd\n' >"$U/etc/sysupgrade.conf"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "an adblock list, a sinkhole, a check and the real ulogd are no backdoor: exit 0, no IOC" '[ $rc = 0 ] && ! grep -q "^ *IOC " "$D/check.txt"'
+expect "the block list and the sinkhole are INFO backdoor-block, the check is REVIEW server-ref" 'grep -q "INFO  *backdoor-block  */etc/config/adblock-fast" "$D/check.txt" && grep -q "INFO  *backdoor-block  */etc/dnsmasq.conf" "$D/check.txt" && grep -q "REVIEW  *server-ref  */etc/crontabs/root" "$D/check.txt"'
+umount "$D/m"
+
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
 D=$(mkscen npk "$OWL"); U=$D/u
 mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"

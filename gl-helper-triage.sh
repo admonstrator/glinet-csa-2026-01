@@ -141,7 +141,9 @@ SHELL_RE="170\\.39\\.226\\.|/tmp/f([ ;|>]|\$)"
 # opens a proxy for its server, so what was done with it cannot be listed, and a
 # "cleaned" would promise more than a script can keep. The answer is a reflash.
 BD_RE='monitord|/bin/ulogd|ujaild|adguardns|adsanalypro|lede-openproject|adxinsight|openwrt-project'
-BD_KEEP_RE='ulogd|monitord|urandom_seed|ujaild'
+# Its lines in a list of files a firmware update keeps: whole paths, not /etc/ulogd.conf of
+# the real ulogd (review of 2.54)
+BD_KEEP_RE='(^|[[:space:]])(/bin/ulogd|/usr/bin/monitord|/etc/init\.d/urandom_seed|/[^[:space:]]*ujaild[^[:space:]]*)/?([[:space:]]|$)'
 # Server names decoded from both variants of the loader (ehidle, acs; RemoteToHome in all
 # 49 of its copies: cdn.adguardns.com/.org, cdn.lede-openproject.org, cdn.adxinsight.com,
 # cdn.openwrt-project.org) and from both builds of the second stage (RemoteToHome:
@@ -806,6 +808,20 @@ bd_started_elsewhere() {
 	return 1
 }
 
+# What a line that names a server of the older backdoor and does not fetch from it does
+# with it: url (a URL of it, something may fetch that), dns (a hosts or dnsmasq answer
+# with an outside address), block (an answer with a local address, a sinkhole, or an
+# entry of a block list such as adblock's), or name (review of 2.54)
+bd_answer() {
+	BDRE=$BD_HOST_RE awk '{ ip = ""; re = ENVIRON["BDRE"]
+		if ($0 ~ ("://[^/[:space:]]*(" re ")")) { print "url"; next }
+		if ($0 ~ /^[[:space:]]*list[[:space:]]+[A-Za-z_]*(block|black|deny|bl_)[A-Za-z_]*[[:space:]]/) { print "block"; next }
+		if (match($0, /^[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]*:[0-9a-fA-F:.]*)[[:space:]]/)) { ip = substr($0, RSTART, RLENGTH); gsub(/[[:space:]]/, "", ip) }
+		else if (match($0, /(address|server|local)[= ][^\/]*\/[^[:space:]]*\/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]*:[0-9a-fA-F:.]*)/)) { ip = substr($0, RSTART, RLENGTH); sub(/.*\//, "", ip) }
+		if (ip == "") print "name"
+		else if (ip ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|0\.0\.0\.0$|::1?$|[fF][cCdD][0-9a-fA-F]*:|[fF][eE]80:)/) print "block"
+		else print "dns" }'
+}
 # The older backdoor (see BD_RE above). Runs before the general overlay checks, which
 # skip a path that already has a finding.
 check_backdoor() {
@@ -886,17 +902,21 @@ check_backdoor() {
 	for f in "$(r etc/sysupgrade.conf)" "$(r lib/upgrade/keep.d)"/*; do
 		[ -f "$f" ] && [ ! -L "$f" ] || continue
 		p=${f#"${ROOT%/}"/}
-		grep -qE "$BD_KEEP_RE" "$f" 2>/dev/null || continue
+		# active lines only: a line commented out after a clean-up keeps nothing
+		active "$f" | grep -qE "$BD_KEEP_RE" || continue
 		same_as_lower "$p" && continue
 		[ -n "$(pkg_new "/$p")" ] && continue
 		if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then
-			not_in "$(l "$p")" "$f" 2>/dev/null | grep -qE "$BD_KEEP_RE" || continue
+			not_in "$(l "$p")" "$f" 2>/dev/null | active_in 1 | grep -qE "$BD_KEEP_RE" || continue
 		fi
 		add IOC backdoor-keep "/$p" "older backdoor: keeps its files across firmware updates"
 	done
-	# 5. its servers. In the configuration that is an indicator. In AdGuard Home's query
-	#    log it means that some device in this network asked for the name, this one or
-	#    another, so that is for a human to judge.
+	# 5. its servers. The backdoor is not known to write them into the configuration: there
+	#    a line that fetches from one, a URL of one (something may fetch it) or an answer
+	#    with an outside address is the indicator; a name that nothing in the file fetches
+	#    from is for review (review of 2.54). In AdGuard Home's query log it means that
+	#    some device in this network asked for the name, this one or another, so that is
+	#    for a human to judge.
 	for p in $BD_HOST_PATHS; do
 		exists "$(r "$p")" || continue
 		find "$(r "$p")" -xdev -type f -exec grep -lE "$BD_HOST_RE" {} + 2>/dev/null | head -n 20 | while IFS= read -r f; do
@@ -918,14 +938,17 @@ check_backdoor() {
 				print l }' >"$TMP/bdrest"
 			# a command that takes such a block away (iptables -D before -I, as scripts that run
 			# at every ifup do) is not the backdoor either
-			grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" >"$TMP/bdnb"
-			if [ -s "$TMP/bdnb" ] && ! grep -qvE '^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]' "$TMP/bdnb" && ! active "$f" | grep -qE "$SRV_FETCH_RE"; then
-				# only a list for a loop (for d in name ...; do ...) in a script that fetches
-				# nothing and pipes nothing into a shell: what the loop does with the names
-				# cannot be read line by line, so a person looks (review of 2.54)
-				add REVIEW server-ref "/$p" "names a server of the older backdoor ($n) only in a list (for ... in): look at what the script does with it"
-			elif [ -s "$TMP/bdnb" ]; then
+			grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | while IFS= read -r c; do
+				if [ "$(srv_kind "$c")" = fetch ]; then echo fetch; continue; fi
+				printf '%s\n' "$c" | bd_answer
+			done >"$TMP/bdk"
+			if grep -qxE 'fetch|url|dns' "$TMP/bdk"; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
+			elif grep -qx name "$TMP/bdk" && active "$f" | grep -E "$SRV_FETCH_RE" | while IFS= read -r c; do srv_kind "$c"; done | grep -qx fetch; then
+				# the name in a list or a variable, and a fetch elsewhere in the file
+				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
+			elif grep -qx name "$TMP/bdk"; then
+				add REVIEW server-ref "/$p" "names a server of the older backdoor ($n), but nothing here fetches from it: look at what it does with it"
 			elif [ -s "$TMP/bdhost" ]; then
 				add INFO backdoor-block "/$p" "blocks a server of the older backdoor ($n): that is the advice, not the backdoor"
 			fi
