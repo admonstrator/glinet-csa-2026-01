@@ -1,6 +1,7 @@
 // node worker/test/run.mjs          run the tests
 // node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV in memory
-import worker, { validate, reportedTable, REPORT_FIELDS } from '../src/index.js';
+import worker, { validate, reportedTable, REPORT_FIELDS, UPDATE_KEYS } from '../src/index.js';
+import nodeCrypto from 'node:crypto';
 import http from 'node:http';
 
 import { readFileSync } from 'node:fs';
@@ -405,6 +406,26 @@ if (process.argv[2] === 'serve') {
   let took = 0, lost = 0;
   for (const body of posted) { let r; try { r = JSON.parse(body); } catch { continue; } if (validate(r) === null) { took++; if (!globalThis.fitsOpenApi(r)) lost++; } }
   expect(`the schema for Cloudflare lets through all ${took} reports of these tests that the worker takes`, took >= 5 && lost === 0);
+  // ---- the signature of the script, for its --update
+  {
+    const pair = () => { const { publicKey, privateKey } = nodeCrypto.generateKeyPairSync('ed25519'), num = nodeCrypto.randomBytes(8); return { num, privateKey, pub: Buffer.concat([Buffer.from('Ed'), num, publicKey.export({ type: 'spki', format: 'der' }).subarray(-32)]).toString('base64') }; };
+    const sign = (k, body) => 'untrusted comment: signature\n' + Buffer.concat([Buffer.from('Ed'), k.num, nodeCrypto.sign(null, Buffer.from(body), k.privateKey)]).toString('base64') + '\n';
+    const k1 = pair(), k2 = pair(), other = pair(), v1 = '#!/bin/sh\nVERSION=7.77\n# naïve: not only ASCII\n', v2 = '#!/bin/sh\nVERSION=7.78\n';
+    const serve = (body) => env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'c-' + body.length, body, checked: Date.now() }));
+    const sig = (method, body) => call(method, body, {}, '/csa-2026-01-fix.sig');
+    await serve(v1); env.UPDATE_PUBLIC_KEYS = k1.pub + ' ' + k2.pub;
+    expect('no signature is handed out before one was handed in', (await sig('GET')).status === 404);
+    expect('a signature made with another key, or for another text, is refused', (await sig('POST', sign(other, v1))).status === 400 && (await sig('POST', sign(k1, v2))).status === 400 && (await sig('POST', 'junk')).status === 400 && (await sig('GET')).status === 404);
+    const put = await sig('POST', sign(k1, v1)), got = await sig('GET');
+    expect('a signature that fits the script served now is taken and handed out as it came', put.status === 200 && (await put.text()).trim() === 'c-' + v1.length && got.status === 200 && (await got.text()) === sign(k1, v1));
+    expect('the spare key signs as well', (await sig('POST', sign(k2, v1))).status === 200);
+    await serve(v2);
+    expect('once another script is served, the old signature is no longer handed out', (await sig('GET')).status === 404 && (await sig('POST', sign(k1, v2))).status === 200 && (await sig('GET')).status === 200);
+    delete env.UPDATE_PUBLIC_KEYS;
+    const shKeys = (/^UPDATE_KEYS='([^']*)'$/m.exec(readFileSync(new URL('../../gl-helper-triage.sh', import.meta.url), 'utf8')) || [null, null])[1];
+    expect('the worker checks signatures with the keys the script carries', shKeys !== null && shKeys.split(/\s+/).filter(Boolean).join(' ') === UPDATE_KEYS.join(' ') && (UPDATE_KEYS.length > 0 || (await sig('POST', sign(k1, v2))).status === 400));
+    await env.REPORTS.put('script/csa-2026-01-fix', 'null'); await env.REPORTS.put('script/csa-2026-01-fix.sig', 'null');
+  }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');
   process.exit(failed ? 1 : 0);

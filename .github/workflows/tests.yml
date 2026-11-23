@@ -38,6 +38,10 @@ jobs:
           echo "TRIAGE_SH=busybox sh" >>"$GITHUB_ENV"
           echo "TRIAGE_PATH=$RUNNER_TEMP/bb" >>"$GITHUB_ENV"
 
+      - name: Install signify
+        # makes and checks the signatures in the tests of --update, as usign does on a router
+        run: sudo apt-get update -q && sudo apt-get install -y -q signify-openbsd
+
       - name: Run the tests
         # as root in its own mount namespace: the tests mount overlay filesystems, and the
         # runners do not allow that in an unprivileged user namespace

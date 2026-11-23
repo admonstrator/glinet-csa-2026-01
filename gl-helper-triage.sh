@@ -171,6 +171,8 @@ gl-helper-triage.sh - check, archive and remediate the GL.iNet "gl-helper" impla
   -o, --out DIR        output directory for the archive
   --color, --no-color  force or disable coloured output (default: only on a terminal)
   --report             send the short anonymous report without asking (it is shown first)
+  --update             replace this script by the current version, after checking its
+                       signature. Changes nothing else and checks nothing
   --no-report          never offer to send a report
   --show-report        print the complete report and send nothing
   --no-device-id       leave the device ID out of the report
@@ -208,6 +210,7 @@ while [ $# -gt 0 ]; do
 	--check) MODE=check ;;
 	--archive) MODE=archive ;;
 	--fix) MODE=fix ;;
+	--update) MODE=update ;;
 	--stdout) STDOUT=1 ;;
 	--color) COLOR=1 ;;
 	--no-color) COLOR=0 ;;
@@ -2287,7 +2290,65 @@ result_link() {
 
 finish() { cloud_advice; offer_report; exit "$1"; }
 
+# ---------------------------------------------------------------- update
+# --update replaces this script by the version that is served now. The new file is used
+# only when its signature fits one of the keys below, so that nobody between this device
+# and the download can pass something else off as the script: not in the network, and not
+# at the service that hands the script out. Each version is signed with the other half of
+# such a key when it is published. An older version is refused even with a good signature:
+# it could be an old one with known gaps, sent on purpose. The signature is checked with
+# usign, the tool OpenWrt checks its package lists with, and only when it is the
+# firmware's own. Whatever fails, the script that is here stays as it is.
+# The keys: the base64 line of each public key file, separated by spaces. The second is a
+# spare whose other half is kept offline, to replace the first if it is lost.
+UPDATE_URL=${GL_TRIAGE_UPDATE_URL:-https://app.gl-i.net/csa-2026-01-fix}
+UPDATE_KEYS=''
+fetch() {
+	if tool_ok curl; then curl -fsSL -m 60 -o "$2" "$1" 2>/dev/null
+	elif tool_ok wget; then wget -q -T 60 -O "$2" "$1" 2>/dev/null
+	else return 2; fi
+}
+do_update() {
+	local self new sig k ok nv
+	self=$0 new=$TMP/update.sh sig=$TMP/update.sig
+	section "Update"
+	say "   This version   $VERSION, released $RELEASED"
+	no() { say "   ${RED}Not updated:${N} $1"; say "   ${D}The script here is unchanged. To get the current one by hand:${N}"; say "   ${D}curl -fsSL $UPDATE_URL -o gl-helper-triage.sh${N}"; }
+	[ -n "$UPDATE_KEYS" ] || { no "this version carries no key to check an update with."; return 4; }
+	{ [ -f "$self" ] && [ ! -L "$self" ]; } || { no "the script was not started from a file of its own ($self)."; return 4; }
+	{ [ -w "$self" ] && [ -w "$(dirname "$self")" ]; } || { no "$self cannot be written."; return 4; }
+	command -v usign >/dev/null 2>&1 || { no "this firmware has no usign, the tool that checks the signature."; return 4; }
+	tool_ok usign || { no "usign on this device is not the firmware's own, so its answer would prove nothing."; return 4; }
+	fetch "$UPDATE_URL" "$new"
+	case $? in 0) ;; 2) no "neither curl nor wget of the firmware is here to download with."; return 4 ;; *) no "the download failed."; return 4 ;; esac
+	fetch "$UPDATE_URL.sig" "$sig" || { no "no signature is served for the current version yet. Try again in a few minutes."; return 4; }
+	ok=0
+	for k in $UPDATE_KEYS; do
+		printf 'untrusted comment: update key\n%s\n' "$k" >"$TMP/update.pub"
+		usign -V -q -m "$new" -p "$TMP/update.pub" -x "$sig" >/dev/null 2>&1 && { ok=1; break; }
+	done
+	[ "$ok" = 1 ] || { no "the signature does not fit the download. The file was not used."; return 4; }
+	nv=$(sed -n 's/^VERSION=\([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$new" | head -n 1)
+	case $(awk -v a="$nv" -v b="$VERSION" 'BEGIN { split(a, x, "."); split(b, y, "."); if (a == "") print "bad"; else if (x[1] + 0 > y[1] + 0 || (x[1] + 0 == y[1] + 0 && x[2] + 0 > y[2] + 0)) print "newer"; else if (x[1] + 0 == y[1] + 0 && x[2] + 0 == y[2] + 0) print "same"; else print "older" }') in
+	newer) ;;
+	same) say "   ${GRN}This is the current version.${N} Nothing to do."; return 0 ;;
+	older) no "the download is version $nv, older than this one. An old version is not taken, even with a good signature."; return 4 ;;
+	*) no "the download names no version."; return 4 ;;
+	esac
+	sh -n "$new" 2>/dev/null || { no "the download does not read as a script."; return 4; }
+	cp "$self" "$self.old" 2>/dev/null
+	if cat "$new" >"$self.new" 2>/dev/null && mv -f "$self.new" "$self" 2>/dev/null; then
+		say "   ${GRN}${B}Updated to version $nv.${N} Its signature was checked."
+		say "   The version from before is kept as $self.old"
+		say "   Run it now: sh $self"
+		return 0
+	fi
+	no "the new file could not be written to $self."
+	return 4
+}
+
 # ---------------------------------------------------------------- main
+if [ "$MODE" = update ]; then do_update; exit $?; fi
 report_head
 detect "$TMP/findings"
 [ "$LIVE" = 1 ] && build_report

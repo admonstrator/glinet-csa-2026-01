@@ -1,6 +1,15 @@
-# Tells the worker behind https://app.gl-i.net/csa-2026-01-fix that main has changed, so
-# the download serves the new script at once. The worker fetches the script from this
-# repository itself; this call only says "look now" and needs no secret.
+# After a push to main that changes the script:
+#   1. tell the worker behind https://app.gl-i.net/csa-2026-01-fix to fetch main, so the
+#      download serves the new script at once (the worker fetches it from this repository
+#      itself; that call needs no secret);
+#   2. sign the script and hand the signature to the worker. "--update" of the script
+#      takes a new version only with a signature that fits a key built into the script.
+#      The other half of that key is the secret UPDATE_SIGNING_KEY of this repository: the
+#      two lines of a signify key file made with "signify -G -n". The worker checks the
+#      signature against the script it serves before it hands it out, so nothing but a
+#      real signature gets in, and this call needs no secret either.
+# Without the secret the script is published as before, and "--update" finds no
+# signature and leaves the device's script as it is.
 name: Publish script
 
 on:
@@ -16,6 +25,8 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - name: Ask the worker to fetch main
         run: |
           for try in 1 2 3 4; do
@@ -25,3 +36,26 @@ jobs:
             sleep 35
           done
           echo "::warning::The worker does not serve $GITHUB_SHA. A newer push may have overtaken this one; otherwise check the worker."
+
+      - name: Sign the script and hand the signature to the worker
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::warning::No secret UPDATE_SIGNING_KEY: the script is published without a signature, and --update will not take it."
+            exit 0
+          fi
+          sudo apt-get update -q && sudo apt-get install -y -q signify-openbsd
+          umask 077
+          printf '%s\n' "$UPDATE_SIGNING_KEY" >"$RUNNER_TEMP/update.sec"
+          signify-openbsd -S -s "$RUNNER_TEMP/update.sec" -m gl-helper-triage.sh -x "$RUNNER_TEMP/script.sig"
+          rm -f "$RUNNER_TEMP/update.sec"
+          for try in 1 2 3 4; do
+            if answer=$(curl -fsS -m 30 -X POST --data-binary "@$RUNNER_TEMP/script.sig" https://app.gl-i.net/csa-2026-01-fix.sig); then
+              echo "the worker took the signature, for commit: $answer"
+              exit 0
+            fi
+            sleep 35
+          done
+          echo "::error::The worker did not take the signature. It takes one only for the script it serves: a newer push may have overtaken this one, or the public key in the worker is not the one that belongs to the secret."
+          exit 1

@@ -400,6 +400,53 @@ async function script(request, env, ctx, pathname) {
   });
 }
 
+// ---------------------------------------------------------------- the script's signature
+// "--update" of the script takes a new version only when its signature fits a key that is
+// built into the script. The signature is made where the script is published (a workflow
+// in the repository, with the key kept there as a secret) and handed in here. Anyone may
+// hand one in: it is taken only when it fits the script served now and one of the public
+// keys, and such a signature cannot be made without the key. It is kept with the
+// fingerprint of the script it is for and handed out only while that script is served.
+// The format is that of signify and usign: a comment line, then base64 of "Ed", eight
+// bytes that name the key, and the signature (in a public key file: the key).
+const SIG_KEY = 'script/csa-2026-01-fix.sig';
+// the base64 lines of the public keys, the same as UPDATE_KEYS in the script
+export const UPDATE_KEYS = [];
+const unbase64 = (s) => { try { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); } catch { return null; } };
+const sha256hex = async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+async function signatureFits(env, sigText, body) {
+  const line = String(sigText).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('untrusted comment:'))[0] || '';
+  const sig = unbase64(line);
+  if (!sig || sig.length !== 74 || sig[0] !== 0x45 || sig[1] !== 0x64) return false;
+  const keys = (env.UPDATE_PUBLIC_KEYS ? String(env.UPDATE_PUBLIC_KEYS).split(/\s+/) : UPDATE_KEYS).filter(Boolean);
+  for (const k of keys) {
+    const pub = unbase64(k);
+    if (!pub || pub.length !== 42 || pub[0] !== 0x45 || pub[1] !== 0x64) continue;
+    if (!pub.slice(2, 10).every((x, i) => x === sig[2 + i])) continue; // made with another key
+    try {
+      const key = await crypto.subtle.importKey('raw', pub.slice(10), { name: 'Ed25519' }, false, ['verify']);
+      if (await crypto.subtle.verify({ name: 'Ed25519' }, key, sig.slice(10), new TextEncoder().encode(body))) return true;
+    } catch { /* not a key this runtime takes */ }
+  }
+  return false;
+}
+async function signature(request, env) {
+  let have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
+  if (request.method === 'POST') {
+    const sigText = (await request.text()).slice(0, 1024);
+    // the signature may be for a version this worker has not fetched yet
+    if (!have || !(await signatureFits(env, sigText, have.body))) have = await refreshScript(env, true);
+    if (!have) return text('could not reach GitHub', 502);
+    if (!(await signatureFits(env, sigText, have.body))) return text('this signature does not fit the script served now', 400);
+    await env.REPORTS.put(SIG_KEY, JSON.stringify({ sha: await sha256hex(have.body), sig: sigText }));
+    return text(have.commit);
+  }
+  if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
+  const kept = JSON.parse((await env.REPORTS.get(SIG_KEY)) || 'null');
+  if (!have || !kept || kept.sha !== (await sha256hex(have.body))) return text('no signature for the script served now', 404);
+  return new Response(request.method === 'HEAD' ? null : kept.sig, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'access-control-allow-origin': '*' } });
+}
+
 // The page that explains a result of the script in plain words, in English, German and
 // Chinese: csa.gl-i.net/#AA006011D (scripts 2.39 and 2.40 printed a longer form,
 // csa.gl-i.net/2026-01/#v=2.39&p=r&..., which still works). The result is in the part
@@ -574,6 +621,7 @@ export default {
     // script prints. A code typed without the "#" arrives as the path; the page then moves
     // it behind the "#" itself.
     if (hostname.startsWith('csa.') && (pathname === '/' || /^\/[0-9A-Za-z-]{9,16}$/.test(pathname))) return resultPage(request, env, ctx);
+    if (/\/csa-2026-01-fix\.sig$/.test(pathname)) return signature(request, env);
     if (/\/csa-2026-01-fix(\/|$)/.test(pathname)) return script(request, env, ctx, pathname);
     if (pathname.endsWith('/migrate')) {
       // a browser, or curl without -X POST, sends GET and would only see the text below

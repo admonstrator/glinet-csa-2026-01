@@ -788,5 +788,47 @@ run "$D" "$OWN" --check >"$D/check.txt"
 expect "a changed libc is found although the program names it between NUL bytes" 'grep -q "REVIEW  *changed-lib  */lib/libc.so" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== --update: only a newer version with a good signature replaces the script"
+SIGNIFY=$(command -v signify-openbsd 2>/dev/null || command -v signify 2>/dev/null || true)
+if [ -n "$SIGNIFY" ] && command -v python3 >/dev/null 2>&1; then
+	W=$BASE/update; mkdir -p "$W/www" "$W/bin" "$W/dev"
+	for k in k1 k2 kx; do "$SIGNIFY" -G -n -p "$W/$k.pub" -s "$W/$k.sec"; done
+	keys="$(sed -n 2p "$W/k1.pub") $(sed -n 2p "$W/k2.pub")"
+	# usign as the firmware has it takes the options signify takes
+	printf '#!/bin/sh\nexec %s "$@"\n' "$SIGNIFY" >"$W/bin/usign"; chmod +x "$W/bin/usign"
+	mkver() { sed -e "s|^UPDATE_KEYS=''\$|UPDATE_KEYS='$keys'|" -e "s|^VERSION=.*|VERSION=$1|" "$T" >"$2"; }
+	serve() { mkver "$1" "$W/www/fix"; "$SIGNIFY" -S -s "$W/$2.sec" -m "$W/www/fix" -x "$W/www/fix.sig"; }
+	upd() { env PATH="$W/bin:$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update >"$W/out.txt" 2>&1; }
+	ver() { sed -n 's/^VERSION=//p' "$W/dev/t.sh"; }
+	(cd "$W/www" && exec python3 -m http.server 18473 --bind 127.0.0.1 >/dev/null 2>&1) & SRV=$!
+	sleep 1
+	mkver 2.60 "$W/dev/t.sh"; serve 2.61 k1
+	upd; rc=$?
+	expect "a newer version with a good signature replaces the script, the old one is kept" '[ $rc = 0 ] && [ "$(ver)" = 2.61 ] && grep -q "^VERSION=2.60$" "$W/dev/t.sh.old" && grep -q "Updated to version 2.61" "$W/out.txt" && cmp -s "$W/dev/t.sh" "$W/www/fix"'
+	upd; rc=$?
+	expect "the same version again: nothing to do" '[ $rc = 0 ] && grep -q "This is the current version" "$W/out.txt" && [ "$(ver)" = 2.61 ]'
+	serve 2.62 k1; echo 'echo added on the way' >>"$W/www/fix"
+	upd; rc=$?
+	expect "a download changed on the way is refused" '[ $rc = 4 ] && grep -q "signature does not fit" "$W/out.txt" && [ "$(ver)" = 2.61 ]'
+	serve 2.62 kx
+	upd; rc=$?
+	expect "a signature made with an unknown key is refused" '[ $rc = 4 ] && grep -q "signature does not fit" "$W/out.txt" && [ "$(ver)" = 2.61 ]'
+	serve 2.50 k1
+	upd; rc=$?
+	expect "an older version is refused although its signature is good" '[ $rc = 4 ] && grep -q "older than this one" "$W/out.txt" && [ "$(ver)" = 2.61 ]'
+	serve 2.62 k2
+	upd; rc=$?
+	expect "the spare key is taken as well" '[ $rc = 0 ] && [ "$(ver)" = 2.62 ]'
+	serve 2.63 k1; rm "$W/www/fix.sig"
+	upd; rc=$?
+	expect "without a signature nothing is replaced" '[ $rc = 4 ] && grep -q "no signature is served" "$W/out.txt" && [ "$(ver)" = 2.62 ]'
+	serve 2.63 k1
+	env PATH="$TRIAGE_PATH" GL_TRIAGE_UPDATE_URL=http://127.0.0.1:18473/fix $TRIAGE_SH "$W/dev/t.sh" --update >"$W/out.txt" 2>&1; rc=$?
+	expect "without usign nothing is replaced, and the script says how to get the new one by hand" '[ $rc = 4 ] && grep -q "has no usign" "$W/out.txt" && grep -q "curl -fsSL" "$W/out.txt" && [ "$(ver)" = 2.62 ]'
+	kill "$SRV" 2>/dev/null
+else
+	echo "  SKIP: needs signify (signify-openbsd) and python3"
+fi
+
 echo; echo "RESULT: $pass passed, $fail failed"
 [ "$fail" = 0 ]
