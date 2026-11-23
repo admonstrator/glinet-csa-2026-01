@@ -424,6 +424,34 @@ configuration are not listed.
 
 ---
 
+## 🔄 Updating the Script
+
+The script changes several times a day while the community learns more. `--update` replaces
+it by the version that is served now:
+
+```sh
+sh gl-helper-triage.sh --update
+```
+
+It checks nothing on the device and changes nothing but its own file. It never runs by
+itself.
+
+- **Only with a good signature.** Each version is signed when it is published. The script
+  carries the public keys and takes a download only when the signature fits, checked with
+  `usign`, the tool OpenWrt checks its package lists with. So neither someone in the
+  network nor the service that hands the script out can pass on another file.
+- **Never an older version.** A version older than the one that runs is refused, even with
+  a good signature: it could be an old one with known gaps, sent on purpose.
+- **Where there is no `usign`** the script says so and what that means, and asks whether to
+  update all the same. Then only the encrypted connection protects the download. Where
+  nobody can be asked, add `--unsigned`.
+- **Whatever fails, the script that is there stays.** The version from before is kept next
+  to it as `gl-helper-triage.sh.old`.
+
+What it does not protect against: an attacker who is root on the device, or who controls
+the repository the script comes from. The first download is protected by the encrypted
+connection alone, as before.
+
 ## 📮 Anonymous Report
 
 At the end of a run the script offers to send a short report to the community, so that

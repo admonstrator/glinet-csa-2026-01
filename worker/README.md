@@ -213,6 +213,28 @@ curl -sI https://app.gl-i.net/csa-2026-01-fix
 shows `x-script-commit` when the worker answers, and `location:` when the redirect is
 still in place.
 
+## The script's signature
+
+`sh gl-helper-triage.sh --update` takes a new version only with a signature that fits a
+key built into the script. The pieces:
+
+- **The key.** Made once with `signify -G -n -p csa-update.pub -s csa-update.sec`. The two
+  lines of the `.sec` file are the secret `UPDATE_SIGNING_KEY` of the repository. The
+  base64 line of the `.pub` file stands in `UPDATE_KEYS` in the script and in
+  `UPDATE_KEYS` in `src/index.js`; a test compares the two. A second key is the spare:
+  its `.sec` file is kept offline, its public line stands next to the first.
+- **Signing.** The workflow "Publish script" signs the script after every push to `main`
+  that changes it and posts the signature to `/csa-2026-01-fix.sig`.
+- **The worker.** It checks the signature itself, against the script it serves and the
+  public keys, and keeps it with the fingerprint of that script. It hands it out at
+  `https://app.gl-i.net/csa-2026-01-fix.sig` only while that script is served; otherwise it
+  answers 404 and `--update` leaves the device's script alone. Posting needs no secret:
+  nothing but a real signature is taken.
+
+To replace a lost or stolen key: make a new pair, sign one release by hand with the spare
+key so that devices take it, and put the new public line into the script and the worker
+with that release.
+
 ## Dashboard for the team
 
 `https://app.gl-i.net/csa-2026-01-report/dashboard` shows what the reports add up to:
