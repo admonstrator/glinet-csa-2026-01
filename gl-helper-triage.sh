@@ -41,7 +41,9 @@
 # runs GL.iNet's quick check for routers (a process "crond -i /tmp/.log") and looks for a
 # remote shell that users reported in GL.iNet's forum.
 # --fix only touches IOC items and their persistence. REVIEW items are archived and
-# reported, never changed. This is a stopgap: a factory reset is still recommended.
+# reported, never changed; only the malware's own lines in the firewall's start script,
+# which is listed for review too, are taken out. This is a stopgap: a factory reset is
+# still recommended.
 
 VERSION=2.53
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
@@ -157,13 +159,22 @@ BD_ULOGD_NAMES='get_mac_form_proc|get_ddns_form_proc|ret_pts_num|domain_table'
 # tells people to block these names, so a block must not count as the backdoor (issue 5).
 BD_NULL='0\.0\.0\.0|127\.0\.0\.1|::1?'
 BD_BLOCK_RE="^[[:space:]]*(($BD_NULL)[[:space:]]|(address|server|local)=/[^[:space:]]*/($BD_NULL|#)?[[:space:]]*\$|list[[:space:]]+(address|server)[[:space:]]+.?/[^[:space:]]*/($BD_NULL|#)?.?[[:space:]]*\$)"
-# What a line does with a server of the malware (KVM_IP_RE), issue 20. It fetches from it
-# or talks to it: a download tool, nc and its kin, rtty, or a pipe into a shell. That is
-# the malware or a variant of it, in any file and on any command line. Or it blocks it: a
-# firewall rule that drops or rejects, a route that leads nowhere, a hosts or dnsmasq entry
-# as in BD_BLOCK_RE. That is an owner who keeps the device away from these servers. A line
+# What a command does with a server of the malware (KVM_IP_RE), issue 20. It fetches from
+# it or talks to it: a download tool, nc and its kin, an SSH or TLS client, rtty, a pipe
+# into a shell, or a program from a RAM disk that gets the server as an argument. That is
+# the malware or a variant of it, in any file and on any command line. Or it only asks
+# whether the server answers (SRV_PROBE_RE): an owner who checks that a block holds. Or it
+# blocks it: a firewall rule that drops or rejects, a route that leads nowhere, a hosts or
+# dnsmasq entry as in BD_BLOCK_RE, and not a command that takes such a block away
+# (UNBLOCK_RE). That is an owner who keeps the device away from these servers. A command
 # that does both counts as fetching.
-SRV_FETCH_RE='(^|[^[:alnum:]_.-])(wget|curl|uclient-fetch|tftp|ftpget|nc|netcat|ncat|socat|telnet|rtty)([[:space:]]|$)|[|][[:space:]]*([^[:space:]|]*/)?(ba|a)?sh([[:space:]]|$)'
+SH_PIPE_RE='[|][[:space:]]*([^[:space:]|]*/)?(ba|a)?sh([[:space:]]|$)'
+SRV_FETCH_RE="(^|[^[:alnum:]_.-])(wget(-[[:alnum:]]+)?|curl|uclient-fetch|tftp|ftpget|ftpput|nc|netcat|ncat|socat|telnet|rtty|ssh|dbclient|scp|sftp|openssl|rsync)([[:space:]]|\$)|$SH_PIPE_RE"
+# nc -z, wget --spider, curl -I: they ask and keep nothing. A download to /dev/null is a
+# probe as well, see srv_kind (review of 2.53).
+SRV_PROBE_RE="(^|[^[:alnum:]_.-])(nc|netcat|ncat)[[:space:]](.*[[:space:]])?-[[:alnum:]]*z|(^|[^[:alnum:]_.-])(wget(-[[:alnum:]]+)?|uclient-fetch)[[:space:]](.*[[:space:]])?--spider|(^|[^[:alnum:]_.-])curl[[:space:]](.*[[:space:]])?(--head|-[[:alnum:]]*I[[:alnum:]]*)([[:space:]]|\$)"
+UNBLOCK_RE='(^|[[:space:]])(-D|--delete|-F|--flush|del|delete|flush)([[:space:]]|$)'
+RAM_RE='^/(tmp|var|run|dev/shm)/'
 # A process that names the shell's address or its pipe is the shell only when it is made of
 # what such a shell is made of: a tool that talks to a server (SRV_FETCH_RE: nc, ncat,
 # socat, telnet, ...), a pipe made with mkfifo, an interactive shell, or cat reading the
@@ -398,7 +409,7 @@ self_copy() {
 }
 add() {
 	case "$1 $2" in
-	'IOC backdoor-init' | 'IOC backdoor-host' | 'IOC persist-ref' | 'IOC keep-ref' | 'IOC cron-ref' | 'REVIEW server-ref' | 'INFO server-block')
+	'IOC backdoor-init' | 'IOC backdoor-host' | 'IOC persist-ref' | 'IOC keep-ref' | 'IOC cron-ref' | 'REVIEW server-ref' | 'REVIEW path-ref' | 'INFO server-block')
 		case $3 in /*)
 			if self_copy "$(r "${3#/}")"; then
 				set -- REVIEW script-copy "$3" "a copy of this script: it names the indicators it searches for. Not counted as a trace. If you did not put it here, look at it"
@@ -479,12 +490,61 @@ TRUST_LIBS=unchecked
 # does not look behind a NUL byte, and a program or compiled Lua is full of them: a name
 # stands behind its length or between NUL bytes (issue 24). So NUL becomes a line end first.
 strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
-# The active text of a script, crontab or command line, one command per line: lines that
-# are comments and comments at the end of a line are dropped, and lines are split at ;
-# && || and &, so that a name and a tool count together only in the same command. A
-# comment that names the malware or its server is the owner's note (review of 2.53).
-active_in() { grep -vE '^[[:space:]]*#' | sed 's/[[:space:]]#.*$//' | awk '{ gsub(/[0-9]*>&[0-9-]*|&>/, " "); gsub(/\|\||&&|;|&/, "\n"); print }'; }
+# The active text of a script, crontab or command line, one command per line: a line
+# that ends in \ goes on in the next, lines that are comments and comments at the end of
+# a line are dropped, and lines are split at ; && || and &, so that a name and a tool
+# count together only in the same command. A comment that names the malware or its
+# server is the owner's note (review of 2.53).
+active_in() {
+	awk 'function out(l) { sub(/[[:space:]]#.*$/, "", l); gsub(/[0-9]*>&[0-9-]*|&>/, " ", l); gsub(/\|\||&&|;|&/, "\n", l); print l }
+		b == "" && /^[[:space:]]*#/ { next }
+		{ l = b $0; b = "" }
+		/\\$/ { sub(/\\$/, "", l); b = l " "; next }
+		{ out(l) }
+		END { if (b != "") out(b) }'
+}
 active() { strs "$1" | active_in; }
+# The programs that the commands on stdin run, one command per line as active_in gives
+# them; one program per line. That is a command's first word, and behind sh, ., source,
+# nohup, exec, env and their kin the word that follows; the command of sh -c and of
+# procd's "command"; what start-stop-daemon starts; a cron line's command behind its time
+# fields; what $( ) runs. A command that is piped into a shell runs everything it names.
+# A path that only stands as an argument, as with rm, grep, pgrep, kill or [ -e ], is not
+# run (review of 2.53). Words are taken as they stand: a program in a variable is not
+# known.
+ran() {
+	awk 'function unq(s) { gsub(/["\047`]/, "", s); sub(/^[({!]+/, "", s); sub(/[)};]+$/, "", s); return s }
+	{
+		i = 1
+		if ($1 ~ /^@[a-z]+$/) i = 2
+		else if (NF > 5 && ($1 $2 $3) ~ /^[0-9*\/,-]+$/ && ($4 $5) ~ /^[0-9A-Za-z*\/,-]+$/) i = 6
+		if ($0 ~ /[|][[:space:]]*([^[:space:]|]*\/)?(ba|a)?sh([[:space:]]|$)/) { for (; i <= NF; i++) print unq($i); next }
+		pre = 0; sh = 0
+		for (; i <= NF; i++) {
+			r = $i
+			if (r ~ /\$\(|`/) { s = r; sub(/^[^`$]*(\$\(|`)/, "", s); print unq(s) }
+			if (r ~ /^[0-9]*>/) { if (r ~ /^[0-9]*>>?$/) i++; continue }
+			if (r ~ /^[0-9]*</) { s = r; sub(/^[0-9]*</, "", s); if (s == "") s = $(++i); if (sh) { print unq(s); next } continue }
+			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)/) { r = substr(r, index(r, "()") + 2); if (r == "" || r == "{") continue }
+			if (r ~ /\)$/ && r !~ /\(/ && i < NF) continue
+			if (r ~ /^command=/) { print unq(substr(r, 9)); continue }
+			w = unq(r)
+			if (w == "" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+			if (w == "case") { while (i < NF && $i != "in") i++; continue }
+			if (w == "procd_set_param") { if ($(i + 1) != "command") next; i++; pre = 1; continue }
+			if (w ~ /^(do|then|else|elif|if|while|until|time|nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|eval|\.|source)$/) { pre = 1; continue }
+			if (pre && w ~ /^-/) { if (sh && w ~ /^-[A-Za-z]*s/) next; continue }
+			if (pre && w ~ /^[0-9.]+[smhd]?$/) continue
+			print w
+			if (w ~ /(^|\/)-?(sh|ash|bash|dash|busybox)$/) { sh = 1; pre = 1; continue }
+			if (w ~ /(^|\/)start-stop-daemon$/) { for (i++; i <= NF; i++) { if ($i ~ /^(-K|--stop)$/) next; if ($i !~ /^-/) print unq($i) } }
+			next
+		}
+	}'
+}
+# Does a file of commands (as active_in gives them) run a path of the malware, and which?
+runs_ioc() { ran <"$1" | grep -qE "$IOC_RE"; }
+ran_ioc() { ran <"$1" | grep -E "$IOC_RE" | sort -u | head -n 3 | tr '\n' ' ' | sed 's/ $//'; }
 # The lines of a file that a base file does not have. busybox grep -f with an empty file
 # matches every line, GNU grep none; an empty base file has no line, so all lines are new.
 not_in() { if [ -s "$1" ]; then grep -vxFf "$1" "$2"; else cat "$2"; fi; }
@@ -644,7 +704,12 @@ check_backdoor() {
 			n=$(grep -oE "[a-z0-9.-]*($BD_HOST_RE)" "$f" | sort -u | head -n 4 | tr '\n' ' ' | sed 's/ $//')
 			# active lines only: not a comment, not the name of a firewall rule (review of 2.53)
 			active "$f" | grep -E "$BD_HOST_RE" | grep -vE "^[[:space:]]*option[[:space:]]+(name|label)[[:space:]]" >"$TMP/bdhost"
-			if grep -qvE "$BD_BLOCK_RE" "$TMP/bdhost"; then
+			# A block is the advice, not the backdoor: a hosts or dnsmasq entry, a firewall
+			# command that drops or rejects (not one that takes that away), a route that leads
+			# nowhere, a line of a UCI firewall rule whose target is DROP or REJECT.
+			uci_block_lines "$f" | active_in >"$TMP/bdblk"
+			not_in "$TMP/bdblk" "$TMP/bdhost" >"$TMP/bdrest"
+			if grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -q . || grep -E "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -qE "$UNBLOCK_RE"; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
 			elif [ -s "$TMP/bdhost" ]; then
 				add INFO backdoor-block "/$p" "blocks a server of the older backdoor ($n): that is the advice, not the backdoor"
@@ -778,36 +843,90 @@ check_applets() {
 	fi
 }
 
-# What a file, or a command line saved to one, does with the malware's servers (issue 20):
-#   fetch  a command that names a server fetches from it or pipes into a shell
-#   block  every command that names a server blocks it, and no command fetches anything
-#   name   anything else, also a server named only in a comment or in a binary
-# Nothing when it names none. Commands as active() splits them.
-srv_use() {
-	active "$1" | grep -E "$KVM_IP_RE" >"$TMP/srv"
-	if [ ! -s "$TMP/srv" ]; then
-		strs "$1" | grep -qE "$KVM_IP_RE" && echo name
-	elif grep -qE "$SRV_FETCH_RE" "$TMP/srv"; then
+# What one command does with a server of the malware: fetch, probe, block or name
+# (SRV_FETCH_RE and what follows it). A download to /dev/null is a probe when nothing else
+# of it is kept and nothing goes to a shell; the owner's check that a block holds looks
+# like that (nc -z ... && logger, review of 2.53).
+srv_kind() {
+	local d
+	if printf '%s\n' "$1" | grep -qE "$SRV_FETCH_RE"; then
+		d=$(printf '%s\n' "$1" | sed -e 's#--output-document=/dev/null##g' -e 's#--output[[:space:]]*/dev/null##g' \
+			-e 's#-[[:alpha:]]*[Oo][[:space:]]*/dev/null##g' -e 's#>[[:space:]]*/dev/null##g')
+		if printf '%s\n' "$1" | grep -qE "$SH_PIPE_RE"; then
+			echo fetch
+		elif printf '%s\n' "$1" | grep -qE "$SRV_PROBE_RE"; then
+			echo probe
+		elif [ "$d" != "$1" ] && ! printf '%s\n' "$d" | grep -qE '(^|[[:space:]])(-[[:alpha:]]*[Oo]|--output)|>'; then
+			echo probe
+		else
+			echo fetch
+		fi
+	elif printf '%s\n' "$1" | ran | grep -qE "$RAM_RE"; then
 		echo fetch
-	elif ! grep -qvE "$SRV_BLOCK_RE" "$TMP/srv" && ! active "$1" | grep -qE "$SRV_FETCH_RE"; then
+	elif printf '%s\n' "$1" | grep -E "$SRV_BLOCK_RE" | grep -qvE "$UNBLOCK_RE"; then
+		echo block
+	else
+		echo name
+	fi
+}
+# What a file of commands (as active_in gives them) does with the malware's servers:
+#   fetch  a command that names a server fetches from it (srv_kind)
+#   block  every command that names a server blocks it, and no command fetches anything
+#   name   anything else: a probe, a command that only names a server
+# Nothing when no command names one.
+srv_cmds() {
+	grep -E "$KVM_IP_RE" "$1" | while IFS= read -r c; do srv_kind "$c"; done >"$TMP/srvk"
+	[ -s "$TMP/srvk" ] || return 0
+	if grep -qx fetch "$TMP/srvk"; then
+		echo fetch
+	elif ! grep -qvx block "$TMP/srvk" && ! grep -qE "$SRV_FETCH_RE" "$1"; then
 		echo block
 	else
 		echo name
 	fi
 	return 0
 }
-srv_names() { strs "$1" | grep -oE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
-# The lines of a crontab, keep list or start script that start the malware or fetch from
-# its servers, as they stand in the file: what --fix drops
-cron_bad() {
-	local line
-	grep -E "$IOC_RE|$KVM_IP_RE" "$1" 2>/dev/null | while IFS= read -r line; do
-		printf '%s\n' "$line" | active_in >"$TMP/cronline"
-		if grep -qE "$IOC_RE" "$TMP/cronline" || grep -E "$KVM_IP_RE" "$TMP/cronline" | grep -qE "$SRV_FETCH_RE"; then
-			printf '%s\n' "$line"
-		fi
-	done
+# The same for a file, or a command line saved to one (issue 20). A server named only in a
+# comment or in a binary is a name.
+srv_use() {
+	local u
+	active "$1" >"$TMP/srv"
+	u=$(srv_cmds "$TMP/srv")
+	if [ -n "$u" ]; then echo "$u"; else strs "$1" | grep -qE "$KVM_IP_RE" && echo name; fi
 	return 0
+}
+srv_names() { strs "$1" | grep -oE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+# The commands of a crontab, keep list or the firewall's start script that start the
+# malware or fetch from its servers: the numbers of their first and last line in the file
+# (a command goes on over lines that end in \). What --fix takes out, and nothing else.
+bad_lines() {
+	local s c
+	awk '{ if (l == "") s = NR; l = l $0 } /\\$/ { sub(/\\$/, "", l); next } { print s " " NR "\t" l; l = "" }' "$1" 2>/dev/null |
+		grep -E "$IOC_RE|$KVM_IP_RE" | while IFS="$TAB" read -r s c; do
+			printf '%s\n' "$c" | active_in >"$TMP/cronline"
+			if runs_ioc "$TMP/cronline" || [ "$(srv_cmds "$TMP/cronline")" = fetch ]; then
+				printf '%s\n' "$s"
+			fi
+		done
+	return 0
+}
+# Those lines as they stand
+cron_bad() { bad_lines "$1" | while read -r s e; do sed -n "${s},${e}p" "$1"; done; }
+# A file without those lines (with $3 = 1: each command replaced by ":", so that a script
+# keeps its if and fi). $2 holds the line numbers from bad_lines.
+drop_lines() {
+	awk -v rep="${3:-0}" 'FILENAME == ARGV[1] { for (i = $1; i <= $2; i++) d[i] = (i == $1) ? 2 : 1; next }
+		!(FNR in d) { print; next }
+		rep && d[FNR] == 2 { m = $0; sub(/[^[:space:]].*$/, "", m); print m ": # line of the malware, removed by gl-helper-triage --fix" }' "$2" "$1"
+}
+# The lines of a UCI file that stand in a section whose target is DROP or REJECT: a
+# firewall rule that blocks what it names (review of 2.53)
+uci_block_lines() {
+	awk 'function flush(  i) { if (blk) for (i = 1; i <= n; i++) print sec[i]; n = 0; blk = 0 }
+		/^[[:space:]]*config[[:space:]]/ { flush() }
+		{ sec[++n] = $0 }
+		/^[[:space:]]*option[[:space:]]+target[[:space:]]/ && toupper($0) ~ /(DROP|REJECT)/ { blk = 1 }
+		END { flush() }' "$1" 2>/dev/null
 }
 
 check_persist() {
@@ -826,8 +945,9 @@ check_persist() {
 			continue
 		fi
 		u=$(srv_use "$f")
-		if active "$f" | grep -qE "$IOC_RE"; then
-			add IOC persist-ref "/$p" "references gl-helper paths"
+		active "$f" >"$TMP/cmds"
+		if runs_ioc "$TMP/cmds"; then
+			add IOC persist-ref "/$p" "starts the malware ($(ran_ioc "$TMP/cmds"))"
 		elif [ "$u" = fetch ]; then
 			add IOC persist-ref "/$p" "fetches from a server of the malware ($(srv_names "$f"))"
 		elif [ "$p" = etc/rc.local ] && ! { if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then not_in "$(l "$p")" "$f"; else cat "$f"; fi 2>/dev/null |
@@ -840,6 +960,7 @@ check_persist() {
 			block) u="; blocks a server of the malware ($(srv_names "$f"))" ;;
 			name) u="; names a server of the malware ($(srv_names "$f")), but does not fetch from it" ;;
 			esac
+			grep -qE "$IOC_RE" "$TMP/cmds" && u="$u; names a path of the malware, but does not run it"
 			add PERSIST persistence "/$p" "present in overlay ($(grep -cvE '^[[:space:]]*(#|$)' "$f" 2>/dev/null) active lines)$u"
 		fi
 	done
@@ -872,24 +993,35 @@ check_review() {
 				grep -q "${TAB}/$rel${TAB}" "$FIND" && continue
 				[ -n "$(pkg_new "/$rel")" ] && continue
 				case $rel in etc/rc.d/*) known_service_link "$f" && continue ;; esac
-				# any autostart/config file that starts the implant is persistence too
-				if [ -f "$f" ] && [ ! -L "$f" ] && active "$f" | grep -qE "$IOC_RE"; then
-					case $rel in
-					etc/sysupgrade.conf | lib/upgrade/keep.d/*)
-						add IOC keep-ref "/$rel" "keeps gl-helper paths across firmware updates" ;;
-					*) add IOC persist-ref "/$rel" "references gl-helper paths" ;;
-					esac
-					continue
+				u=
+				if [ -f "$f" ] && [ ! -L "$f" ]; then
+					# any autostart/config file that starts the implant is persistence too; a
+					# keep list starts nothing, but the path it keeps stands first on its line
+					active "$f" >"$TMP/cmds"
+					if runs_ioc "$TMP/cmds"; then
+						case $rel in
+						etc/sysupgrade.conf | lib/upgrade/keep.d/*)
+							add IOC keep-ref "/$rel" "keeps files of the malware across firmware updates ($(ran_ioc "$TMP/cmds"))" ;;
+						*) add IOC persist-ref "/$rel" "starts the malware ($(ran_ioc "$TMP/cmds"))" ;;
+						esac
+						continue
+					fi
+					u=$(srv_use "$f")
 				fi
 				# a server of the malware: only what fetches from it starts the malware, and
-				# only that is removed. A block is the owner's, a name alone is for review.
-				u=
-				[ -f "$f" ] && [ ! -L "$f" ] && u=$(srv_use "$f")
+				# only that is removed. A block is the owner's, and the file is listed for
+				# review like any other; a name alone is for review.
 				case $u in
 				fetch) add IOC persist-ref "/$rel" "fetches from a server of the malware ($(srv_names "$f"))"; continue ;;
-				block) add INFO server-block "/$rel" "blocks a server of the malware ($(srv_names "$f")): a block, not the malware"; continue ;;
+				block) add INFO server-block "/$rel" "blocks a server of the malware ($(srv_names "$f")): a block, not the malware" ;;
 				name) add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"; continue ;;
 				esac
+				# a path of the malware that a command only names (rm, pgrep, [ -e ]): the owner's
+				# guard or a note, not the malware (review of 2.53)
+				if [ -f "$f" ] && [ ! -L "$f" ] && grep -qE "$IOC_RE" "$TMP/cmds"; then
+					add REVIEW path-ref "/$rel" "names a path of the malware, but does not run it"
+					continue
+				fi
 				if [ -n "$LOWER" ] && exists "$(l "$rel")"; then
 					add REVIEW changed "/$rel" "differs from base image"
 				elif [ -n "$UPPER" ]; then
@@ -986,12 +1118,19 @@ check_credentials() {
 	return 0
 }
 
+# The start tick of a process, field 22 of /proc/<pid>/stat (behind the name, which can
+# hold spaces and brackets). With the number it tells a process from a later one that
+# gets the same number.
+proc_tick() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'; }
+# An IOC process, and its start tick for --fix: that stops a number only while it is
+# still the process that was found (review of 2.53)
+ioc_proc() { add IOC process "$1" "$2"; printf '%s %s\n' "$1" "$(proc_tick "$1")" >>"$TMP/pidtick"; }
 # When a process started, in UTC, from its start tick in /proc/<pid>/stat and the boot
 # time. The reported shells all started at about the same time (21:40 UTC, 2026-11-20).
 proc_start() {
 	local bt tk
 	bt=$(awk '/^btime /{print $2}' /proc/stat 2>/dev/null)
-	tk=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}')
+	tk=$(proc_tick "$1")
 	[ -n "$bt" ] && [ -n "$tk" ] || return 0
 	date -u -d "@$((bt + tk / 100))" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null
 }
@@ -1045,7 +1184,8 @@ check_procs() {
 	: >"$TMP/procs"
 	: >"$TMP/sockets"
 	: >"$TMP/exes"
-	local d pid exe comm cmd sha known prog
+	: >"$TMP/pidtick"
+	local d f pid exe comm cmd sha known prog u named
 	for d in /proc/[0-9]*; do
 		pid=${d#/proc/}
 		[ "$pid" = $$ ] && continue
@@ -1060,22 +1200,30 @@ check_procs() {
 		# shellcheck disable=SC2012 # fd names are numbers
 		ls -l "$d/fd" 2>/dev/null | awk -v p="$pid" -v c="$comm" \
 			'/socket:\[/ {s=$NF; gsub(/[^0-9]/,"",s); print s "\t" p "\t" c}' >>"$TMP/sockets"
-		# The program a process runs: its first word, or for a shell the script it runs
-		# (also with . or source in sh -c).
-		prog=$(printf '%s\n' "$cmd" | awk '{ p = $1; n = split(p, a, "/")
-			if (a[n] ~ /^-?(sh|ash|bash|busybox)$/) { for (i = 2; i <= NF; i++) if ($i !~ /^-/ && $i != "sh" && $i != "ash" && $i != "." && $i != "source") { p = $i; break } }
-			print p }')
-		# this script and its own subshells, known by the file they run; a name somewhere
-		# on a command line does not hide a process (review of 2.53)
-		case ${prog##*/} in gl-helper-triage*) continue ;; esac
+		# this script and its own subshells, known by the file they run, when that file is a
+		# copy of this script. A name on a command line hides nothing (review of 2.53).
+		case $cmd in *gl-helper-triage*)
+			prog=$(printf '%s\n' "$cmd" | active_in | head -n 1 | ran | grep -vE '(^|/)-?(sh|ash|bash|dash|busybox)$' | head -n 1)
+			case ${prog##*/} in gl-helper-triage*)
+				case $prog in /*) f=$prog ;; *) f=$d/cwd/$prog ;; esac
+				self_copy "$f" && continue ;;
+			esac ;;
+		esac
 		# The malware is a process that runs one of its files: as the program, under its
-		# name, or as the script a shell runs. A command that only names such a path, as
-		# less or tail on a log does, is for review and is not stopped (issue 20).
-		if printf '%s\n%s\n%s\n' "$exe" "$comm" "$prog" | grep -qE "$IOC_RE"; then
-			add IOC process "$pid" "comm=$comm exe=$exe cmd=$cmd"
+		# name, as the script a shell runs, in sh -c or in a loop (ran). A command that only
+		# names such a path, as less or tail on a log does, is for review and is not stopped
+		# (issue 20).
+		: >"$TMP/pran"
+		named=0
+		if printf '%s\n' "$cmd" | grep -qE "$IOC_RE"; then
+			named=1
+			printf '%s\n' "$cmd" | active_in | ran >"$TMP/pran"
+		fi
+		if printf '%s\n%s\n' "$exe" "$comm" | cat - "$TMP/pran" | grep -qE "$IOC_RE"; then
+			ioc_proc "$pid" "comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
-		printf '%s\n' "$cmd" | grep -qE "$IOC_RE" &&
+		[ "$named" = 1 ] &&
 			add REVIEW process "$pid" "names a path of the malware, but does not run it: started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		case "$comm $exe $cmd" in
 		monitord\ * | ujaild\ * | */monitord\ * | */ujaild\ * | *'/ujaild (deleted)'* | *monitord.pid*)
@@ -1088,21 +1236,24 @@ check_procs() {
 			continue ;;
 		esac
 		if printf '%s\n' "$cmd" | grep -qE "$PROC_RE"; then
-			add IOC process "$pid" "GL.iNet's quick check (crond -i /tmp/.log, the name gl-helper gives itself): started $(proc_start "$pid") comm=$comm exe=$exe cmd=$cmd"
+			ioc_proc "$pid" "GL.iNet's quick check (crond -i /tmp/.log, the name gl-helper gives itself): started $(proc_start "$pid") comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$SHELL_RE"; then
 			if printf '%s\n' "$cmd" | active_in | grep -E "$SHELL_RE" | grep -qE "$SHELL_USE_RE"; then
-				add IOC process "$pid" "remote shell reported by users (GL.iNet staff: treat the router as compromised): started $(proc_start "$pid") comm=$comm cmd=$cmd"
+				ioc_proc "$pid" "remote shell reported by users (GL.iNet staff: treat the router as compromised): started $(proc_start "$pid") comm=$comm cmd=$cmd"
 				continue
 			fi
 			add REVIEW process "$pid" "names the address or the pipe of the reported remote shell, but is not made like it: started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$KVM_IP_RE"; then
 			printf '%s\n' "$cmd" >"$TMP/srvcmd"
-			case $(srv_use "$TMP/srvcmd") in
+			u=$(srv_use "$TMP/srvcmd")
+			# a program from a RAM disk that is given a server: the payload (review of 2.53)
+			printf '%s\n' "$exe" | grep -qE "$RAM_RE" && u=fetch
+			case $u in
 			fetch)
-				add IOC process "$pid" "fetches from a server of the malware: started $(proc_start "$pid") comm=$comm exe=$exe cmd=$cmd"
+				ioc_proc "$pid" "fetches from a server of the malware: started $(proc_start "$pid") comm=$comm exe=$exe cmd=$cmd"
 				continue ;;
 			block) add INFO process "$pid" "blocks a server of the malware: comm=$comm cmd=$cmd" ;;
 			*) add REVIEW process "$pid" "names a server of the malware, but does not fetch from it: started $(proc_start "$pid") comm=$comm cmd=$cmd" ;;
@@ -1112,7 +1263,7 @@ check_procs() {
 			add REVIEW process "$pid" "tool that remote shells use (GL.iNet staff's process check): started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		fi
 		if [ -n "$exe" ] && grep -q "^IOC${TAB}applet-hijack${TAB}${exe}${TAB}" "$FIND"; then
-			add IOC process "$pid" "runs replaced applet: comm=$comm exe=$exe cmd=$cmd"
+			ioc_proc "$pid" "runs replaced applet: comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
 		case "$exe" in
@@ -1246,8 +1397,9 @@ check_firewall() {
 				# shell scripts at every start: there the malware's commands count as in an
 				# autostart file. --fix drops only those lines (review of 2.53).
 				case $rel in etc/firewall.user | etc/firewall.d/*)
-					if [ ! -L "$f" ] && active "$f" | grep -qE "$IOC_RE"; then
-						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it starts the malware"
+					[ ! -L "$f" ] && active "$f" >"$TMP/cmds"
+					if [ ! -L "$f" ] && runs_ioc "$TMP/cmds"; then
+						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it starts the malware ($(ran_ioc "$TMP/cmds"))"
 					elif [ ! -L "$f" ] && [ "$(srv_use "$f")" = fetch ]; then
 						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it fetches from a server of the malware ($(srv_names "$f"))"
 					fi ;;
@@ -1589,7 +1741,11 @@ result_block() {
 	[ "$(count_cmd)" -gt 0 ] && say "   ${RED}IOC${N}      cloud-command, fw-rule, installer-trace: the attack reached this device."
 	[ "$(count_bd)" -gt 0 ] && say "   ${RED}IOC${N}      backdoor-*: a trace of the older backdoor. --fix does NOT remove it, see below."
 	[ "$(count PERSIST)" -gt 0 ] && say "   ${YEL}PERSIST${N}  a changed rc.local or root crontab. --fix resets it only when the malware itself was found."
-	[ "$(count REVIEW)" -gt 0 ] && say "   ${CYA}REVIEW${N}   an unusual change, not proof of an infection. Check whether it is yours. Never modified."
+	if [ "$(count REVIEW)" -gt 0 ]; then
+		say "   ${CYA}REVIEW${N}   an unusual change, not proof of an infection. Check whether it is yours. Never modified."
+		grep -qE "^IOC${TAB}persist-ref${TAB}/etc/firewall\.(user|d/)" "$FIND" &&
+			say "            Except the malware's own lines in the firewall's start script (IOC above): --fix takes those out."
+	fi
 	[ "$(count INFO)" -gt 0 ] && say "   ${D}INFO     context, for example files installed by a package.${N}"
 	say ""
 	if [ "$(count_hard)" -gt 0 ] && [ "$(count_bd)" -gt 0 ]; then
@@ -1830,7 +1986,7 @@ restore_from_lower() {
 }
 
 fix() {
-	local pid p f failed=0
+	local pid p f t failed=0
 	if [ "$LIVE" = 1 ] && [ "$(id -u)" != 0 ]; then die "--fix needs root"; fi
 	if [ "$(count_gl)" = 0 ]; then
 		say ""
@@ -1854,13 +2010,15 @@ fix() {
 	fi
 	section "Remediation"
 	# 1. processes: freeze all first so they cannot restart each other, then kill
-	#    Only a process that still runs the command that was found: its number can have gone
-	#    to another process since the check (review of 2.53).
-	awk -F '\t' '$1=="IOC" && $2=="process" { i = index($4, " cmd="); print $3 "\t" (i ? substr($4, i + 5) : "") }' "$FIND" | sort -u >"$TMP/pids.found"
+	#    Only a process that is still the one that was found, known by its start tick: its
+	#    number can have gone to another process since the check (review of 2.53).
+	awk -F '\t' '$1=="IOC" && $2=="process" {print $3}' "$FIND" | sort -u >"$TMP/pids.found"
 	: >"$TMP/pids"
-	while IFS="$TAB" read -r pid c; do
-		if [ -n "$c" ] && [ "$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ')" != "$c" ]; then
-			say "   left pid $pid: it no longer runs the command that was found"
+	while read -r pid; do
+		t=$(proc_tick "$pid")
+		[ -n "$t" ] || continue
+		if ! grep -qxF "$pid $t" "$TMP/pidtick" 2>/dev/null; then
+			say "   left pid $pid: another process has that number now"
 			continue
 		fi
 		echo "$pid" >>"$TMP/pids"
@@ -1894,6 +2052,7 @@ fix() {
 		for p in $PERSIST; do
 			exists "$(src "$p")" || continue
 			same_as_lower "$p" && continue
+			whiteout "$(src "$p")" && continue
 			say "   left /$p as it is: only traces of the remote shell were found, and the shell is not"
 			say "   known to write there. Read the file yourself (files/merged/$p in the archive)."
 		done
@@ -1905,13 +2064,23 @@ fix() {
 			case " $PERSIST " in *" $p "*) continue ;; esac
 			exists "$(r "$p")" || continue
 			case $p in etc/firewall.user | etc/firewall.d/*)
-				# the firewall's start script: the owner's rules stay, the malware's lines go
+				# The firewall's start script: the owner's rules stay, each of the malware's
+				# commands becomes ":", so that an if or a loop around it still closes. If the
+				# script would not read as a script after that, it is left for the owner
+				# (review of 2.53). It is listed for review as well: this is the one such path
+				# that --fix changes, and only in these lines.
 				f=$(r "$p")
 				safe "$f" || continue
-				cron_bad "$f" >"$TMP/fw.bad"
-				not_in "$TMP/fw.bad" "$f" >"$TMP/fw.new"
-				if [ -s "$TMP/fw.bad" ] && cat "$TMP/fw.new" >"$f"; then
-					act "removed the malware's lines from /$p"
+				bad_lines "$f" >"$TMP/fw.bad"
+				drop_lines "$f" "$TMP/fw.bad" 1 >"$TMP/fw.new"
+				if [ ! -s "$TMP/fw.bad" ]; then
+					say "   ${YEL}left /$p: the malware's command there could not be told apart line by line; take it out yourself${N}"
+					echo fail >>"$TMP/fixfail"
+				elif ! sh -n "$TMP/fw.new" 2>/dev/null && sh -n "$f" 2>/dev/null; then
+					say "   ${YEL}left /$p: without the malware's lines it would no longer run as a script; take them out yourself${N}"
+					echo fail >>"$TMP/fixfail"
+				elif cat "$TMP/fw.new" >"$f"; then
+					act "replaced the malware's lines in /$p by \":\" (your own lines there stay; previous version: files/merged/$p in the archive)"
 				else
 					echo fail >>"$TMP/fixfail"
 				fi
@@ -1937,17 +2106,17 @@ fix() {
 		if [ "$pid" = ssh-key ]; then
 			grep -v 'gl-agent' "$f" >"$TMP/keep.new"
 		else
-			cron_bad "$f" >"$TMP/cron.bad"
-			not_in "$TMP/cron.bad" "$f" >"$TMP/keep.new"
+			bad_lines "$f" >"$TMP/cron.bad"
+			drop_lines "$f" "$TMP/cron.bad" >"$TMP/keep.new"
 		fi
 		cat "$TMP/keep.new" >"$f" && act "removed the malware's lines from /$p" || echo fail >>"$TMP/fixfail"
 	done
 	awk -F '\t' '$1=="IOC" && $2=="keep-ref" {print substr($3,2)}' "$FIND" | while IFS= read -r p; do
 		f=$(r "$p")
 		safe "$f" || continue
-		cron_bad "$f" >"$TMP/keep.bad"
-		not_in "$TMP/keep.bad" "$f" >"$TMP/keep.new"
-		cat "$TMP/keep.new" >"$f" && act "removed gl-helper lines from /$p" || echo fail >>"$TMP/fixfail"
+		bad_lines "$f" >"$TMP/keep.bad"
+		drop_lines "$f" "$TMP/keep.bad" >"$TMP/keep.new"
+		cat "$TMP/keep.new" >"$f" && act "removed the malware's paths from /$p" || echo fail >>"$TMP/fixfail"
 	done
 	[ -f "$TMP/fixfail" ] && failed=1
 	# 7. the firewall rule that the command of the reported remote shell left behind
@@ -1978,7 +2147,12 @@ fix() {
 
 recommend() {
 	section "Next steps"
-	say "   - Copy the evidence archive off the device and keep it."
+	# not after an archive that failed: there is none to copy (review of 2.53)
+	if [ -n "$ARCHIVE" ]; then
+		say "   - Copy the evidence archive off the device and keep it."
+	elif [ "$MODE" = check ]; then
+		say "   - Keep the evidence: run the script with --archive and copy the archive off the device."
+	fi
 	if [ "$(count_cmd)" -gt 0 ] && [ "$(count_hard)" = 0 ]; then
 		say "   - A command from the attacker ran here as root. It could read every key and password on"
 		say "     the device, so the steps below apply even though nothing was installed."
@@ -2238,7 +2412,7 @@ send_report() {
 # few lines what the report holds. The lines taken from the user's own files and firewall
 # are always shown word for word: they are the only part that can hold a secret of theirs.
 offer_report() {
-	local answer n ioc extra note nl nr
+	local answer n ioc extra note nl nr na acc
 	[ "$LIVE" = 1 ] && [ "$REPORT" != no ] && [ -s "$TMP/report.json" ] || return 0
 	if [ "$REPORT" = show ]; then
 		section "Anonymous report (not sent)"
@@ -2274,12 +2448,19 @@ offer_report() {
 	# the attacker left (Aaron, 2026-11-23).
 	if [ "$nl" -gt 0 ]; then
 		ysay "${B}Also $nl lines of your own autostart files and firewall, word for word.${N}"
-		na=$(grep -vE "$KVM_IP_RE|170\\.39\\.226\\." "$TMP/rlines" | grep -cE '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)')
+		# the attacker's addresses, 127.x (the attack's own rule) and 0.0.0.0 are taken out of
+		# each line before it is counted, so that a line with both still counts (review of 2.53)
+		na=$(R="(^|[^0-9.])($KVM_IP_RE|170\\.39\\.226\\.[0-9]+|127\\.[0-9.]+|0\\.0\\.0\\.0)" awk '{ gsub(ENVIRON["R"], " "); print }' "$TMP/rlines" |
+			grep -cE '(^|[^0-9.])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)')
 		[ "${na:-0}" -gt 0 ] && ysay "${B}$na of them hold IP addresses that are not the attacker's, for example of your own network.${N}"
 		ysay "They can also hold names, passwords or tokens. Look at them with v first, and answer n"
 		ysay "if you would not post one of them in a public forum."
 	fi
-	acc=$(grep -E '^(new-account|uid0-account)  ' "$TMP/revlines" 2>/dev/null | sed -n 's/.* name=\([^ ]*\).*/\1/p' | sort -u | head -n 5 | tr '\n' ' ' | sed 's/ $//')
+	# every account name that goes with the report
+	grep -E '^(new-account|uid0-account)  ' "$TMP/revlines" 2>/dev/null | sed -n 's/.* name=\([^ ]*\).*/\1/p' | sort -u >"$TMP/accs"
+	n=$(wc -l <"$TMP/accs" | tr -d ' ')
+	acc=$(head -n 8 "$TMP/accs" | tr '\n' ' ' | sed 's/ $//')
+	[ "$n" -gt 8 ] && acc="$acc and $((n - 8)) more (v shows them)"
 	[ -n "$acc" ] && ysay "${B}Also the name of each account the firmware does not have: $acc${N}"
 	# the note leaves the device: show it as the report holds it, after jstr's filter
 	note=$(sed -n 's/^"note": "\(.*\)",$/\1/p' "$TMP/report.json")
@@ -2287,8 +2468,8 @@ offer_report() {
 		ysay "And your note, as it will be sent:"
 		printf '        %s\n' "$note" >&3
 	fi
-	ysay "Not sent: host name, keys, passwords, other files. Addresses and names go only where"
-	ysay "they stand in the lines and paths above (v shows them)."
+	ysay "Not sent: host name, the device's keys and its password, other files. What stands in the"
+	ysay "lines and paths above goes as it is, addresses, names and tokens included (v shows them)."
 	# everything, for "v"
 	report_details() {
 		say ""
@@ -2310,8 +2491,8 @@ offer_report() {
 			sed 's/^/        /' "$TMP/revlines" >&3
 			ysay "  If a path here says more about you than you want to share, do not send."
 		fi
-		ysay "Not sent: host name, keys, passwords, the content of any other file. Addresses and names"
-		ysay "go only where they stand in the lines and paths above."
+		ysay "Not sent: host name, the device's keys and its password, the content of any other file."
+		ysay "What stands in the lines and paths above goes as it is, addresses, names and tokens included."
 		say ""
 		ysay "The complete report, as it would be sent:"
 		sed 's/^/      /' "$TMP/report.json" >&3
