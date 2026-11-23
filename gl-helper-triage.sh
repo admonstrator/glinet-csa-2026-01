@@ -588,9 +588,26 @@ ran() {
 		}
 	}'
 }
+# What echo or printf writes into a file that starts programs, or pipes into crontab, is a
+# command as well: echo "*/3 * * * * /etc/config/.gl/watch.sh" >>/etc/crontabs/root puts
+# the malware's cron entry back (review of 2.54). The lines on stdin, as active_in gives
+# them, and behind such a line what it writes, one line per line of it.
+writes() {
+	awk '{ print; l = $0 }
+	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
+	l !~ />>?[[:space:]]*[^[:space:]]*(crontabs?\/|rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|profile)/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
+	{
+		sub(/^[[:space:](!{]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l)
+		sub(/[[:space:]]*[|][[:space:]]*crontab([[:space:]].*)?$/, "", l)
+		sub(/[[:space:]]*[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l)
+		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n/, "\n", l); gsub(/["\047]/, "", l)
+		n = split(l, a, "\n")
+		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/) print a[k] }
+	}'
+}
 # Does a file of commands (as active_in gives them) run a path of the malware, and which?
-runs_ioc() { ran <"$1" | grep -qE "$IOC_RE"; }
-ran_ioc() { ran <"$1" | grep -E "$IOC_RE" | sort -u | head -n 3 | tr '\n' ' ' | sed 's/ $//'; }
+runs_ioc() { writes <"$1" | ran | grep -qE "$IOC_RE"; }
+ran_ioc() { writes <"$1" | ran | grep -E "$IOC_RE" | sort -u | head -n 3 | tr '\n' ' ' | sed 's/ $//'; }
 # The lines of a file that a base file does not have. busybox grep -f with an empty file
 # matches every line, GNU grep none; an empty base file has no line, so all lines are new.
 not_in() { if [ -s "$1" ]; then grep -vxFf "$1" "$2"; else cat "$2"; fi; }
@@ -693,7 +710,7 @@ check_markers() {
 # rm and lines that block its names do not count.
 bd_runs_in() {
 	local c
-	active_in >"$TMP/bdrun"
+	active_in | writes >"$TMP/bdrun"
 	ran <"$TMP/bdrun" | grep -qE '(^|/)(monitord|ulogd|ujaild)$' && return 0
 	# the command decides, as ran finds it behind setsid, env, procd's "command" and the
 	# like: "lua /bin/ulogd" starts the loader, "rm -f /usr/bin/monitord /bin/ulogd" names
@@ -1958,8 +1975,8 @@ result_block() {
 			say "   ${YEL}This firmware cleans up by itself: at its first start it deletes the malware's known${N}"
 			say "   ${YEL}traces. So this result does not show what was on the device before the update.${N}"
 		fi
-		say "   ${D}Not proof that nothing happened: several functions of the cloud client took commands,${N}"
-		say "   ${D}and a trace is known for one of them only (the state file). Others may leave none.${N}"
+		say "   ${D}Not proof that nothing happened: not every step of the attack leaves a trace on the${N}"
+		say "   ${D}device.${N}"
 	fi
 	# directly under the verdict, not at the end: whoever stops the run at the question
 	# about the report has seen it by then

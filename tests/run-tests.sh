@@ -399,6 +399,18 @@ expect "command -v monitord starts nothing" '! grep -q "backdoor-init  */etc/ini
 expect "a loop that fetches from the servers is IOC backdoor-host, not REVIEW" 'grep -q "IOC  *backdoor-host  */etc/init.d/bv-fetch" "$D/check.txt" && ! grep -q "REVIEW  *server-ref  */etc/init.d/bv-fetch" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== a line that writes the malware's cron entry back (review of 2.54)"
+D=$(mkscen echoput "$OWL"); U=$D/u
+mkdir -p "$U/etc/uci-defaults" "$U/etc/init.d"
+printf 'grep -q watch.sh /etc/crontabs/root || echo "*/3 * * * * /etc/config/.gl/watch.sh" >> /etc/crontabs/root\nexit 0\n' >"$U/etc/rc.local"
+printf '(crontab -l; echo "*/3 * * * * /etc/config/.gl/watch.sh") | crontab -\n' >"$U/etc/uci-defaults/99-cron"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\techo "# gl-helper check done" >> /etc/rc.local\n}\n' >"$U/etc/init.d/ew-own"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "echo >> crontab and a pipe into crontab - put the malware back: IOC persist-ref" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/uci-defaults/99-cron" "$D/check.txt"'
+expect "a comment written into rc.local starts nothing" '! grep -q "IOC .*ew-own" "$D/check.txt"'
+umount "$D/m"
+
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
 D=$(mkscen npk "$OWL"); U=$D/u
 mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"
