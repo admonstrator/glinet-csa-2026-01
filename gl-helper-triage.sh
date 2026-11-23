@@ -529,9 +529,9 @@ active() { strs "$1" | active_in; }
 # nohup, exec, env and their kin the word that follows; the command of sh -c and of
 # procd's "command"; what start-stop-daemon starts; a cron line's command behind its time
 # fields; what $( ) runs. A command that is piped into a shell runs everything it names.
-# A path that only stands as an argument, as with rm, grep, pgrep, kill or [ -e ], is not
-# run (review of 2.53). Words are taken as they stand: a program in a variable is not
-# known.
+# A path that only stands as an argument, as with rm, grep, pgrep, kill, [ -e ] or
+# command -v, is not run (review of 2.53). Words are taken as they stand: a program in a
+# variable is not known.
 ran() {
 	awk 'function unq(s) { gsub(/["\047`]/, "", s); sub(/^[({!]+/, "", s); sub(/[)};]+$/, "", s); return s }
 	{
@@ -552,6 +552,7 @@ ran() {
 			if (w == "" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
 			if (w == "case") { while (i < NF && $i != "in") i++; continue }
 			if (w == "procd_set_param") { if ($(i + 1) != "command") next; i++; pre = 1; continue }
+			if (w == "command" && $(i + 1) ~ /^-[A-Za-z]*[vV]/) next
 			if (w ~ /^(do|then|else|elif|if|while|until|time|nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|eval|\.|source)$/) { pre = 1; continue }
 			if (pre && w ~ /^-/) { if (sh && w ~ /^-[A-Za-z]*s/) next; continue }
 			if (pre && w ~ /^[0-9.]+[smhd]?$/) continue
@@ -661,16 +662,24 @@ check_markers() {
 	return 0
 }
 
-# Does a script on stdin start the older backdoor, not only name it? A line that runs
+# Does a script on stdin start the older backdoor, not only name it? A command that runs
 # monitord, ulogd or ujaild, that hands the loader to lua or monitord, or that copies the
 # loader or lua to monitord, as the changed urandom_seed does. Comments, kill, killall,
 # rm and lines that block its names do not count.
 bd_runs_in() {
+	local c
 	active_in >"$TMP/bdrun"
 	ran <"$TMP/bdrun" | grep -qE '(^|/)(monitord|ulogd|ujaild)$' && return 0
-	# one command per line, so the command is the line's first word (after do, then and the
-	# like): "rm -f /usr/bin/monitord /bin/ulogd" names both and starts nothing
-	grep -qE '^[[:space:]]*((do|then|else|nohup|exec)[[:space:]]+)*(([^[:space:]]*/)?(lua|monitord)[[:space:]]+[^[:space:]]*(ulogd|monitord\.pid)|cp[[:space:]]+[^[:space:]]*(ulogd|bin/lua)[[:space:]]+[^[:space:]]*monitord)' "$TMP/bdrun"
+	# the command decides, as ran finds it behind setsid, env, procd's "command" and the
+	# like: "lua /bin/ulogd" starts the loader, "rm -f /usr/bin/monitord /bin/ulogd" names
+	# both and starts nothing. Only the few lines that name the loader are looked at.
+	grep -E 'ulogd|monitord' "$TMP/bdrun" >"$TMP/bdnm"
+	while IFS= read -r c; do
+		printf '%s\n' "$c" | ran >"$TMP/bdprog"
+		grep -qE '(^|/)(lua[0-9.]*|monitord)$' "$TMP/bdprog" && printf '%s\n' "$c" | grep -qE 'ulogd|monitord\.pid' && return 0
+		grep -qE '(^|/)cp$' "$TMP/bdprog" && printf '%s\n' "$c" | grep -qE '[^[:space:]]*(ulogd|bin/lua)[[:space:]]+[^[:space:]]*monitord' && return 0
+	done <"$TMP/bdnm"
+	return 1
 }
 # Is there anything else that could start the loader: a file in the places that start
 # programs at boot or later that names it? Comments count here, so that the script never
@@ -797,9 +806,10 @@ check_backdoor() {
 			grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" >"$TMP/bdnb"
 			if grep -E "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -qE "$UNBLOCK_RE"; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
-			elif [ -s "$TMP/bdnb" ] && ! grep -qvE '^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]' "$TMP/bdnb"; then
-				# only a list for a loop (for d in name ...; do ...): what the loop does with
-				# the names cannot be read line by line, so a person looks (review of 2.54)
+			elif [ -s "$TMP/bdnb" ] && ! grep -qvE '^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]' "$TMP/bdnb" && ! active "$f" | grep -qE "$SRV_FETCH_RE"; then
+				# only a list for a loop (for d in name ...; do ...) in a script that fetches
+				# nothing and pipes nothing into a shell: what the loop does with the names
+				# cannot be read line by line, so a person looks (review of 2.54)
 				add REVIEW server-ref "/$p" "names a server of the older backdoor ($n) only in a list (for ... in): look at what the script does with it"
 			elif [ -s "$TMP/bdnb" ]; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
