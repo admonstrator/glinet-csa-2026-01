@@ -118,8 +118,15 @@ This script also detects:
     Tool and server count together only within one command: a comment, `||`, `;`, `&&` or
     `&` in between separates them. A line that ends in `\` goes on in the next, as in
     `sh`: not when the `\` ends a comment, not after `\\`, and never in a crontab or a
-    keep list, which are read line by line. A script that keeps the address in a variable
-    and fetches from it in another command is therefore only `REVIEW`,
+    keep list, which are read line by line. Quotes are read as `sh` reads them (since
+    2.54): a `;`, `&`, `|` or `#` inside a quoted string, as in
+    `wget -qO- "http://…/ni.sh?id=1&arch=arm" | sh`, neither separates nor starts a
+    comment, unless the string is a command itself (after `sh -c`, `su -c`, `eval` or
+    `trap`, or from `$(` on in double quotes). A string over several lines is one command,
+    and the text of a here-document only counts where a shell reads it or it goes into a
+    crontab, `rc.local` or another file that starts programs. A script that keeps the
+    address in a variable and fetches from it in another command is therefore only
+    `REVIEW`,
   - a process that runs one of the malware's files: as the program, under its name, as
     the script a shell runs, in `sh -c` or in a loop. A command that only names such a
     path, such as `less` on a log, is `REVIEW` and is not stopped,
@@ -133,9 +140,12 @@ This script also detects:
   `cd`, as the program in `$( )`, and in a crontab behind the time fields. A command
   that only names it, such as `rm -rf /etc/config/.gl`, `pgrep -f gl-helper`,
   `PID=$(pidof gl-helper)`, `command -v gl-helper` or `[ -e /etc/config/.gl/gl-helper ]`,
-  is your guard and no trace:
-  `REVIEW` (`path-ref`) in an autostart file, noted on the `PERSIST` line in `rc.local` and
-  the root crontab. A keep list counts when it keeps a path of the malware.
+  is your guard and no trace, and so is a path that stands only in the value of a
+  variable: `REVIEW` (`path-ref`) in an autostart file, noted on the `PERSIST` line in
+  `rc.local` and the root crontab. What `echo` or `printf` writes into a crontab,
+  `rc.local` or another file that starts programs, or pipes into `crontab -`, is read as a
+  command too: `echo "*/3 * * * * /etc/config/.gl/watch.sh" >> /etc/crontabs/root` starts
+  the malware (since 2.54). A keep list counts when it keeps a path of the malware.
   - the replaced `netstat`: a two-line script that calls the real one and hides the
     connections to its server.
   - the malware's program or its downloader under any name: `gl-helper` and the downloader
@@ -215,7 +225,12 @@ it leaves the file empty. The firewall rule is gone after a restart or when the 
 client stops; the file stays. So the script reports as `IOC` (`cloud-command`) a state
 file that is empty, was written on or after 20 November 2026 and sits on a device where
 AstroWarp is switched off. In every other case the file is `REVIEW` with its time and
-size, because it is normal on a router that uses AstroWarp.
+size, because it is normal on a router that uses AstroWarp. On firmware with GL.iNet's
+fix, the SD-WAN module writes the file empty at its own start, in the same seconds as its
+other state files `/etc/mp_connection_info` and `/etc/mphosts` (issue 19): an empty file
+written after the firmware was built and within two minutes of one of those is `REVIEW`
+too. Written on its own it may be the attack on the old firmware before an upgrade that
+kept the settings, and stays `IOC` (since 2.54).
 
 Where the filesystem holding the file is mounted `noatime`, as the overlay is on the
 routers surveyed, the script also gives its access time as the handler's first call and
@@ -280,13 +295,21 @@ only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
   (`backdoor-keep`): the backdoor appends `/bin/ulogd` and `/etc/init.d/urandom_seed` to
   `/lib/upgrade/keep.d/netifd`. Not always: on 9 of RemoteToHome's 49 routers with the
   backdoor that file was the firmware's own, so a missing `backdoor-keep` says nothing
-  about whether the backdoor is there,
+  about whether the backdoor is there. Only an active line with one of its whole paths
+  counts, not `/etc/ulogd.conf` of the real `ulogd` or a line you commented out (since
+  2.54),
 - one of the known server names in the configuration (`backdoor-host`): `adguardns.com`,
   `adguardns.org`, `adsanalypro.com` (in the second stage on 7 of RemoteToHome's 49 routers,
-  since 2.54), `lede-openproject.org`, `adxinsight.com`, `openwrt-project.org`.
+  since 2.54), `lede-openproject.org`, `adxinsight.com`, `openwrt-project.org`. The
+  backdoor is not known to write them there, so since 2.54 a line counts where it fetches
+  from such a server, holds a URL of it, or answers it with an outside address (a hosts or
+  dnsmasq entry); also where the name stands in a list or a variable and the same file
+  fetches. A name that nothing in the file fetches from is `REVIEW` (`server-ref`).
   A line that blocks such a name is no indicator (`backdoor-block`, `INFO`): a hosts
-  entry to `0.0.0.0`, `127.0.0.1`, `::` or `::1`, dnsmasq's `address=/name/`,
-  `server=/name/` and `local=/name/` without a real address, a set the firewall can block
+  entry to `0.0.0.0`, `127.0.0.1`, `::` or `::1` or to a local address (a sinkhole such as
+  the router itself), dnsmasq's `address=/name/`, `server=/name/` and `local=/name/`
+  without a real address or with a local one, an entry of a block list such as
+  adblock-fast's `list blocked_domain`, a set the firewall can block
   (`ipset=/name/`, `nftset=/name/` and their `list` forms), a firewall command that drops
   or rejects it, or a rule in `/etc/config/firewall` whose target is `DROP` or `REJECT`.
   A command that takes such a block away (`iptables -D` before `-I`) does not count
@@ -649,6 +672,11 @@ The receiving [worker](worker/) stores no IP address.
    previous versions are in the archive.
 5. Restores replaced applets from the base image and removes other autostart files that
    start the implant, including OpenWrt `rc.d` links to removed init scripts.
+
+   Where there is no base image to compare with (a KVM, which has no `/rom`, or `--root`
+   without `--lower`), steps 4 and 5 take out only the malware's lines, as in the
+   firewall's start script, and leave a file without such a line as it is: the file may
+   be the firmware's own, such as `/etc/init.d/rcS` (since 2.54).
 6. Removes only the implant's lines (and lines that fetch from its servers) from sysupgrade
    keep lists, from the running crontab `/tmp/gl_crontabs/root`, from the firmware's
    crontab files in `/etc/gl_crontabs/crontabs.d`, and, for a key named `gl-agent`, from
