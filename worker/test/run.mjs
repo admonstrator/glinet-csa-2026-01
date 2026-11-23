@@ -147,12 +147,13 @@ if (process.argv[2] === 'serve') {
 
   // the script, served from the worker
   const SH = (n) => '#!/bin/sh\n# version ' + n + '\n' + 'x'.repeat(1200);
+  // the question about the newest commit carries the time, so that no cache can answer it
   const gh = { commit: 'a'.repeat(40), calls: 0, down: false };
   const before = globalThis.fetch;
   globalThis.fetch = async (u) => {
     gh.calls++;
     if (gh.down) return new Response('rate limited', { status: 403 });
-    if (String(u) === 'https://github.com/admonstrator/glinet-csa-2026-01.git/info/refs?service=git-upload-pack')
+    if (/^https:\/\/github\.com\/admonstrator\/glinet-csa-2026-01\.git\/info\/refs\?service=git-upload-pack&t=\d+$/.test(String(u)))
       return new Response(`001e# service=git-upload-pack\n0000015a${'f'.repeat(40)} HEAD\0multi_ack symref=HEAD:refs/heads/main\n003d${'e'.repeat(40)} refs/heads/feature\n003f${gh.commit} refs/heads/main\n0000`);
     if (String(u) === `https://raw.githubusercontent.com/admonstrator/glinet-csa-2026-01/${gh.commit}/gl-helper-triage.sh`) return new Response(SH(gh.commit[0]));
     return new Response('not found', { status: 404 });

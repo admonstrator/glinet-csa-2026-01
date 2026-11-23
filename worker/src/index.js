@@ -363,7 +363,10 @@ async function refreshScript(env, force) {
   if (have && !force && Date.now() - have.checked < 600_000) return have;
   if (have && Date.now() - have.checked < 30_000) return have;
   try {
-    const refs = await fetch(`https://github.com/${REPO}.git/info/refs?service=git-upload-pack`, { headers: { 'user-agent': 'git/2.43.0' } });
+    // The address changes with every call, and nothing may be kept: a cache between this
+    // worker and GitHub once handed out the commit of half an hour before, and the new
+    // script was not served until it ran out.
+    const refs = await fetch(`https://github.com/${REPO}.git/info/refs?service=git-upload-pack&t=${Date.now()}`, { headers: { 'user-agent': 'git/2.43.0', 'cache-control': 'no-cache' }, cache: 'no-store' });
     const commit = ((await refs.text()).match(/([0-9a-f]{40}) refs\/heads\/main\n/) || [])[1];
     if (!refs.ok || !commit) throw new Error('no commit');
     let body = have && have.commit === commit ? have.body : null;
