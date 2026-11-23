@@ -289,6 +289,14 @@ u() { printf '%s/%s' "${UPPER%/}" "$1"; }
 l() { printf '%s/%s' "${LOWER%/}" "$1"; }
 exists() { [ -e "$1" ] || [ -L "$1" ]; }
 
+# Rules for every check in this script:
+#   - It uses only tools that the busybox of GL.iNet's firmware brings. A tool this script
+#     does not use yet (hexdump, strings, xxd, ...) is not added for one check; where one
+#     may be missing on some model, there is a way without it (see filecmp).
+#   - A tool that is missing or fails never stops the script. The check that needed it
+#     says that it did not run, as "INFO tool-skipped" does, rather than finding nothing.
+#   - A file is read as a stream, never into a shell variable: some devices have 64 MB.
+#
 # The implant replaced at least /usr/bin/netstat. Use the busybox from the base image
 # for every tool this script calls, so a replaced applet cannot lie to us. Nothing may
 # tell that busybox to load other libraries than its own.
