@@ -47,7 +47,14 @@ jobs:
           fi
           sudo apt-get update -q && sudo apt-get install -y -q signify-openbsd
           umask 077
-          printf '%s\n' "$UPDATE_SIGNING_KEY" >"$RUNNER_TEMP/update.sec"
+          # The secret is the key file of signify: a comment line, then the key. Taken as
+          # well: the key line alone, lines ending the Windows way, empty lines around it.
+          key=$(printf '%s\n' "$UPDATE_SIGNING_KEY" | tr -d '\r' | sed '/^[[:space:]]*$/d')
+          case $key in
+            "untrusted comment: "*) ;;
+            *) key=$(printf 'untrusted comment: signify secret key\n%s' "$key") ;;
+          esac
+          printf '%s\n' "$key" >"$RUNNER_TEMP/update.sec"
           signify-openbsd -S -s "$RUNNER_TEMP/update.sec" -m gl-helper-triage.sh -x "$RUNNER_TEMP/script.sig"
           rm -f "$RUNNER_TEMP/update.sec"
           for try in 1 2 3 4; do
