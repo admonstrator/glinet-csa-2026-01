@@ -155,24 +155,24 @@ BD_STAGE_SHAS='311b5767e7d63e7dbdc1476c36608b8d7ef729c8bbcc64ded63b9470396351d6
 BD_ULOGD_NAMES='get_mac_form_proc|get_ddns_form_proc|ret_pts_num|domain_table'
 # A line that blocks such a name instead of using it: a hosts entry to a null address, or
 # dnsmasq's address=/name/ (also to a null address), server=/name/ and local=/name/ with
-# nothing behind them, written directly or as a list in /etc/config/dhcp. The summary
-# tells people to block these names, so a block must not count as the backdoor (issue 5).
+# nothing behind them, written directly or as a list in /etc/config/dhcp, and a set that
+# the firewall can block (ipset=/name/, nftset=/name/, a list in an ipset section). The
+# summary tells people to block these names, so a block must not count as the backdoor
+# (issue 5).
 BD_NULL='0\.0\.0\.0|127\.0\.0\.1|::1?'
-BD_BLOCK_RE="^[[:space:]]*(($BD_NULL)[[:space:]]|(address|server|local)=/[^[:space:]]*/($BD_NULL|#)?[[:space:]]*\$|list[[:space:]]+(address|server)[[:space:]]+.?/[^[:space:]]*/($BD_NULL|#)?.?[[:space:]]*\$)"
+BD_BLOCK_RE="^[[:space:]]*(($BD_NULL)[[:space:]]|(address|server|local)=/[^[:space:]]*/($BD_NULL|#)?[[:space:]]*\$|list[[:space:]]+(address|server)[[:space:]]+.?/[^[:space:]]*/($BD_NULL|#)?.?[[:space:]]*\$|(ipset|nftset)=/|list[[:space:]]+(ipset|nftset|domain)[[:space:]])"
 # What a command does with a server of the malware (KVM_IP_RE), issue 20. It fetches from
 # it or talks to it: a download tool, nc and its kin, an SSH or TLS client, rtty, a pipe
 # into a shell, or a program from a RAM disk that gets the server as an argument. That is
 # the malware or a variant of it, in any file and on any command line. Or it only asks
-# whether the server answers (SRV_PROBE_RE): an owner who checks that a block holds. Or it
+# whether the server answers (is_probe): an owner who checks that a block holds. Or it
 # blocks it: a firewall rule that drops or rejects, a route that leads nowhere, a hosts or
 # dnsmasq entry as in BD_BLOCK_RE, and not a command that takes such a block away
-# (UNBLOCK_RE). That is an owner who keeps the device away from these servers. A command
-# that does both counts as fetching.
+# (UNBLOCK_RE), though a script that deletes a rule before it adds it again still blocks.
+# That is an owner who keeps the device away from these servers. A command that does both
+# counts as fetching.
 SH_PIPE_RE='[|][[:space:]]*([^[:space:]|]*/)?(ba|a)?sh([[:space:]]|$)'
 SRV_FETCH_RE="(^|[^[:alnum:]_.-])(wget(-[[:alnum:]]+)?|curl|uclient-fetch|tftp|ftpget|ftpput|nc|netcat|ncat|socat|telnet|rtty|ssh|dbclient|scp|sftp|openssl|rsync)([[:space:]]|\$)|$SH_PIPE_RE"
-# nc -z, wget --spider, curl -I: they ask and keep nothing. A download to /dev/null is a
-# probe as well, see srv_kind (review of 2.53).
-SRV_PROBE_RE="(^|[^[:alnum:]_.-])(nc|netcat|ncat)[[:space:]](.*[[:space:]])?-[[:alnum:]]*z|(^|[^[:alnum:]_.-])(wget(-[[:alnum:]]+)?|uclient-fetch)[[:space:]](.*[[:space:]])?--spider|(^|[^[:alnum:]_.-])curl[[:space:]](.*[[:space:]])?(--head|-[[:alnum:]]*I[[:alnum:]]*)([[:space:]]|\$)"
 UNBLOCK_RE='(^|[[:space:]])(-D|--delete|-F|--flush|del|delete|flush)([[:space:]]|$)'
 RAM_RE='^/(tmp|var|run|dev/shm)/'
 # A process that names the shell's address or its pipe is the shell only when it is made of
@@ -490,39 +490,51 @@ TRUST_LIBS=unchecked
 # does not look behind a NUL byte, and a program or compiled Lua is full of them: a name
 # stands behind its length or between NUL bytes (issue 24). So NUL becomes a line end first.
 strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
-# The active text of a script, crontab or command line, one command per line: a line
-# that ends in \ goes on in the next, lines that are comments and comments at the end of
-# a line are dropped, and lines are split at ; && || and &, so that a name and a tool
-# count together only in the same command. A comment that names the malware or its
-# server is the owner's note (review of 2.53).
+# The active text of a script, crontab or command line, one command per line: lines that
+# are comments and comments at the end of a line are dropped; a line that ends in \ goes
+# on in the next, unless $1 is 1 (a crontab or a keep list, which know no such thing, so
+# that a \ there cannot hide the next line); lines are split at ; && || and &, so that a
+# name and a tool count together only in the same command. A comment that names the
+# malware or its server is the owner's note (review of 2.53).
 active_in() {
-	awk 'function out(l) { sub(/[[:space:]]#.*$/, "", l); gsub(/[0-9]*>&[0-9-]*|&>/, " ", l); gsub(/\|\||&&|;|&/, "\n", l); print l }
+	awk -v nj="${1:-0}" 'function out(l) { gsub(/[0-9]*>&[0-9-]*/, " ", l); gsub(/&>/, " >", l); gsub(/\|\||&&|;|&/, "\n", l); print l }
 		b == "" && /^[[:space:]]*#/ { next }
-		{ l = b $0; b = "" }
-		/\\$/ { sub(/\\$/, "", l); b = l " "; next }
+		{ l = b $0; b = ""; sub(/(^|[[:space:]])#.*$/, "", l) }
+		!nj && l ~ /(^|[^\\])(\\\\)*\\$/ { sub(/\\$/, "", l); b = l " "; next }
 		{ out(l) }
 		END { if (b != "") out(b) }'
 }
-active() { strs "$1" | active_in; }
+# Files that are read line by line: crontabs and the lists of files a firmware update keeps
+linewise() { case $1 in *crontabs/* | *crontabs.d/* | *sysupgrade.conf | */keep.d/*) return 0 ;; esac; return 1; }
+active() { if linewise "$1"; then strs "$1" | active_in 1; else strs "$1" | active_in; fi; }
 # The programs that the commands on stdin run, one command per line as active_in gives
 # them; one program per line. That is a command's first word, and behind sh, ., source,
-# nohup, exec, env and their kin the word that follows; the command of sh -c and of
-# procd's "command"; what start-stop-daemon starts; a cron line's command behind its time
-# fields; what $( ) runs. A command that is piped into a shell runs everything it names.
-# A path that only stands as an argument, as with rm, grep, pgrep, kill or [ -e ], is not
-# run (review of 2.53). Words are taken as they stand: a program in a variable is not
-# known.
+# nohup, exec, env, timeout, flock, watch and their kin the word that follows; the command
+# of sh -c and of procd's "command"; the script that sh -s reads with <; what
+# start-stop-daemon starts; a cron line's command behind its time fields; what $( ) or
+# ` ` runs, and not its arguments; ./name after cd. A command that is piped into a shell
+# runs everything it names. A path that only stands as an argument, as with rm, grep,
+# pgrep, pidof, kill or [ -e ], is not run (review of 2.53). Words are taken as they
+# stand: a program in a variable is not known.
 ran() {
 	awk 'function unq(s) { gsub(/["\047`]/, "", s); sub(/^[({!]+/, "", s); sub(/[)};]+$/, "", s); return s }
+	function base(s) { sub(/.*\//, "", s); return s }
 	{
 		i = 1
 		if ($1 ~ /^@[a-z]+$/) i = 2
 		else if (NF > 5 && ($1 $2 $3) ~ /^[0-9*\/,-]+$/ && ($4 $5) ~ /^[0-9A-Za-z*\/,-]+$/) i = 6
 		if ($0 ~ /[|][[:space:]]*([^[:space:]|]*\/)?(ba|a)?sh([[:space:]]|$)/) { for (; i <= NF; i++) print unq($i); next }
-		pre = 0; sh = 0
+		pre = 0; sh = 0; skip = 0; arg = 0
 		for (; i <= NF; i++) {
 			r = $i
-			if (r ~ /\$\(|`/) { s = r; sub(/^[^`$]*(\$\(|`)/, "", s); print unq(s) }
+			# the words of a $( ) or ` ` that is still open: its arguments
+			if (skip) { if (r ~ /[)`]/) skip = 0; continue }
+			if (r ~ /\$\(|`/) {
+				s = r; sub(/^[^`$]*(\$\(|`)/, "", s); print unq(s)
+				if (s !~ /[)`]/) skip = 1
+				continue
+			}
+			if (arg) { arg = 0; continue }
 			if (r ~ /^[0-9]*>/) { if (r ~ /^[0-9]*>>?$/) i++; continue }
 			if (r ~ /^[0-9]*</) { s = r; sub(/^[0-9]*</, "", s); if (s == "") s = $(++i); if (sh) { print unq(s); next } continue }
 			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)/) { r = substr(r, index(r, "()") + 2); if (r == "" || r == "{") continue }
@@ -531,13 +543,25 @@ ran() {
 			w = unq(r)
 			if (w == "" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
 			if (w == "case") { while (i < NF && $i != "in") i++; continue }
+			if (w == "cd") { cwd = unq($(i + 1)); next }
 			if (w == "procd_set_param") { if ($(i + 1) != "command") next; i++; pre = 1; continue }
-			if (w ~ /^(do|then|else|elif|if|while|until|time|nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|eval|\.|source)$/) { pre = 1; continue }
-			if (pre && w ~ /^-/) { if (sh && w ~ /^-[A-Za-z]*s/) next; continue }
+			if (w ~ /^(do|then|else|elif|if|while|until|time|eval|\.|source)$/ || base(w) ~ /^(nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|watch|chrt|taskset)$/) { pre = 1; sh = 0; continue }
+			if (base(w) == "flock") { pre = 1; sh = 0; arg = 1; continue }
+			if (pre && w ~ /^-/) {
+				# sh -c: what follows is a command, not a script
+				if (sh && w ~ /^-[A-Za-z]*c[A-Za-z]*$/) { sh = 0; continue }
+				if (sh && w ~ /^-[A-Za-z]*s/) {
+					for (i++; i <= NF; i++) if ($i ~ /^[0-9]*</) { s = $i; sub(/^[0-9]*</, "", s); if (s == "") s = $(i + 1); print unq(s); break }
+					next
+				}
+				if (w ~ /^-[sku]$/) arg = 1
+				continue
+			}
 			if (pre && w ~ /^[0-9.]+[smhd]?$/) continue
 			print w
-			if (w ~ /(^|\/)-?(sh|ash|bash|dash|busybox)$/) { sh = 1; pre = 1; continue }
-			if (w ~ /(^|\/)start-stop-daemon$/) { for (i++; i <= NF; i++) { if ($i ~ /^(-K|--stop)$/) next; if ($i !~ /^-/) print unq($i) } }
+			if (cwd != "" && (w ~ /^\.\// || (sh && w !~ /\//))) print cwd "/" w
+			if (base(w) ~ /^-?(sh|ash|bash|dash|busybox)$/) { sh = 1; pre = 1; continue }
+			if (base(w) == "start-stop-daemon") { for (i++; i <= NF; i++) { if ($i ~ /^(-K|--stop)$/) next; if ($i !~ /^-/) print unq($i) } }
 			next
 		}
 	}'
@@ -705,11 +729,13 @@ check_backdoor() {
 			# active lines only: not a comment, not the name of a firewall rule (review of 2.53)
 			active "$f" | grep -E "$BD_HOST_RE" | grep -vE "^[[:space:]]*option[[:space:]]+(name|label)[[:space:]]" >"$TMP/bdhost"
 			# A block is the advice, not the backdoor: a hosts or dnsmasq entry, a firewall
-			# command that drops or rejects (not one that takes that away), a route that leads
-			# nowhere, a line of a UCI firewall rule whose target is DROP or REJECT.
+			# command that drops or rejects, a route that leads nowhere, a line of a UCI
+			# firewall rule whose target is DROP or REJECT.
 			uci_block_lines "$f" | active_in >"$TMP/bdblk"
 			not_in "$TMP/bdblk" "$TMP/bdhost" >"$TMP/bdrest"
-			if grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -q . || grep -E "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -qE "$UNBLOCK_RE"; then
+			# a command that takes such a block away (iptables -D before -I, as scripts that run
+			# at every ifup do) is not the backdoor either
+			if grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -q .; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
 			elif [ -s "$TMP/bdhost" ]; then
 				add INFO backdoor-block "/$p" "blocks a server of the older backdoor ($n): that is the advice, not the backdoor"
@@ -843,35 +869,81 @@ check_applets() {
 	fi
 }
 
-# What one command does with a server of the malware: fetch, probe, block or name
-# (SRV_FETCH_RE and what follows it). A download to /dev/null is a probe when nothing else
-# of it is kept and nothing goes to a shell; the owner's check that a block holds looks
-# like that (nc -z ... && logger, review of 2.53).
+# Does a command that names a server only ask whether it answers? Then it keeps nothing,
+# runs nothing and sends nothing: nc -z; wget or uclient-fetch with --spider; curl -I; a
+# download by curl, wget or uclient-fetch whose content goes to /dev/null, or to the
+# screen, to /dev/null or to grep and its kin. That is an owner's check that a block holds
+# (nc -z ... && logger, wget -qO- ... >/dev/null || logger). Not a probe: any other tool
+# (nc without -z, ncat, socat, telnet, rtty, ssh, dbclient, ...), a download that wget
+# saves under its own name, output to a file, data sent along (curl -d, -F, -T,
+# --post-file, $( ) in the command), a pipe into anything else (review of 2.53). A running
+# process (SRV_PROC=1) does not show where its output goes, and wget -qO- | sh shows only
+# wget -qO-: there content on the screen counts only when the command line itself sends it
+# to /dev/null or grep (sh -c '... >/dev/null').
+is_probe() {
+	printf '%s\n' "$1" | awk -v proc="${SRV_PROC:-0}" 'function unq(s) { gsub(/["\047]/, "", s); return s }
+	{
+		if ($0 ~ /\$\(|`/) { print 0; exit }
+		l = $0; gsub(/\|/, " | ", l); n = split(l, w, " ")
+		t = ""; seg = 0; nxt = 0; bad = 0; probe = 0; out = ""; null = 0
+		for (i = 1; i <= n; i++) {
+			x = unq(w[i]); if (x == "") continue
+			if (x == "|") { seg++; nxt = 1; continue }
+			if (x ~ /^1?>>?/) { y = x; sub(/^1?>>?/, "", y); if (y == "") y = unq(w[++i]); if (y != "/dev/null") bad = 1; else null = 1; continue }
+			if (x ~ /^[0-9]+>/) { if (x ~ /^[0-9]+>>?$/) i++; continue }
+			if (x ~ /^[0-9]*</) { if (x ~ /^[0-9]*<$/) i++; continue }
+			b = x; sub(/.*\//, "", b)
+			if (nxt) { nxt = 0; if (b !~ /^(grep|egrep|fgrep|head|tail|wc|cut|tr|sort|uniq|logger|cat)$/) bad = 1; continue }
+			if (seg) continue
+			if (t == "") {
+				if (b ~ /^(nc|netcat|ncat)$/) t = "nc"
+				else if (b ~ /^wget(-[[:alnum:]]+)?$/ || b == "uclient-fetch") { t = "wget"; out = "file" }
+				else if (b == "curl") { t = "curl"; out = "-" }
+				else if (b ~ /^(tftp|ftpget|ftpput|socat|telnet|rtty|ssh|dbclient|scp|sftp|openssl|rsync)$/) bad = 1
+				continue
+			}
+			if (t == "nc") {
+				if (x ~ /^-[[:alnum:]]*[ec]$/ || x ~ /^--(sh-|lua-)?exec/) bad = 1
+				else if (x ~ /^-[[:alnum:]]*z/) probe = 1
+			} else if (t == "wget") {
+				if (x == "--spider") probe = 1
+				else if (x ~ /^--(post-data|post-file|body-data|body-file|method)/) bad = 1
+				else if (x ~ /^--output-document=/) out = substr(x, 19)
+				else if (x == "--output-document") out = unq(w[++i])
+				else if (x ~ /^-[[:alnum:]]*O/) { y = x; sub(/^-[[:alnum:]]*O/, "", y); out = (y == "") ? unq(w[++i]) : y }
+			} else if (t == "curl") {
+				if (x == "--head" || x ~ /^-[[:alpha:]]*I/) probe = 1
+				else if (x ~ /^--(data|form|upload-file|json)/ || x ~ /^-[[:alpha:]]*[dFT]/) bad = 1
+				else if (x ~ /^--remote-(name|header-name)/ || x ~ /^-[[:alpha:]]*[OJ]/) out = "file"
+				else if (x ~ /^--output=/) out = substr(x, 10)
+				else if (x == "--output") out = unq(w[++i])
+				else if (x ~ /^-[[:alpha:]]*o/) { y = x; sub(/^-[[:alpha:]]*o/, "", y); out = (y == "") ? unq(w[++i]) : y }
+			}
+		}
+		if (t == "" || bad) print 0
+		else if (t == "nc") print probe
+		else print (probe || out == "/dev/null" || (out == "-" && (!proc || null || seg))) ? 1 : 0
+		exit
+	}'
+}
+# What one command does with a server of the malware: fetch, probe, block, unblock (it
+# takes a block away) or name (SRV_FETCH_RE and what follows it).
 srv_kind() {
-	local d
 	if printf '%s\n' "$1" | grep -qE "$SRV_FETCH_RE"; then
-		d=$(printf '%s\n' "$1" | sed -e 's#--output-document=/dev/null##g' -e 's#--output[[:space:]]*/dev/null##g' \
-			-e 's#-[[:alpha:]]*[Oo][[:space:]]*/dev/null##g' -e 's#>[[:space:]]*/dev/null##g')
-		if printf '%s\n' "$1" | grep -qE "$SH_PIPE_RE"; then
-			echo fetch
-		elif printf '%s\n' "$1" | grep -qE "$SRV_PROBE_RE"; then
-			echo probe
-		elif [ "$d" != "$1" ] && ! printf '%s\n' "$d" | grep -qE '(^|[[:space:]])(-[[:alpha:]]*[Oo]|--output)|>'; then
-			echo probe
-		else
-			echo fetch
-		fi
+		if ! printf '%s\n' "$1" | grep -qE "$SH_PIPE_RE" && [ "$(is_probe "$1")" = 1 ]; then echo probe; else echo fetch; fi
 	elif printf '%s\n' "$1" | ran | grep -qE "$RAM_RE"; then
 		echo fetch
-	elif printf '%s\n' "$1" | grep -E "$SRV_BLOCK_RE" | grep -qvE "$UNBLOCK_RE"; then
-		echo block
+	elif printf '%s\n' "$1" | grep -qE "$SRV_BLOCK_RE"; then
+		if printf '%s\n' "$1" | grep -qE "$UNBLOCK_RE"; then echo unblock; else echo block; fi
 	else
 		echo name
 	fi
 }
 # What a file of commands (as active_in gives them) does with the malware's servers:
 #   fetch  a command that names a server fetches from it (srv_kind)
-#   block  every command that names a server blocks it, and no command fetches anything
+#   block  every command that names a server blocks it or takes a block away (a script
+#          that deletes a rule before it inserts it again), one at least blocks, and no
+#          command fetches anything
 #   name   anything else: a probe, a command that only names a server
 # Nothing when no command names one.
 srv_cmds() {
@@ -879,7 +951,7 @@ srv_cmds() {
 	[ -s "$TMP/srvk" ] || return 0
 	if grep -qx fetch "$TMP/srvk"; then
 		echo fetch
-	elif ! grep -qvx block "$TMP/srvk" && ! grep -qE "$SRV_FETCH_RE" "$1"; then
+	elif grep -qx block "$TMP/srvk" && ! grep -qvxE 'block|unblock' "$TMP/srvk" && ! grep -qE "$SRV_FETCH_RE" "$1"; then
 		echo block
 	else
 		echo name
@@ -900,10 +972,13 @@ srv_names() { strs "$1" | grep -oE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's
 # malware or fetch from its servers: the numbers of their first and last line in the file
 # (a command goes on over lines that end in \). What --fix takes out, and nothing else.
 bad_lines() {
-	local s c
-	awk '{ if (l == "") s = NR; l = l $0 } /\\$/ { sub(/\\$/, "", l); next } { print s " " NR "\t" l; l = "" }' "$1" 2>/dev/null |
+	local s c nj=0
+	linewise "$1" && nj=1
+	awk -v nj="$nj" '{ if (l == "") s = NR; l = l $0; c = l; sub(/(^|[[:space:]])#.*$/, "", c) }
+		!nj && c ~ /(^|[^\\])(\\\\)*\\$/ { sub(/\\$/, "", l); next }
+		{ print s " " NR "\t" l; l = "" }' "$1" 2>/dev/null |
 		grep -E "$IOC_RE|$KVM_IP_RE" | while IFS="$TAB" read -r s c; do
-			printf '%s\n' "$c" | active_in >"$TMP/cronline"
+			printf '%s\n' "$c" | active_in "$nj" >"$TMP/cronline"
 			if runs_ioc "$TMP/cronline" || [ "$(srv_cmds "$TMP/cronline")" = fetch ]; then
 				printf '%s\n' "$s"
 			fi
@@ -990,7 +1065,8 @@ check_review() {
 				esac
 				whiteout "$f" && continue
 				same_as_lower "$rel" && continue
-				grep -q "${TAB}/$rel${TAB}" "$FIND" && continue
+				# a block of the older backdoor's names does not hide what else the file does
+				grep -v "^INFO${TAB}backdoor-block${TAB}" "$FIND" | grep -q "${TAB}/$rel${TAB}" && continue
 				[ -n "$(pkg_new "/$rel")" ] && continue
 				case $rel in etc/rc.d/*) known_service_link "$f" && continue ;; esac
 				u=
@@ -1248,7 +1324,7 @@ check_procs() {
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$KVM_IP_RE"; then
 			printf '%s\n' "$cmd" >"$TMP/srvcmd"
-			u=$(srv_use "$TMP/srvcmd")
+			u=$(SRV_PROC=1; srv_use "$TMP/srvcmd")
 			# a program from a RAM disk that is given a server: the payload (review of 2.53)
 			printf '%s\n' "$exe" | grep -qE "$RAM_RE" && u=fetch
 			case $u in

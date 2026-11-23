@@ -95,20 +95,31 @@ This script also detects:
     `/run`, `/dev/shm`) that gets one of them as an argument. One user's network logs and
     the installer name the same servers. Since 2.53 a server that is only named is no
     indicator any more ([#20](https://github.com/admonstrator/glinet-csa-2026-01/issues/20)):
-    - a command that only checks whether the server answers (`nc -z`, `wget --spider`,
-      `curl -I`, a download to `/dev/null` that goes nowhere else) is a name, not a fetch,
+    - a command that only checks whether the server answers is a name, not a fetch:
+      `nc -z`, `wget --spider`, `curl -I`, or `curl`, `wget` or `uclient-fetch` whose
+      content goes to `/dev/null`, to the screen or to `grep` and its kin
+      (`wget -qO- … >/dev/null && logger …`). It is a fetch again as soon as anything is
+      kept, run or sent: `wget` without `-O` (it saves the file), output to a file, a pipe
+      into anything else, data sent along (`curl -d`, `-F`, `-T`, `wget --post-file`),
+      `$( )` in the command, and any other tool (`nc -e`, `rtty`, `dbclient`, …). Only
+      `>` and `1>` count here, not `2>/dev/null`. A running process does not show where
+      its output goes, so there `wget -qO-` is a fetch, as it is in the malware's own
+      `wget -qO- … | sh`,
     - an autostart file that only blocks it (`-j DROP`, `-j REJECT`, `drop`, a route to
       nowhere, a hosts entry to a null address) is `INFO` (`server-block`) and stays; it is
       listed for review like any other new or changed autostart file. A command that takes
-      a block away (`iptables -D`, `ip route del`, `delete`) is no block,
+      a block away (`iptables -D`, `ip route del`, `delete`) is no block on its own; a
+      script that deletes a rule before it adds it again, as scripts that run at every
+      `ifup` do, still blocks,
     - any other file that names it is `REVIEW` (`server-ref`) and stays,
     - in `rc.local` and the root crontab such a line is your change like any other
       (`PERSIST`, see below).
 
     Tool and server count together only within one command: a comment, `||`, `;`, `&&` or
-    `&` in between separates them. A line that ends in `\` goes on in the next. A script
-    that keeps the address in a variable and fetches from it in another command is
-    therefore only `REVIEW`,
+    `&` in between separates them. A line that ends in `\` goes on in the next, as in
+    `sh`: not when the `\` ends a comment, not after `\\`, and never in a crontab or a
+    keep list, which are read line by line. A script that keeps the address in a variable
+    and fetches from it in another command is therefore only `REVIEW`,
   - a process that runs one of the malware's files: as the program, under its name, as
     the script a shell runs, in `sh -c` or in a loop. A command that only names such a
     path, such as `less` on a log, is `REVIEW` and is not stopped,
@@ -116,10 +127,12 @@ This script also detects:
   In files only active lines count, never a comment. The name `gl-helper` counts as a word
   of its own: a cron job that starts `gl-helper-triage.sh`, or a note that mentions the
   malware, is no trace of it (since 2.53). A path of the malware counts only where a
-  command runs it: as the program, behind `sh`, `.`, `source`, `nohup`, `exec`, in
-  `sh -c`, `procd_set_param command` or `start-stop-daemon`, and in a crontab behind the
-  time fields. A command that only names it, such as `rm -rf /etc/config/.gl`,
-  `pgrep -f gl-helper` or `[ -e /etc/config/.gl/gl-helper ]`, is your guard and no trace:
+  command runs it: as the program, behind `sh`, `.`, `source`, `nohup`, `exec`, `env`,
+  `timeout`, `flock`, `watch` and their kin (also as `/usr/bin/nohup`), in `sh -c`,
+  `sh -s < file`, `procd_set_param command` or `start-stop-daemon`, as `./name` after
+  `cd`, as the program in `$( )`, and in a crontab behind the time fields. A command
+  that only names it, such as `rm -rf /etc/config/.gl`, `pgrep -f gl-helper`,
+  `PID=$(pidof gl-helper)` or `[ -e /etc/config/.gl/gl-helper ]`, is your guard and no trace:
   `REVIEW` (`path-ref`) in an autostart file, noted on the `PERSIST` line in `rc.local` and
   the root crontab. A keep list counts when it keeps a path of the malware.
   - the replaced `netstat`: a two-line script that calls the real one and hides the
@@ -254,8 +267,11 @@ only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
   `adguardns.org`, `lede-openproject.org`, `adxinsight.com`, `openwrt-project.org`.
   A line that blocks such a name is no indicator (`backdoor-block`, `INFO`): a hosts
   entry to `0.0.0.0`, `127.0.0.1`, `::` or `::1`, dnsmasq's `address=/name/`,
-  `server=/name/` and `local=/name/` without a real address, a firewall command that drops
-  or rejects it, or a rule in `/etc/config/firewall` whose target is `DROP` or `REJECT`,
+  `server=/name/` and `local=/name/` without a real address, a set the firewall can block
+  (`ipset=/name/`, `nftset=/name/` and their `list` forms), a firewall command that drops
+  or rejects it, or a rule in `/etc/config/firewall` whose target is `DROP` or `REJECT`.
+  A command that takes such a block away (`iptables -D` before `-I`) does not count
+  either way. Such a file is still listed for review like any other new or changed file,
 - a running `monitord` or `ujaild` (`backdoor-proc`). The second stage `ujaild` runs from
   a deleted file, so the script fingerprints the copy the kernel holds: on 30 routers of
   four models it was one of two programs, and a match is noted as the known second stage.
