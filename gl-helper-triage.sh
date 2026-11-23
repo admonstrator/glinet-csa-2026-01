@@ -668,7 +668,9 @@ check_markers() {
 bd_runs_in() {
 	active_in >"$TMP/bdrun"
 	ran <"$TMP/bdrun" | grep -qE '(^|/)(monitord|ulogd|ujaild)$' && return 0
-	grep -qE '(^|[[:space:]/])(lua|monitord)[[:space:]]+[^[:space:]]*(ulogd|monitord\.pid)|(^|[[:space:]])cp[[:space:]]+[^[:space:]]*(ulogd|bin/lua)[[:space:]]+[^[:space:]]*monitord' "$TMP/bdrun"
+	# one command per line, so the command is the line's first word (after do, then and the
+	# like): "rm -f /usr/bin/monitord /bin/ulogd" names both and starts nothing
+	grep -qE '^[[:space:]]*((do|then|else|nohup|exec)[[:space:]]+)*(([^[:space:]]*/)?(lua|monitord)[[:space:]]+[^[:space:]]*(ulogd|monitord\.pid)|cp[[:space:]]+[^[:space:]]*(ulogd|bin/lua)[[:space:]]+[^[:space:]]*monitord)' "$TMP/bdrun"
 }
 # Is there anything else that could start the loader: a file in the places that start
 # programs at boot or later that names it? Comments count here, so that the script never
@@ -792,7 +794,14 @@ check_backdoor() {
 					sub(/^[[:space:]]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l); gsub(/["\047]/, "", l)
 					sub(/[[:space:]]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l) }
 				print l }' >"$TMP/bdrest"
-			if grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -q . || grep -E "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -qE "$UNBLOCK_RE"; then
+			grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" >"$TMP/bdnb"
+			if grep -E "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -qE "$UNBLOCK_RE"; then
+				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
+			elif [ -s "$TMP/bdnb" ] && ! grep -qvE '^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]' "$TMP/bdnb"; then
+				# only a list for a loop (for d in name ...; do ...): what the loop does with
+				# the names cannot be read line by line, so a person looks (review of 2.54)
+				add REVIEW server-ref "/$p" "names a server of the older backdoor ($n) only in a list (for ... in): look at what the script does with it"
+			elif [ -s "$TMP/bdnb" ]; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
 			elif [ -s "$TMP/bdhost" ]; then
 				add INFO backdoor-block "/$p" "blocks a server of the older backdoor ($n): that is the advice, not the backdoor"

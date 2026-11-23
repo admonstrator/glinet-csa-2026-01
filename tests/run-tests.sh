@@ -375,10 +375,12 @@ umount "$D/m"
 echo "=== an owner's script that blocks the older backdoor or ends it is not the backdoor (review of 2.54)"
 D=$(mkscen bdown "$OWL"); U=$D/u
 mkdir -p "$U/etc/init.d"
-printf '#!/bin/sh /etc/rc.common\n# remove monitord and ujaild, block adsanalypro.com (CSA-2026-01)\nSTART=98\nstart() {\n\tkillall monitord ujaild 2>/dev/null\n\trm -f /bin/ulogd /usr/bin/monitord\n\techo "address=/adsanalypro.com/0.0.0.0" >/tmp/dnsmasq.d/bd.conf\n}\n' >"$U/etc/init.d/bd-block"
+printf '#!/bin/sh /etc/rc.common\n# remove monitord and ujaild, block adsanalypro.com (CSA-2026-01)\nSTART=98\nstart() {\n\tkillall monitord ulogd ujaild 2>/dev/null\n\trm -f /usr/bin/monitord /bin/ulogd\n\techo "address=/adsanalypro.com/0.0.0.0" >/tmp/dnsmasq.d/bd.conf\n}\n' >"$U/etc/init.d/bd-block"
+printf '#!/bin/sh /etc/rc.common\nSTART=97\nstart() {\n\tfor d in adguardns.com adsanalypro.com; do echo "address=/$d/0.0.0.0" >>/tmp/dnsmasq.d/bd2.conf; done\n}\n' >"$U/etc/init.d/bd-loop"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
-expect "no backdoor-init, a clean verdict (exit 0)" '[ $rc = 0 ] && ! grep -q "backdoor-init" "$D/check.txt"'
+expect "no backdoor-init, a clean verdict (exit 0)" '[ $rc = 0 ] && ! grep -q "backdoor-init" "$D/check.txt" && ! grep -q "^ *IOC " "$D/check.txt"'
+expect "a block written by echo is INFO, a list for a loop REVIEW" 'grep -q "INFO  *backdoor-block  */etc/init.d/bd-block" "$D/check.txt" && grep -q "REVIEW  *server-ref  */etc/init.d/bd-loop" "$D/check.txt"'
 umount "$D/m"
 
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
