@@ -2292,6 +2292,35 @@ restore_from_lower() {
 		act "removed /$p (not in base image)"
 	fi
 }
+# Take the malware's commands out of a file and keep the rest. In a script each becomes
+# ":", so that an if or a loop around it still closes; if the script would not read as a
+# script after that, it is left for the owner (review of 2.53). In a crontab or a keep
+# list the line goes. For the firewall's start script, and wherever no base image is known
+# to put a file back from: there a file may be the firmware's own, such as /etc/rc.local
+# or /etc/init.d/rcS, and deleting it would take it away (review of 2.54).
+fix_lines() {
+	local p="$1" f rep=1
+	f=$(r "$p")
+	safe "$f" || return 0
+	linewise "$f" && rep=0
+	bad_lines "$f" >"$TMP/fl.bad"
+	drop_lines "$f" "$TMP/fl.bad" "$rep" >"$TMP/fl.new"
+	if [ ! -s "$TMP/fl.bad" ]; then
+		say "   ${YEL}left /$p: the malware's command there could not be told apart line by line; take it out yourself${N}"
+		return 1
+	elif [ "$rep" = 1 ] && ! sh -n "$TMP/fl.new" 2>/dev/null && sh -n "$f" 2>/dev/null; then
+		say "   ${YEL}left /$p: without the malware's lines it would no longer run as a script; take them out yourself${N}"
+		return 1
+	elif cat "$TMP/fl.new" >"$f"; then
+		if [ "$rep" = 1 ]; then
+			act "replaced the malware's lines in /$p by \":\" (your own lines there stay; previous version: files/merged/$p in the archive)"
+		else
+			act "removed the malware's lines from /$p (your own lines there stay; previous version: files/merged/$p in the archive)"
+		fi
+	else
+		return 1
+	fi
+}
 
 fix() {
 	local pid p f t failed=0
@@ -2360,6 +2389,16 @@ fix() {
 			exists "$(src "$p")" || continue
 			same_as_lower "$p" && continue
 			whiteout "$(src "$p")" && continue
+			if [ -z "$LOWER" ]; then
+				# no base image here to put back (a KVM, or --root without --lower): only the
+				# malware's lines go
+				if [ -n "$(bad_lines "$(r "$p")" | head -n 1)" ]; then
+					fix_lines "$p" || failed=1
+				else
+					say "   left /$p: there is no base image here to put back, and no line of the malware is in it."
+				fi
+				continue
+			fi
 			restore_from_lower "$p" || failed=1
 			say "     ${D}(previous version: files/merged/$p in the archive)${N}"
 		done
@@ -2374,33 +2413,20 @@ fix() {
 	fi
 	# 4. other files that start the implant (init scripts, hotplug, profile, ...)
 	#    and replaced applets: put the base image version back or remove them
-	awk -F '\t' '$1=="IOC" && ($2=="persist-ref" || $2=="applet-hijack") {print substr($3,2)}' "$FIND" |
-		while IFS= read -r p; do
+	awk -F '\t' '$1=="IOC" && ($2=="persist-ref" || $2=="applet-hijack") {print $2 "\t" substr($3,2)}' "$FIND" |
+		while IFS="$TAB" read -r t p; do
 			case " $PERSIST " in *" $p "*) continue ;; esac
 			exists "$(r "$p")" || continue
-			case $p in etc/firewall.user | etc/firewall.d/*)
-				# The firewall's start script: the owner's rules stay, each of the malware's
-				# commands becomes ":", so that an if or a loop around it still closes. If the
-				# script would not read as a script after that, it is left for the owner
-				# (review of 2.53). It is listed for review as well: this is the one such path
-				# that --fix changes, and only in these lines.
-				f=$(r "$p")
-				safe "$f" || continue
-				bad_lines "$f" >"$TMP/fw.bad"
-				drop_lines "$f" "$TMP/fw.bad" 1 >"$TMP/fw.new"
-				if [ ! -s "$TMP/fw.bad" ]; then
-					say "   ${YEL}left /$p: the malware's command there could not be told apart line by line; take it out yourself${N}"
-					echo fail >>"$TMP/fixfail"
-				elif ! sh -n "$TMP/fw.new" 2>/dev/null && sh -n "$f" 2>/dev/null; then
-					say "   ${YEL}left /$p: without the malware's lines it would no longer run as a script; take them out yourself${N}"
-					echo fail >>"$TMP/fixfail"
-				elif cat "$TMP/fw.new" >"$f"; then
-					act "replaced the malware's lines in /$p by \":\" (your own lines there stay; previous version: files/merged/$p in the archive)"
-				else
-					echo fail >>"$TMP/fixfail"
-				fi
-				continue ;;
-			esac
+			# The firewall's start script: the owner's rules stay (review of 2.53). It is
+			# listed for review as well: this is the one such path that --fix changes, and
+			# only in these lines. Without a base image the same holds for every file that
+			# starts the malware (review of 2.54).
+			case $p in etc/firewall.user | etc/firewall.d/*) t=lines ;; esac
+			[ -z "$LOWER" ] && [ "$t" = persist-ref ] && t=lines
+			if [ "$t" = lines ]; then
+				fix_lines "$p" || echo fail >>"$TMP/fixfail"
+				continue
+			fi
 			restore_from_lower "$p" || echo fail >>"$TMP/fixfail"
 			case $p in etc/init.d/*) exists "$(r "$p")" || echo "${p##*/}" >>"$TMP/removed-init" ;; esac
 		done

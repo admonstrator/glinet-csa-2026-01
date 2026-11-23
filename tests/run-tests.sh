@@ -442,6 +442,18 @@ expect "an adblock list, a sinkhole, a check and the real ulogd are no backdoor:
 expect "the block list and the sinkhole are INFO backdoor-block, the check is REVIEW server-ref" 'grep -q "INFO  *backdoor-block  */etc/config/adblock-fast" "$D/check.txt" && grep -q "INFO  *backdoor-block  */etc/dnsmasq.conf" "$D/check.txt" && grep -q "REVIEW  *server-ref  */etc/crontabs/root" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== --fix without a base image takes out only the malware's lines (review of 2.54)"
+D=$(mkscen nolower "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl" "$U/etc/init.d"
+echo implant >"$U/etc/config/.gl/gl-helper"
+printf '# Put your custom commands here\nlogger my-own-line\n/etc/config/.gl/gl-helper &\nexit 0\n' >"$U/etc/rc.local"
+printf '#!/bin/sh\nmy-dns-check\n/etc/config/.gl/gl-helper\n' >"$U/etc/init.d/dnsmasq"
+mnt "$D" "$OWL"
+triage --root "$D/m" --upper "$D/u" -o "$D/out" --fix >"$D/fix.txt" 2>&1
+expect "the firmware's own files stay, without the malware's lines" '[ -f "$D/m/etc/rc.local" ] && grep -q "logger my-own-line" "$D/m/etc/rc.local" && ! grep -q "^/etc/config/.gl/gl-helper" "$D/m/etc/rc.local" && [ -f "$D/m/etc/init.d/dnsmasq" ] && grep -q "my-dns-check" "$D/m/etc/init.d/dnsmasq" && ! grep -q "^/etc/config/.gl/gl-helper" "$D/m/etc/init.d/dnsmasq" && ! grep -q "not in base image" "$D/fix.txt"'
+expect "the malware's own directory is gone" '[ ! -e "$D/m/etc/config/.gl" ]'
+umount "$D/m"
+
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
 D=$(mkscen npk "$OWL"); U=$D/u
 mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"
