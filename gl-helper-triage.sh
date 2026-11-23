@@ -524,8 +524,11 @@ strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
 # is given both ways, read with its quotes and plainly, so that nothing the plain reading
 # finds is lost where the quotes are read otherwise than sh reads them. The plain reading
 # alone is used for a quote that does not close on its line, for $( or ` inside double
-# quotes, for $'...', for the text of a here-document (sh reads no quotes there) and
-# for a line of more than 4096 characters, which is also given whole. $2 is 1 for the
+# quotes, for $'...', for the text of a here-document (sh reads no quotes there; a \ at
+# the end goes on there too) and for a line of more than 4096 characters, which is also
+# given whole. A # right after ; & | ( or ) is cut as a comment and kept in the plain
+# reading, since sh may read it as part of a word (\;# or ${x%)#*}). << inside $(( ))
+# is a shift and starts no here-document. $2 is 1 for the
 # command line of a process: it has no comments.
 active_in() {
 	awk -v nj="${1:-0}" -v pc="${2:-0}" '
@@ -539,20 +542,22 @@ active_in() {
 	# the line with ; & | # inside a quoted string of data replaced and a comment cut off;
 	# sets pr (something was replaced), bail (read plainly) and hd, hdash (a here-document
 	# follows, and whether its end may be indented with tabs)
-	function scan(l,   i, n, c, o, r, sg, q, code) {
+	function scan(l,   i, n, c, o, r, sg, q, code, ar) {
 		o = ""; n = length(l); q = ""; pr = 0; bail = 0
 		for (i = 1; i <= n; i++) {
 			c = substr(l, i, 1)
 			if (q == "") {
 				if (c == "\\") { o = o substr(l, i, 2); i++; continue }
-				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:];&|()]/)) break
+				# a # right after ; & | ( or ) may be no comment for sh (\;# or ${x%)#*}): plain too
+				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:];&|()]/)) { if (i > 1 && substr(l, i - 1, 1) !~ /[[:space:]]/) pr = 1; break }
 				if (c == "\047" && substr(l, i - 1, 1) == "$") { bail = 1; return l }
 				if (c == "\"" || c == "\047") {
 					sg = o; sub(/.*[;&|(]/, "", sg)
 					code = (o ~ /(^|[[:space:]])-[A-Za-z]*c[[:space:]]*$/ || sg ~ /(^|[[:space:]\/])(eval|trap|watch|ssh|xargs|su|sudo|timeout|nohup|setsid|env|nice|ionice|flock|chrt|taskset|busybox)[[:space:]]/)
 					q = c; o = o c; continue
 				}
-				if (c == "<" && substr(l, i, 2) == "<<" && substr(l, i, 3) != "<<<") {
+				# << in $(( )) is a shift, no here-document
+				ar = o; if (c == "<" && substr(l, i, 2) == "<<" && substr(l, i, 3) != "<<<" && gsub(/\(\(/, "", ar) <= gsub(/\)\)/, "", ar)) {
 					# the word as sh takes it, its quotes removed: <<"E"OF ends at EOF
 					r = substr(l, i + 2); hdash = (r ~ /^-/); sub(/^-/, "", r); sub(/^[[:space:]]*/, "", r)
 					if (match(r, /^[^[:space:];&|<>()]+/)) { hd = substr(r, 1, RLENGTH); gsub(/["\047\\]/, "", hd) }
@@ -569,7 +574,14 @@ active_in() {
 		return o
 	}
 	# the text of a here-document, up to its end word (after tabs with <<-), plainly
-	body != "" { t = $0; if (bdash) sub(/^\t*/, "", t); if (t == body) body = ""; else plain($0); next }
+	# (a \ at its end goes on in the next line there too)
+	body != "" {
+		t = $0; if (bdash) sub(/^\t*/, "", t)
+		if (t == body) { if (hb != "") plain(hb); hb = ""; body = ""; next }
+		t = hb $0; hb = ""; c = t; if (!pc) sub(/(^|[[:space:]])#.*$/, "", c)
+		if (!nj && c ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", t); hb = t " " } else plain(t)
+		next
+	}
 	length($0) > 4096 { if (b != "") { plain(b); b = "" } plain($0); if (/["\047]/) print; next }
 	b == "" && !pc && /^[[:space:]]*#/ { next }
 	{
@@ -582,7 +594,7 @@ active_in() {
 		else { out(s); if (pr) plain(l) }
 		if (hd != "") { body = hd; bdash = hdash }
 	}
-	END { if (b != "") plain(b) }'
+	END { if (b != "") plain(b); if (hb != "") plain(hb) }'
 }
 # Files that are read line by line: crontabs and the lists of files a firmware update keeps
 linewise() { case $1 in *crontabs/* | *crontabs.d/* | *sysupgrade.conf | */keep.d/*) return 0 ;; esac; return 1; }
@@ -655,14 +667,15 @@ ran() {
 writes() {
 	awk '{ print; l = $0 }
 	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
-	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*[^[:space:]]*(crontabs?\/|rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|profile)/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
+	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*["\047]?[^[:space:]"\047]*(crontabs?\/|\/etc\/(rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|udhcpc\.user|profile\.d\/|profile([[:space:]"\047;&|)]|$))|\/\.(ash_)?profile([[:space:]"\047;&|)]|$))/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
 	{
 		sub(/^[[:space:](!{]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l)
 		sub(/[[:space:]]*[|][[:space:]]*(crontab|tee)([[:space:]].*)?$/, "", l)
 		sub(/[[:space:]]*[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l)
 		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n|\005|\|\||&&|;|&/, "\n", l); gsub(/["\047]/, "", l)
 		n = split(l, a, "\n")
-		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/) print a[k] }
+		# a line that starts with a directory, as in echo "/etc/config/.gl/ found", runs nothing
+		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/ && a[k] !~ /^[[:space:]]*[^[:space:]]*\/([[:space:]]|$)/) print a[k] }
 	}'
 }
 # Does a file of commands (as active_in gives them) run a path of the malware, and which?

