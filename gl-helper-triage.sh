@@ -494,7 +494,9 @@ esac
 tool_ok() {
 	local p x rel
 	p=$(command -v "$1" 2>/dev/null) || return 1
-	case $p in "$TMP"/bin/*) return 0 ;; /*) ;; *) return 1 ;; esac
+	# A name without a path is the shell's own: some busybox builds run their applets from
+	# inside the shell (wget, for one). That is the program this script already runs in.
+	case $p in "$TMP"/bin/*) return 0 ;; /*) ;; *) return 0 ;; esac
 	[ "$LIVE" = 1 ] && [ -n "$LOWER" ] || return 0
 	x=$(readlink -f "$p" 2>/dev/null); [ -n "$x" ] || x=$p
 	rel=${x#/}
