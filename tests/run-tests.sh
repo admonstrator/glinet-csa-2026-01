@@ -367,6 +367,18 @@ printf 'Package: gl-sdk4-system-check\nVersion: 1\n\n' >"$U/usr/lib/opkg/status"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "start script put back: the loader is still IOC and the text says it no longer starts" '[ $rc = 1 ] && grep -A3 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | tr -s " \n" " " | grep -q "no longer started at boot" && ! grep -q "backdoor-init" "$D/check.txt" && grep -q "IOC  *backdoor-keep" "$D/check.txt"'
+mkdir -p "$D/m/etc"; printf '/usr/bin/monitord /bin/ulogd &\nexit 0\n' >"$D/m/etc/rc.local"
+run "$D" "$OWL" --check >"$D/check2.txt"
+expect "where something else still names the loader, nothing is said about it no longer starting (review of 2.54)" 'grep -q "IOC  *backdoor-file  */bin/ulogd" "$D/check2.txt" && ! grep -q "no longer started" "$D/check2.txt"'
+umount "$D/m"
+
+echo "=== an owner's script that blocks the older backdoor or ends it is not the backdoor (review of 2.54)"
+D=$(mkscen bdown "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '#!/bin/sh /etc/rc.common\n# remove monitord and ujaild, block adsanalypro.com (CSA-2026-01)\nSTART=98\nstart() {\n\tkillall monitord ujaild 2>/dev/null\n\trm -f /bin/ulogd /usr/bin/monitord\n\techo "address=/adsanalypro.com/0.0.0.0" >/tmp/dnsmasq.d/bd.conf\n}\n' >"$U/etc/init.d/bd-block"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "no backdoor-init, a clean verdict (exit 0)" '[ $rc = 0 ] && ! grep -q "backdoor-init" "$D/check.txt"'
 umount "$D/m"
 
 echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
@@ -377,14 +389,18 @@ mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"
 { printf 'my notes: the malware uses the Node hardened executable packer\n'; head -c 2000 /dev/zero | tr '\0' 'n'; } >"$U/root/notes.txt"
 { printf '\177ELF\001\001\001'; head -c 3000 /dev/zero; } >"$U/usr/sbin/own-tool"; chmod 755 "$U/usr/sbin/own-tool"
 mkdir -p "$U/tmp"; echo x >"$U/tmp/.lp"
+mkdir -p "$U/usr/bin"; { printf '\177ELF\002\001\001'; head -c 3000 /dev/zero; printf 'Node hardened executable packer'; } >"$U/usr/bin/lua"; chmod 755 "$U/usr/bin/lua"
+{ printf 'ELF note\n'; printf 'Node hardened executable packer\n'; head -c 2000 /dev/zero | tr '\0' 'e'; } >"$U/root/elf-note.txt"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "a program in the packer's format is IOC marker, also without ELF header" '[ $rc = 1 ] && grep -A1 "IOC  *marker  */usr/sbin/svcd" "$D/check.txt" | grep -q "packer of the malware" && grep -q "IOC  *marker  */etc/svc/blob" "$D/check.txt"'
-expect "a note that quotes the packer's name and another program are not" '! grep -q "IOC.*/root/notes.txt" "$D/check.txt" && ! grep -q "IOC.*own-tool" "$D/check.txt"'
+expect "a note that quotes the packer's name and another program are not" '! grep -q "IOC.*/root/notes.txt" "$D/check.txt" && ! grep -q "IOC.*own-tool" "$D/check.txt" && ! grep -q "IOC.*elf-note" "$D/check.txt"'
+expect "a packed program over a file of the base image is IOC marker too (review of 2.54)" 'grep -q "IOC  *marker  */usr/bin/lua" "$D/check.txt"'
 expect "one finding per path" '[ $(grep -c " /usr/sbin/svcd$" "$D/check.txt") = 1 ]'
 expect "/tmp/.lp is for review" 'grep -q "REVIEW  *tmp-file  */tmp/.lp" "$D/check.txt"'
 run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
 expect "--fix removes the packed files only, after archiving them (exit 2)" '[ $rc = 2 ] && [ ! -e "$D/m/usr/sbin/svcd" ] && [ ! -e "$D/m/etc/svc/blob" ] && [ -f "$D/m/root/notes.txt" ] && [ -f "$D/m/usr/sbin/own-tool" ] && tar -tzf "$(ls "$D"/out/*.tar.gz | head -n 1)" | grep -q "usr/sbin/svcd"'
+expect "--fix puts the base image's file back where a packed program stood over it" '[ "$(cat "$D/m/usr/bin/lua")" = lua-interpreter ]'
 umount "$D/m"
 
 echo "=== base files are package-owned too: a changed one must still be seen (issue 4)"

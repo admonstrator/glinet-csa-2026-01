@@ -257,8 +257,9 @@ It starts at every boot from a changed `/etc/init.d/urandom_seed`, reports the d
 a server whose name imitates AdGuard or OpenWrt and gets a second program back that runs in memory
 only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
 
-- an init script from outside a package that names `monitord`, `/bin/ulogd` or `ujaild`
-  and differs from the base image (`backdoor-init`),
+- an init script from outside a package that starts `monitord`, `/bin/ulogd` or `ujaild`
+  and differs from the base image (`backdoor-init`). Since 2.54 a script that only names
+  them, to end their processes, delete their files or block their servers, is not counted,
 - `/bin/ulogd` that no package installed, and `/usr/bin/monitord` when it is a copy of
   `/usr/bin/lua` (`backdoor-file`),
 - a changed list of files that a firmware update keeps, when it names those files
@@ -299,8 +300,9 @@ and do not restore a backup taken from that device.
 GL.iNet's security firmware for routers (22 and 23 November 2026) puts `urandom_seed`
 back at its first start but leaves `/bin/ulogd`, and the backdoor's own keep-list line
 carries the loader through an update that keeps settings (RemoteToHome's test of 23
-November). The script then still reports `/bin/ulogd` as `IOC` and says in the finding
-that it is no longer started at boot (since 2.54). The device had the backdoor.
+November). The script then still reports `/bin/ulogd` as `IOC`; where no other start-up file names
+the loader, the finding says that it is likely no longer started at boot (since 2.54). The
+device had the backdoor.
 
 ### Firewall
 

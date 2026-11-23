@@ -647,16 +647,39 @@ check_markers() {
 	# picked by their first bytes, and only those are read through strs (issue 24).
 	[ -n "$UPPER" ] || return 0
 	find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -lE '^(.ELF|NPK!)' {} + 2>/dev/null | while IFS= read -r f; do
-		case $(head -c 4 "$f" 2>/dev/null | tr -d '\177') in ELF | 'NPK!') ;; *) continue ;; esac
+		case $(head -c 4 "$f" 2>/dev/null) in "$(printf '\177')ELF" | 'NPK!') ;; *) continue ;; esac
 		strs "$f" | grep -qF "$GLH_PACKER" || continue
 		p=${f#"${UPPER%/}"/}
 		grep -q "${TAB}/$p${TAB}" "$FIND" && continue
-		[ -n "$(pkg_owner "/$p")" ] && continue
+		# a package explains only a file the base image does not have (issue 4)
+		same_as_lower "$p" && continue
+		[ -n "$(pkg_new "/$p")" ] && continue
 		known=
 		printf '%s\n' "$GLH_SHAS" | grep -qxF "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" && known=', the same file as posted in GL.iNet'"'"'s forum'
 		add IOC marker "/$p" "wrapped in the packer of the malware's gl-helper and its downloader$known (sha256 $(sha256sum "$f" 2>/dev/null | cut -c1-64))"
 	done
 	return 0
+}
+
+# Does a script on stdin start the older backdoor, not only name it? A line that runs
+# monitord, ulogd or ujaild, that hands the loader to lua or monitord, or that copies the
+# loader or lua to monitord, as the changed urandom_seed does. Comments, kill, killall,
+# rm and lines that block its names do not count.
+bd_runs_in() {
+	active_in >"$TMP/bdrun"
+	ran <"$TMP/bdrun" | grep -qE '(^|/)(monitord|ulogd|ujaild)$' && return 0
+	grep -qE '(^|[[:space:]/])(lua|monitord)[[:space:]]+[^[:space:]]*(ulogd|monitord\.pid)|(^|[[:space:]])cp[[:space:]]+[^[:space:]]*(ulogd|bin/lua)[[:space:]]+[^[:space:]]*monitord' "$TMP/bdrun"
+}
+# Is there anything else that could start the loader: a file in the places that start
+# programs at boot or later that names it? Comments count here, so that the script never
+# claims more than it saw.
+bd_started_elsewhere() {
+	local d
+	for d in etc/rc.local etc/crontabs etc/init.d etc/hotplug.d etc/udhcpc.user.d etc/profile etc/profile.d etc/gl_crontabs; do
+		exists "$(r "$d")" || continue
+		find "$(r "$d")" -xdev -type f -exec grep -lE '(^|[^[:alnum:]_.-])/bin/ulogd|monitord' {} + 2>/dev/null | grep -q . && return 0
+	done
+	return 1
 }
 
 # The older backdoor (see BD_RE above). Runs before the general overlay checks, which
@@ -672,12 +695,17 @@ check_backdoor() {
 			grep -qE "$BD_RE" "$f" 2>/dev/null || continue
 			same_as_lower "$p" && continue
 			[ -n "$(pkg_new "/$p")" ] && continue
-			# only lines the base image's version does not have count
-			if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then
-				not_in "$(l "$p")" "$f" 2>/dev/null | grep -qE "$BD_RE" || continue
-			fi
 			sha=
-			[ "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" = "$BD_INIT_SHA" ] && sha=", the same file as on other reported devices"
+			if [ "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" = "$BD_INIT_SHA" ]; then
+				sha=", the same file as on other reported devices"
+			# only lines the base image's version does not have count, and only lines that
+			# start the backdoor: an owner's script that blocks its names or ends its
+			# processes names them too (review of 2.54)
+			elif [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then
+				not_in "$(l "$p")" "$f" 2>/dev/null | bd_runs_in || continue
+			else
+				strs "$f" | bd_runs_in || continue
+			fi
 			add IOC backdoor-init "/$p" "older backdoor: starts $(grep -oE "$BD_RE" "$f" | sort -u | tr '\n' ' ' | sed 's/ $//') at boot$sha"
 		done
 	fi
@@ -694,8 +722,8 @@ check_backdoor() {
 		# backdoor's own keep-list line carries it through the update (RemoteToHome, test of
 		# 23 November 2026). Then it is a remnant: no longer started at boot, but the device
 		# had the backdoor, and what was done with it cannot be listed.
-		if vendor_cleanup && ! has_ioc backdoor-init; then
-			owner="$owner; its start script was put back by GL.iNet's security update, so it is no longer started at boot, but this device had the older backdoor"
+		if vendor_cleanup && ! has_ioc backdoor-init && ! bd_started_elsewhere; then
+			owner="$owner; GL.iNet's security update put its start script back and nothing else here names it, so it is likely no longer started at boot, but this device had the older backdoor"
 		fi
 		add IOC backdoor-file /bin/ulogd "older backdoor: its loader, $owner (sha256 ${sha:-unreadable})"
 	fi
@@ -756,8 +784,14 @@ check_backdoor() {
 			# A block is the advice, not the backdoor: a hosts or dnsmasq entry, a firewall
 			# command that drops or rejects (not one that takes that away), a route that leads
 			# nowhere, a line of a UCI firewall rule whose target is DROP or REJECT.
+			# A script that writes such an entry (echo "address=/name/0.0.0.0" >file) blocks
+			# too: what echo or printf writes is compared, not the command (review of 2.54).
 			uci_block_lines "$f" | active_in >"$TMP/bdblk"
-			not_in "$TMP/bdblk" "$TMP/bdhost" >"$TMP/bdrest"
+			not_in "$TMP/bdblk" "$TMP/bdhost" | awk '{ l = $0
+				if (l ~ /^[[:space:]]*(echo|printf)[[:space:]]/) {
+					sub(/^[[:space:]]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l); gsub(/["\047]/, "", l)
+					sub(/[[:space:]]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l) }
+				print l }' >"$TMP/bdrest"
 			if grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -q . || grep -E "$SRV_BLOCK_RE" "$TMP/bdrest" | grep -qE "$UNBLOCK_RE"; then
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
 			elif [ -s "$TMP/bdhost" ]; then
@@ -2088,11 +2122,12 @@ fix() {
 		exists "$(r "$p")" && grep -q "^IOC${TAB}marker${TAB}/$p/" "$FIND" || continue
 		if rm -rf "$(r "$p")"; then act "removed /$p"; else failed=1; fi
 	done
-	# a program of the malware elsewhere, known by its packer: that file only
+	# a program of the malware elsewhere, known by its packer: that file only, and where
+	# the base image has a file of that name, the base image's file is put back
 	awk -F '\t' '$1=="IOC" && $2=="marker" {print substr($3,2)}' "$FIND" | sort -u | while IFS= read -r p; do
 		f=$(r "$p")
 		[ -f "$f" ] && [ ! -L "$f" ] || continue
-		if rm -f "$f"; then act "removed /$p"; else echo fail >>"$TMP/fixfail"; fi
+		restore_from_lower "$p" || echo fail >>"$TMP/fixfail"
 	done
 	if [ -p "$(r tmp/f)" ] && grep -q "^IOC${TAB}pipe${TAB}" "$FIND"; then
 		if rm -f "$(r tmp/f)"; then act "removed the pipe /tmp/f"; else failed=1; fi
