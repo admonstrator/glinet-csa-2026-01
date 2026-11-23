@@ -223,6 +223,8 @@ const T = {
     dev: { r: 'router', k: 'KVM device', u: 'device' },
     note: 'This page only explains. It has not checked your device and has learned nothing about it: the code in the address stands for the result, and with the longer code for the model and its firmware version. Your browser does not send that part of the address.',
     old: 'This result is from script version {v}. The current version is {cur} and finds more. Run the script again before you rely on this.',
+    oldUpdate: 'To get the current version: sh gl-helper-triage.sh --update',
+    oldGet: 'To get the current version, download the script again: curl -fsSL https://app.gl-i.net/csa-2026-01-fix -o gl-helper-triage.sh',
     gc: { 1: 'on', 0: 'off', x: 'not known' }, gcLabel: 'GoodCloud',
     rs: { 1: 'Restarted since the attack', 0: 'Not restarted since the attack' },
     types: { ioc: ['IOC', 'known trace'], persist: ['PERSIST', 'changed'], review: ['REVIEW', 'to look at'], note: ['NOTE', 'good to know'], ok: ['OK', 'nothing'] },
@@ -321,6 +323,8 @@ const T = {
     dev: { r: { dev: 'Router', nom: 'der Router', Nom: 'Der Router', acc: 'den Router', dies: 'diesen Router' }, k: { dev: 'KVM-Gerät', nom: 'das KVM-Gerät', Nom: 'Das KVM-Gerät', acc: 'das KVM-Gerät', dies: 'dieses KVM-Gerät' }, u: { dev: 'Gerät', nom: 'das Gerät', Nom: 'Das Gerät', acc: 'das Gerät', dies: 'dieses Gerät' } },
     note: 'Diese Seite erklärt nur. Sie hat dein Gerät nicht geprüft und nichts von ihm erfahren: Der Code in der Adresse steht für das Ergebnis, beim längeren Code auch für das Modell und seine Firmware-Version. Dein Browser schickt diesen Teil der Adresse nicht mit.',
     old: 'Dieses Ergebnis stammt von Skriptversion {v}. Aktuell ist {cur}, und sie findet mehr. Lass das Skript noch einmal laufen, bevor du dich darauf verlässt.',
+    oldUpdate: 'So holst du die aktuelle Fassung: sh gl-helper-triage.sh --update',
+    oldGet: 'So holst du die aktuelle Fassung: Lade das Skript neu herunter mit curl -fsSL https://app.gl-i.net/csa-2026-01-fix -o gl-helper-triage.sh',
     gc: { 1: 'an', 0: 'aus', x: 'nicht bekannt' }, gcLabel: 'GoodCloud',
     rs: { 1: 'Seit dem Angriff neu gestartet', 0: 'Seit dem Angriff nicht neu gestartet' },
     types: { ioc: ['IOC', 'bekannte Spur'], persist: ['PERSIST', 'geändert'], review: ['REVIEW', 'zum Ansehen'], note: ['HINWEIS', 'gut zu wissen'], ok: ['OK', 'nichts'] },
@@ -418,6 +422,8 @@ const T = {
     dev: { r: '路由器', k: 'KVM 设备', u: '设备' },
     note: '本页面只负责解释。它没有检查你的设备，也没有收到关于它的任何信息：地址里的代码代表检查结果，较长的代码还包含设备型号和固件版本。浏览器不会把地址的这一部分发送出去。',
     old: '这个结果来自脚本版本 {v}。当前版本是 {cur}，能发现更多痕迹。请重新运行脚本后再参考本页内容。',
+    oldUpdate: '获取当前版本：sh gl-helper-triage.sh --update',
+    oldGet: '获取当前版本，请重新下载脚本：curl -fsSL https://app.gl-i.net/csa-2026-01-fix -o gl-helper-triage.sh',
     gc: { 1: '已开启', 0: '已关闭', x: '未知' }, gcLabel: 'GoodCloud',
     rs: { 1: '攻击发生后重启过', 0: '攻击发生后没有重启过' },
     types: { ioc: ['IOC', '已知痕迹'], persist: ['PERSIST', '有改动'], review: ['REVIEW', '供查看'], note: ['说明', '需要了解'], ok: ['OK', '无发现'] },
@@ -637,7 +643,8 @@ function render() {
   hero.append(chips); page.append(hero);
 
   const box = (pair, kind) => { const p = el('p', null, 'note ' + kind); p.append(el('b', fill(pair[0], o)), fill(pair[1], o)); page.append(p); };
-  if (c.v !== 'hand' && CURRENT && older(c.v, CURRENT)) page.append(el('p', fill(t.old, o), 'note warn'));
+  // from 2.50 on the script can replace itself; an older one has to be downloaded again
+  if (c.v !== 'hand' && CURRENT && older(c.v, CURRENT)) page.append(el('p', fill(t.old, o) + ' ' + (older(c.v, '2.50') ? t.oldGet : t.oldUpdate), 'note warn'));
   if (c.f === '2') box(t.fix2, 'warn'); if (c.f === '3') box(t.fix3, 'bad');
   if (cls.also) box(t.also, 'bad');
   { // firmware: what the list of firmware.gl-i.net says for this model and version

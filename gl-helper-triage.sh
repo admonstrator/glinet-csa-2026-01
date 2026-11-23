@@ -43,10 +43,10 @@
 # --fix only touches IOC items and their persistence. REVIEW items are archived and
 # reported, never changed. This is a stopgap: a factory reset is still recommended.
 
-VERSION=2.50
+VERSION=2.51
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
 # website reads both lines to show the current version and how long ago it came out.
-RELEASED='2026-11-23 10:39 UTC'
+RELEASED='2026-11-23 10:50 UTC'
 
 # Where the malware lives and what it puts there. The first two directories are the ones
 # GL.iNet's cleanup in the KVM firmware knows. The rest comes from the installer itself
@@ -132,7 +132,12 @@ BD_INIT_SHA=3265f27feb954744581cdea2373b88ceae9d85b67e90487353fd48902cf4fc19
 # to device, so these are no detection rule; a match only says "seen before".
 # A survey of 28 routers with the backdoor found a different hash on every one, none of
 # them in this list. The list is kept for the samples it came from.
+# Added from issues 14, 23 and 24: one more device each, and two posts of topic 73097.
 BD_ULOGD_SHAS='c5e87c80f76415f399ce4d1644f5ddc3c8b46bbb2e698b3e05f49a1f7dcd7d06
+204b884cdbeba1d07f2fc954c80d7ec32a59df9e3914e0f13ada7e15d0e0bb83
+8ff619e1913b64215b4a75ce577a5a76eae6aad07590faf5a38c915af0069d44
+aaff75ff9c111620e0ee5bc103e5f8262dbfe0aa42554bd716c5b7a3f3d1d192
+c1f79858041d096d7a7dc6837385fdae4670d77dfaa101ea31040d64e96574b4
 af500b2a912c75ae08c96c3cff70339eb8b05365e34b577f7067547236e97abc
 2a020364b1f993b542254db0053ff91248b3efa0dd728b1fa73facaa7e646272
 e009cb771c52c66f5899151345b11aa2d1cc5e64147ade8059413d09b2ed5c87'
@@ -1359,8 +1364,30 @@ cloud_bound() {
 	if grep -qE "^[[:space:]]*option[[:space:]]+(bindtime|username|email|bindtype)[[:space:]]+['\"]?[^'\"[:space:]]" "$f" 2>/dev/null; then echo on; else echo off; fi
 }
 
+# How old this version is, by the device's clock, in hours. Nothing where the clock or the
+# date cannot be read, or the clock stands before the release.
+version_age() {
+	local r n
+	r=$(date -u -d "${RELEASED% UTC}" +%s 2>/dev/null); n=$(date -u +%s 2>/dev/null)
+	case "$r" in '' | *[!0-9]*) return 1 ;; esac
+	case "$n" in '' | *[!0-9]*) return 1 ;; esac
+	[ "$n" -ge "$r" ] || return 1
+	echo $(((n - r) / 3600))
+}
 report_head() {
+	local age
 	say "${B}== gl-helper triage $VERSION${N}  ${D}(CSA-2026-01)${N}"
+	# The script changes often and does not look for a newer version by itself. So every
+	# run says how old this one is and how to get the current one.
+	if age=$(version_age); then
+		if [ "$age" -ge 48 ]; then kv Released "$RELEASED, ${YEL}$((age / 24)) days ago${N}"
+		elif [ "$age" -ge 2 ]; then kv Released "$RELEASED, $age hours ago"
+		else kv Released "$RELEASED"; fi
+	else
+		kv Released "$RELEASED"
+	fi
+	if [ "${age:-0}" -ge 24 ]; then kv Update "${YEL}a newer version is likely.${N} Get it with: sh $0 --update"
+	else kv Update "sh $0 --update  ${D}(gets the current version and checks its signature)${N}"; fi
 	kv Host "$HOST"
 	kv Platform "$PLATFORM"
 	kv Time "$WHEN"

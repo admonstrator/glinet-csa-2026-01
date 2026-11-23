@@ -788,6 +788,16 @@ run "$D" "$OWN" --check >"$D/check.txt"
 expect "a changed libc is found although the program names it between NUL bytes" 'grep -q "REVIEW  *changed-lib  */lib/libc.so" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== every run says how old this version is and how to get the current one"
+D=$(mkscen age "$OWL"); mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"
+expect "a fresh version: its release time and the command to update" 'grep -q "^   Released  *20[0-9-]* [0-9:]* UTC" "$D/check.txt" && grep -q "^   Update  *sh .* --update" "$D/check.txt" && ! grep -q "newer version is likely" "$D/check.txt"'
+TNOW=$T; T=$BASE/old-version.sh; sed "s|^RELEASED=.*|RELEASED='2026-11-01 08:00 UTC'|" "$TNOW" >"$T"
+run "$D" "$OWL" --check >"$D/check.txt"
+expect "an old version: its age in days, and that a newer one is likely" 'grep -q "^   Released  *2026-11-01 08:00 UTC, .*[0-9][0-9]* days ago" "$D/check.txt" && grep -q "newer version is likely.*--update" "$D/check.txt"'
+T=$TNOW
+umount "$D/m"
+
 echo "=== --update: only a newer version with a good signature replaces the script"
 SIGNIFY=$(command -v signify-openbsd 2>/dev/null || command -v signify 2>/dev/null || true)
 if [ -n "$SIGNIFY" ] && command -v python3 >/dev/null 2>&1; then
