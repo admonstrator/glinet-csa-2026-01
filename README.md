@@ -711,6 +711,9 @@ This is community work, and not one person's.
 - [SaadEGI](https://github.com/SaadEGI) – Found that the script reported an attack on a router that had just been updated
   to the security firmware, and showed with the times of the files that the firmware itself wrote the state file
   ([#19](https://github.com/admonstrator/glinet-csa-2026-01/issues/19))
+- [infinisec](https://github.com/infinisec) – Found that busybox's grep does not look behind a NUL byte, so that the check of
+  the libraries the script's tools load found nothing on a real device
+  ([#24](https://github.com/admonstrator/glinet-csa-2026-01/issues/24))
 - Everyone who sent an anonymous report or posted their output in the forum
 
 ---
