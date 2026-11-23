@@ -767,5 +767,26 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "one from before the build day stays a trace, whatever the date of board.json" '[ $rc = 1 ] && grep -q "IOC  *cloud-command  */etc/mp_ip_mapping_info" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== binary files hold NUL bytes (issue 24): names behind them must still be found"
+# Compiled Lua keeps each name behind a length of four bytes, three of them NUL. A real
+# program holds its loader and libraries between NUL bytes as well.
+D=$(mkscen nul "$OWL"); U=$D/u
+mkdir -p "$U/usr/lib"
+{ printf '\033LuaQ\000\001\004\004\004\010\000'; head -c 1500 /dev/zero; printf '\022\000\000\000get_mac_form_proc\000\015\000\000\000domain_table\000'; } >"$U/usr/lib/hidden-loader"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"
+expect "the loader under another name is found although NUL bytes stand before its names" 'grep -q "IOC  *backdoor-file  */usr/lib/hidden-loader" "$D/check.txt"'
+umount "$D/m"
+OWN=$BASE/openwrt-rom-nul
+cp -a "$OWL" "$OWN"; mkdir -p "$OWN/lib"
+{ printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000'; head -c 600 /dev/zero; printf '/lib/ld-musl-test.so.1\000'; head -c 300 /dev/zero; printf '\000libgcc_s.so.1\000libc.so\000'; head -c 200 /dev/zero; } >"$OWN/bin/busybox"
+echo 'the real libc' >"$OWN/lib/libc.so"; echo 'the real libgcc' >"$OWN/lib/libgcc_s.so.1"; ln -sf libc.so "$OWN/lib/ld-musl-test.so.1"
+D=$(mkscen nullib "$OWN"); U=$D/u
+mkdir -p "$U/lib"; echo 'another libc' >"$U/lib/libc.so"
+mnt "$D" "$OWN"
+run "$D" "$OWN" --check >"$D/check.txt"
+expect "a changed libc is found although the program names it between NUL bytes" 'grep -q "REVIEW  *changed-lib  */lib/libc.so" "$D/check.txt"'
+umount "$D/m"
+
 echo; echo "RESULT: $pass passed, $fail failed"
 [ "$fail" = 0 ]
