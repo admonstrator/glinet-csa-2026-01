@@ -438,14 +438,17 @@ base_same() {
 # names cannot be read, nothing is claimed about the libraries.
 : >"$TMP/badlibs"
 TRUST_LIBS=unchecked
+# The text in a binary file, a piece per line. busybox grep reads a line as a C string and
+# does not look behind a NUL byte, and a program or compiled Lua is full of them: a name
+# stands behind its length or between NUL bytes (issue 24). So NUL becomes a line end first.
+strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
 base_libs() {
 	local ld n d
-	ld=$(grep -ao '/lib/ld-[A-Za-z0-9._-]*' "$1" 2>/dev/null | head -n 1)
-	[ -n "$ld" ] || ld=$(grep -o '/lib/ld-[A-Za-z0-9._-]*' "$1" 2>/dev/null | head -n 1)
+	ld=$(strs "$1" | grep -o '/lib/ld-[A-Za-z0-9._-]*' | head -n 1)
 	[ -n "$ld" ] || return 1
 	echo "${ld#/}"
 	case $ld in */ld-musl-*) n=${ld##*/ld-musl-}; echo "etc/ld-musl-${n%%.so*}.path" ;; esac
-	{ grep -aoE 'lib[A-Za-z0-9_+-]+\.so(\.[0-9]+)*' "$1" 2>/dev/null || grep -oE 'lib[A-Za-z0-9_+-]+\.so(\.[0-9]+)*' "$1" 2>/dev/null; } | sort -u | while IFS= read -r n; do
+	strs "$1" | grep -oE 'lib[A-Za-z0-9_+-]+\.so(\.[0-9]+)*' | sort -u | while IFS= read -r n; do
 		for d in lib usr/lib; do exists "$(l "$d/$n")" && echo "$d/$n" && break; done
 	done
 	return 0
@@ -536,7 +539,7 @@ check_backdoor() {
 		# no known hash to compare with: the file differs from device to device
 		owner='not from a package'
 		[ "$(head -c 4 "$f" 2>/dev/null | tr -d '\033')" = Lua ] && owner='compiled Lua, not from a package'
-		grep -qE "$BD_ULOGD_NAMES" "$f" 2>/dev/null && owner="$owner, holds the function names of the analysed loader"
+		strs "$f" | grep -qE "$BD_ULOGD_NAMES" && owner="$owner, holds the function names of the analysed loader"
 		[ -n "$sha" ] && printf '%s\n' "$BD_ULOGD_SHAS" | grep -qxF "$sha" && owner="$owner, the same file as on another reported device"
 		add IOC backdoor-file /bin/ulogd "older backdoor: its loader, $owner (sha256 ${sha:-unreadable})"
 	fi
@@ -549,7 +552,7 @@ check_backdoor() {
 			p=${f#"${UPPER%/}"/}
 			grep -q "${TAB}/$p${TAB}" "$FIND" && continue
 			[ -n "$(pkg_owner "/$p")" ] && continue
-			if grep -qE "$BD_ULOGD_NAMES" "$f" 2>/dev/null; then
+			if strs "$f" | grep -qE "$BD_ULOGD_NAMES"; then
 				add IOC backdoor-file "/$p" "older backdoor: its loader under another name (compiled Lua with the loader's function names, sha256 $(sha256sum "$f" 2>/dev/null | cut -c1-64))"
 			else
 				add REVIEW lua-bytecode "/$p" "compiled Lua in the overlay, not from a package; the older backdoor's loader is such a file"
