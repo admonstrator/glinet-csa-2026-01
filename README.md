@@ -86,9 +86,18 @@ This script also detects:
   - its watchdog line in the running crontab `/tmp/gl_crontabs/root` (`cron-ref`),
   - `/etc/rtty_conf` set to the attacker's server (`rtty-server`),
   - a key named `gl-agent` in `authorized_keys` (`ssh-key`),
-  - its servers `65.20.71.131` and `66.245.219.252` on a command line, in an autostart
-    file or as a connection. One user's network logs and the installer name the same
-    two, so they count as indicators now,
+  - a fetch from its servers `65.20.71.131`, `66.245.219.252` or `gl-inet.top`: a line
+    in an autostart file, in `rc.local` or in a crontab, or a running command, that names
+    one of them together with `wget`, `curl`, `uclient-fetch`, `nc`, `rtty` or a pipe into
+    a shell. One user's network logs and the installer name the same servers. Since 2.53 a
+    server that is only named is no indicator any more ([#20](https://github.com/admonstrator/glinet-csa-2026-01/issues/20)):
+    a line that blocks it (`-j DROP`, `-j REJECT`, `drop`, a route to nowhere, a hosts
+    entry to a null address) is `INFO` (`server-block`) and stays, anything else that names
+    it is `REVIEW` (`server-ref`) and stays. A script that keeps the address in a
+    variable and fetches from it on another line is therefore only `REVIEW`,
+  - a process that runs one of the malware's files: as the program, under its name or as
+    the script a shell runs. A command that only names such a path, such as `less` on a
+    log, is `REVIEW` and is not stopped,
   - the replaced `netstat`: a two-line script that calls the real one and hides the
     connections to its server.
 
@@ -101,9 +110,9 @@ This script also detects:
 - a link in a tool directory that the firmware does not have, for example a new
   `/usr/bin/netstat` (`REVIEW`),
 - scripts in `/etc/udhcpc.user.d`, which the router runs on every DHCP event (`REVIEW`),
-- the name `gl-inet.top` on a command line, in an autostart file or in `/etc/rtty_conf`.
-  It is in the malware's helper as a fallback server (`gl-inet.top:8899`), so it counts
-  as an indicator like the two addresses,
+- the name `gl-inet.top` in `/etc/rtty_conf`, and a fetch from it as above. It is in the
+  malware's helper as a fallback server (`gl-inet.top:8899`), so it counts like the two
+  addresses,
 - connections to the attacker's server that are attempted but not answered: the server
   was suspended on 21 November, so a shell loop that still runs never gets through,
 - Tailscale from the [community Tailscale updater](https://github.com/Admonstrator/glinet-tailscale-updater)
@@ -140,7 +149,10 @@ in GL-MT3000 4.11.0. GL.iNet has not confirmed this analysis. See
 [RemoteToHome's write-up](https://github.com/RemoteToHome-io/gl-security-incident-2026/blob/main/docs/router-reverse-shell.md). GL.iNet staff [recommends checking for it](https://forum.gl-inet.com/t/quickly-check-if-your-router-is-under-attack/73070/32)
 and says to treat a router with such a shell as compromised. The script reports as `IOC`:
 
-- these processes, with the time they started,
+- these processes, with the time they started. A process that names the address or
+  `/tmp/f` counts only when it is made like the reported shell: `nc`, `netcat` or
+  `socat`, `mkfifo`, `sh -i`, or `cat /tmp/f`. An owner's `tcpdump` or `grep` for the
+  address is `REVIEW` and is not stopped (since 2.53, [#7](https://github.com/admonstrator/glinet-csa-2026-01/issues/7)),
 - open connections to `170.39.226.0/24`,
 - the pipe `/tmp/f`. It stays after the shell was stopped and only goes away at a
   restart, so it shows that the shell ran since the last boot. Its time is the last data
@@ -737,7 +749,11 @@ This is community work, and not one person's.
   read the script against the published sources ([#10](https://github.com/admonstrator/glinet-csa-2026-01/issues/10)),
   and found that blocking the older backdoor's servers read as infected, that a clean result said nothing about a
   restart, and that `--fix` reset autostart files it had no reason to touch ([#5](https://github.com/admonstrator/glinet-csa-2026-01/issues/5)),
-  and that "trusted tools" claimed more than the script checked ([#8](https://github.com/admonstrator/glinet-csa-2026-01/issues/8))
+  and that "trusted tools" claimed more than the script checked ([#8](https://github.com/admonstrator/glinet-csa-2026-01/issues/8)),
+  that `--fix` called a device clean while `/etc/rtty_conf` still named the attacker's server
+  ([#22](https://github.com/admonstrator/glinet-csa-2026-01/issues/22)), and that a server or path of the malware counted as the malware
+  wherever it was only named, so that `--fix` deleted an owner's block script and stopped an owner's
+  `tcpdump` ([#7](https://github.com/admonstrator/glinet-csa-2026-01/issues/7), [#20](https://github.com/admonstrator/glinet-csa-2026-01/issues/20))
 - [SaadEGI](https://github.com/SaadEGI) – Found that the script reported an attack on a router that had just been updated
   to the security firmware, and showed with the times of the files that the firmware itself wrote the state file
   ([#19](https://github.com/admonstrator/glinet-csa-2026-01/issues/19))

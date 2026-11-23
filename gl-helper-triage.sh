@@ -43,10 +43,10 @@
 # --fix only touches IOC items and their persistence. REVIEW items are archived and
 # reported, never changed. This is a stopgap: a factory reset is still recommended.
 
-VERSION=2.52
+VERSION=2.53
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
 # website reads both lines to show the current version and how long ago it came out.
-RELEASED='2026-11-23 15:20 UTC'
+RELEASED='2026-11-23 17:21 UTC'
 
 # Where the malware lives and what it puts there. The first two directories are the ones
 # GL.iNet's cleanup in the KVM firmware knows. The rest comes from the installer itself
@@ -94,18 +94,23 @@ TOOL_RE='(^|[ /])(nc|netcat|socat) |/bin/sh -i|mkfifo'
 # 73056, post 79): a command channel and the server the malware was fetched from. One
 # report, so a connection there is for a human to judge.
 KVM_NETS='65.20.71.131 66.245.219.252'
-# The same two addresses, and the name that KVM looked up, on a command line or in an
-# autostart file. gl-inet.top is an old name of GL.iNet's that was registered anew on
-# 2026-11-16; who holds it now is not known.
-KVM_RE='65\.20\.71\.131|66\.245\.219\.252|gl-inet\.top'
-# The two addresses alone. They are in the installer as well (the servers it fetches the
-# malware from, ports 8000 and 8899, and the attacker's own rtty server), so with two
-# sources they count as indicators.
-# gl-inet.top counts too since the malware's helper was read (topic 73056, post 92): it
-# is in there as a fallback server, gl-inet.top:8899.
+# The same two addresses, and the name that KVM looked up, on a command line, in a file or
+# in /etc/rtty_conf. They are in the installer as well (the servers it fetches the malware
+# from, ports 8000 and 8899, and the attacker's own rtty server), so with two sources they
+# count as the malware's servers. gl-inet.top is an old name of GL.iNet's that was
+# registered anew on 2026-11-16; it is in the malware's helper as a fallback server,
+# gl-inet.top:8899 (topic 73056, post 92).
+# A name alone is not the malware: an owner who blocks these servers names them too. What
+# uses a server decides, see SRV_FETCH_RE and SRV_BLOCK_RE (issue 20).
 KVM_IP_RE='65\.20\.71\.131|66\.245\.219\.252|gl-inet\.top'
 CONN_RE='/(nc|netcat|socat|sh|ash|bash)$'
 SHELL_RE="170\\.39\\.226\\.|/tmp/f([ ;|>]|\$)"
+# A process that names the shell's address or its pipe is the shell only when it is made of
+# what the reported shell is made of: nc, netcat or socat, a pipe made with mkfifo, an
+# interactive shell, or cat reading the pipe. The reported process lines all have one of
+# these (sh -c "... mkfifo /tmp/f ...", nc 170.39.226.219 <port>, cat /tmp/f). An owner's
+# tcpdump or grep for the address has none, and is listed for review instead (issue 7).
+SHELL_USE_RE="$TOOL_RE|(^|[ /])(ba|a)?sh -i|(^|[ /])cat /tmp/f([ ;|>]|\$)"
 # A second, older backdoor that is not part of GL.iNet's notice of 2026-11-20. Users of
 # GL.iNet's forum found it on a GL-AX1800 (4.8.3) and a GL-X2000 (4.7.13), dated back to
 # 2025 (topic 73097 by ehidle; posts 26, 63 and 65 of the notice's topic 73056):
@@ -155,6 +160,14 @@ BD_ULOGD_NAMES='get_mac_form_proc|get_ddns_form_proc|ret_pts_num|domain_table'
 # tells people to block these names, so a block must not count as the backdoor (issue 5).
 BD_NULL='0\.0\.0\.0|127\.0\.0\.1|::1?'
 BD_BLOCK_RE="^[[:space:]]*(($BD_NULL)[[:space:]]|(address|server|local)=/[^[:space:]]*/($BD_NULL|#)?[[:space:]]*\$|list[[:space:]]+(address|server)[[:space:]]+.?/[^[:space:]]*/($BD_NULL|#)?.?[[:space:]]*\$)"
+# What a line does with a server of the malware (KVM_IP_RE), issue 20. It fetches from it
+# or talks to it: a download tool, nc and its kin, rtty, or a pipe into a shell. That is
+# the malware or a variant of it, in any file and on any command line. Or it blocks it: a
+# firewall rule that drops or rejects, a route that leads nowhere, a hosts or dnsmasq entry
+# as in BD_BLOCK_RE. That is an owner who keeps the device away from these servers. A line
+# that does both counts as fetching.
+SRV_FETCH_RE='(^|[^[:alnum:]_.-])(wget|curl|uclient-fetch|tftp|ftpget|nc|netcat|ncat|socat|telnet|rtty)([[:space:]]|$)|[|][[:space:]]*([^[:space:]|]*/)?(ba|a)?sh([[:space:]]|$)'
+SRV_BLOCK_RE="$BD_BLOCK_RE|-j[[:space:]]+(DROP|REJECT)|(^|[[:space:]])(drop|reject)([[:space:];]|\$)|(^|[[:space:]])(blackhole|unreachable|prohibit)([[:space:]]|\$)|($BD_NULL)[[:space:]]+gl-inet\\.top"
 BD_HOST_PATHS="etc/hosts etc/config etc/dnsmasq.conf etc/dnsmasq.d etc/rc.local etc/crontabs etc/init.d etc/hotplug.d"
 BD_LOG_PATHS="etc/AdGuardHome/data/querylog.json etc/AdGuardHome/data/querylog.json.1 tmp/AdGuardHome/data/querylog.json"
 FULL_UPPER_MAX_KB=65536
@@ -380,7 +393,7 @@ self_copy() {
 }
 add() {
 	case "$1 $2" in
-	'IOC backdoor-init' | 'IOC backdoor-host' | 'IOC persist-ref' | 'IOC keep-ref' | 'IOC cron-ref')
+	'IOC backdoor-init' | 'IOC backdoor-host' | 'IOC persist-ref' | 'IOC keep-ref' | 'IOC cron-ref' | 'REVIEW server-ref' | 'INFO server-block')
 		case $3 in /*)
 			if self_copy "$(r "${3#/}")"; then
 				set -- REVIEW script-copy "$3" "a copy of this script: it names the indicators it searches for. Not counted as a trace. If you did not put it here, look at it"
@@ -749,8 +762,34 @@ check_applets() {
 	fi
 }
 
+# What a file, or a command line saved to one, does with the malware's servers (issue 20):
+#   fetch  an active line that names a server fetches from it or pipes into a shell
+#   block  every active line that names a server blocks it, and no line fetches anything
+#   name   anything else, also a server named only in a comment or in a binary
+# Nothing when it names none. A line that starts with # is not active.
+srv_use() {
+	strs "$1" | grep -E "$KVM_IP_RE" | grep -vE '^[[:space:]]*#' >"$TMP/srv"
+	if [ ! -s "$TMP/srv" ]; then
+		strs "$1" | grep -qE "$KVM_IP_RE" && echo name
+	elif grep -qE "$SRV_FETCH_RE" "$TMP/srv"; then
+		echo fetch
+	elif ! grep -qvE "$SRV_BLOCK_RE" "$TMP/srv" && ! strs "$1" | grep -vE '^[[:space:]]*#' | grep -qE "$SRV_FETCH_RE"; then
+		echo block
+	else
+		echo name
+	fi
+	return 0
+}
+srv_names() { strs "$1" | grep -oE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+# The lines of a crontab that start the malware or fetch from its servers: what --fix drops
+cron_bad() {
+	grep -E "$IOC_RE" "$1" 2>/dev/null
+	grep -E "$KVM_IP_RE" "$1" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -E "$SRV_FETCH_RE"
+	return 0
+}
+
 check_persist() {
-	local p f
+	local p f u
 	for p in $PERSIST; do
 		f=$(src "$p")
 		exists "$f" || continue
@@ -759,15 +798,22 @@ check_persist() {
 			add REVIEW odd-file "/$p" "not a regular file ($(ls -ld "$f" 2>/dev/null | cut -c1-10)), not read"
 			continue
 		fi
+		u=$(srv_use "$f")
 		if grep -qE "$IOC_RE" "$f" 2>/dev/null; then
 			add IOC persist-ref "/$p" "references gl-helper paths"
+		elif [ "$u" = fetch ]; then
+			add IOC persist-ref "/$p" "fetches from a server of the malware ($(srv_names "$f"))"
 		elif [ "$p" = etc/rc.local ] && ! { if [ -n "$LOWER" ] && [ -f "$(l "$p")" ]; then grep -vxFf "$(l "$p")" "$f"; else cat "$f"; fi 2>/dev/null |
 			sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -vE '^(#.*)?$' | grep -qvxF -e 'exit 0' -e '. /lib/functions/gl_util.sh' -e 'remount_ubifs'; }; then
 			# GL.iNet's firmware writes these lines into rc.local itself on some models; a
 			# file that differs from the base image by nothing else is not a change of yours
 			add INFO firmware-lines "/$p" "differs from the base image only by lines the firmware writes itself (gl_util.sh, remount_ubifs)"
 		else
-			add PERSIST persistence "/$p" "present in overlay ($(grep -cvE '^[[:space:]]*(#|$)' "$f" 2>/dev/null) active lines)$(grep -qE "$KVM_RE" "$f" 2>/dev/null && echo '; names an address or name reported for the malware on a KVM')"
+			case $u in
+			block) u="; blocks a server of the malware ($(srv_names "$f"))" ;;
+			name) u="; names a server of the malware ($(srv_names "$f")), but does not fetch from it" ;;
+			esac
+			add PERSIST persistence "/$p" "present in overlay ($(grep -cvE '^[[:space:]]*(#|$)' "$f" 2>/dev/null) active lines)$u"
 		fi
 	done
 }
@@ -782,7 +828,7 @@ known_service_link() {
 }
 
 check_review() {
-	local p e base
+	local p e base u
 	if [ -n "$UPPER" ]; then base=$UPPER; elif [ -n "$LOWER" ]; then base=${ROOT%/}; else base=; fi
 	if [ -n "$base" ]; then
 		for p in $REVIEW_PATHS; do
@@ -808,14 +854,15 @@ check_review() {
 					esac
 					continue
 				fi
-				if [ -f "$f" ] && [ ! -L "$f" ] && grep -qE "$KVM_IP_RE" "$f" 2>/dev/null; then
-					add IOC persist-ref "/$rel" "names a server of the malware ($(grep -oE "$KVM_IP_RE" "$f" | sort -u | tr '\n' ' ' | sed 's/ $//'))"
-					continue
-				fi
-				if [ -f "$f" ] && [ ! -L "$f" ] && grep -qE "$KVM_RE" "$f" 2>/dev/null; then
-					add REVIEW kvm-ref "/$rel" "names an address or name reported for the malware on a KVM ($(grep -oE "$KVM_RE" "$f" | sort -u | tr '\n' ' ' | sed 's/ $//'))"
-					continue
-				fi
+				# a server of the malware: only what fetches from it starts the malware, and
+				# only that is removed. A block is the owner's, a name alone is for review.
+				u=
+				[ -f "$f" ] && [ ! -L "$f" ] && u=$(srv_use "$f")
+				case $u in
+				fetch) add IOC persist-ref "/$rel" "fetches from a server of the malware ($(srv_names "$f"))"; continue ;;
+				block) add INFO server-block "/$rel" "blocks a server of the malware ($(srv_names "$f")): a block, not the malware"; continue ;;
+				name) add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"; continue ;;
+				esac
 				if [ -n "$LOWER" ] && exists "$(l "$rel")"; then
 					add REVIEW changed "/$rel" "differs from base image"
 				elif [ -n "$UPPER" ]; then
@@ -987,10 +1034,18 @@ check_procs() {
 		ls -l "$d/fd" 2>/dev/null | awk -v p="$pid" -v c="$comm" \
 			'/socket:\[/ {s=$NF; gsub(/[^0-9]/,"",s); print s "\t" p "\t" c}' >>"$TMP/sockets"
 		case "$cmd" in *gl-helper-triage*) continue ;; esac
-		if printf '%s\n%s\n%s\n' "$exe" "$cmd" "$comm" | grep -qE "$IOC_RE"; then
+		# The malware is a process that runs one of its files: as the program, under its
+		# name, or as the script a shell runs. A command that only names such a path, as
+		# less or tail on a log does, is for review and is not stopped (issue 20).
+		if printf '%s\n%s\n' "$exe" "$comm" | grep -qE "$IOC_RE" ||
+			printf '%s\n' "$cmd" | awk '{ p = $1; n = split(p, a, "/")
+				if (a[n] ~ /^-?(sh|ash|bash|busybox)$/) { for (i = 2; i <= NF; i++) if ($i !~ /^-/ && $i != "sh" && $i != "ash") { p = $i; break } }
+				print p }' | grep -qE "$IOC_RE"; then
 			add IOC process "$pid" "comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
+		printf '%s\n' "$cmd" | grep -qE "$IOC_RE" &&
+			add REVIEW process "$pid" "names a path of the malware, but does not run it: started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		case "$comm $exe $cmd" in
 		monitord\ * | ujaild\ * | */monitord\ * | */ujaild\ * | *'/ujaild (deleted)'* | *monitord.pid*)
 			# the program the kernel runs, up to 64 MiB as for other deleted programs
@@ -1006,15 +1061,21 @@ check_procs() {
 			continue
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$SHELL_RE"; then
-			add IOC process "$pid" "remote shell reported by users (GL.iNet staff: treat the router as compromised): started $(proc_start "$pid") comm=$comm cmd=$cmd"
-			continue
+			if printf '%s\n' "$cmd" | grep -qE "$SHELL_USE_RE"; then
+				add IOC process "$pid" "remote shell reported by users (GL.iNet staff: treat the router as compromised): started $(proc_start "$pid") comm=$comm cmd=$cmd"
+				continue
+			fi
+			add REVIEW process "$pid" "names the address or the pipe of the reported remote shell, but is not made like it: started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$KVM_IP_RE"; then
-			add IOC process "$pid" "names a server of the malware: started $(proc_start "$pid") comm=$comm exe=$exe cmd=$cmd"
-			continue
-		fi
-		if printf '%s\n' "$cmd" | grep -qE "$KVM_RE"; then
-			add REVIEW process "$pid" "names an address or name reported for the malware on a KVM: started $(proc_start "$pid") comm=$comm cmd=$cmd"
+			printf '%s\n' "$cmd" >"$TMP/srvcmd"
+			case $(srv_use "$TMP/srvcmd") in
+			fetch)
+				add IOC process "$pid" "fetches from a server of the malware: started $(proc_start "$pid") comm=$comm exe=$exe cmd=$cmd"
+				continue ;;
+			block) add INFO process "$pid" "blocks a server of the malware: comm=$comm cmd=$cmd" ;;
+			*) add REVIEW process "$pid" "names a server of the malware, but does not fetch from it: started $(proc_start "$pid") comm=$comm cmd=$cmd" ;;
+			esac
 		fi
 		if printf '%s\n' "$cmd" | grep -qE "$TOOL_RE"; then
 			add REVIEW process "$pid" "tool that remote shells use (GL.iNet staff's process check): started $(proc_start "$pid") comm=$comm cmd=$cmd"
@@ -1088,14 +1149,14 @@ check_tmp() {
 	exists "$(r tmp/.dg)" && add REVIEW tmp-file /tmp/.dg "the malware's installer leaves a file of this name after its first report following a restart"
 	# the live crontab of GL.iNet's firmware; the installer adds its watchdog there too
 	f=$(r tmp/gl_crontabs/root)
-	safe "$f" && grep -qE "$IOC_RE" "$f" 2>/dev/null &&
-		add IOC cron-ref /tmp/gl_crontabs/root "the running crontab starts the malware: $(grep -E "$IOC_RE" "$f" | head -n 2 | tr '\n' ' ' | cut -c1-160)"
+	safe "$f" && [ -n "$(cron_bad "$f" | head -n 1)" ] &&
+		add IOC cron-ref /tmp/gl_crontabs/root "the running crontab starts the malware: $(cron_bad "$f" | head -n 2 | tr '\n' ' ' | cut -c1-160)"
 	# The firmware keeps crontab files of its own in /etc/gl_crontabs/crontabs.d, and they
 	# survive a restart. GL.iNet's cleanup (router firmware 4.9.3) removes the malware's lines
 	# there too, so they are looked for here as well; --fix drops those lines and no others.
 	for f in "$(r etc/gl_crontabs/crontabs.d)"/*; do
-		safe "$f" && grep -qE "$IOC_RE" "$f" 2>/dev/null &&
-			add IOC cron-ref "/etc/gl_crontabs/crontabs.d/${f##*/}" "a crontab file of the firmware starts the malware: $(grep -E "$IOC_RE" "$f" | head -n 2 | tr '\n' ' ' | cut -c1-160)"
+		safe "$f" && [ -n "$(cron_bad "$f" | head -n 1)" ] &&
+			add IOC cron-ref "/etc/gl_crontabs/crontabs.d/${f##*/}" "a crontab file of the firmware starts the malware: $(cron_bad "$f" | head -n 2 | tr '\n' ' ' | cut -c1-160)"
 	done
 	# GL.iNet's fixed router firmware cleans up by itself at its first start
 	vendor_cleanup && add INFO vendor-cleanup gl-sdk4-system-check "this firmware removes known traces of the malware at its first start (GL.iNet's cleanup)"
@@ -1804,7 +1865,12 @@ fix() {
 	awk -F '\t' '$1=="IOC" && ($2=="cron-ref" || $2=="ssh-key") {print $2 "\t" substr($3,2)}' "$FIND" | while IFS="$TAB" read -r pid p; do
 		f=$(r "$p")
 		safe "$f" || continue
-		if [ "$pid" = ssh-key ]; then grep -v 'gl-agent' "$f" >"$TMP/keep.new"; else grep -vE "$IOC_RE" "$f" >"$TMP/keep.new"; fi
+		if [ "$pid" = ssh-key ]; then
+			grep -v 'gl-agent' "$f" >"$TMP/keep.new"
+		else
+			cron_bad "$f" >"$TMP/cron.bad"
+			grep -vxFf "$TMP/cron.bad" "$f" >"$TMP/keep.new"
+		fi
 		cat "$TMP/keep.new" >"$f" && act "removed the malware's lines from /$p" || echo fail >>"$TMP/fixfail"
 	done
 	awk -F '\t' '$1=="IOC" && $2=="keep-ref" {print substr($3,2)}' "$FIND" | while IFS= read -r p; do
