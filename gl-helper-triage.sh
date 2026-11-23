@@ -643,9 +643,12 @@ check_markers() {
 	# gl-helper or its downloader under another name: a file in the overlay that carries the
 	# packer's own name for itself. Only a program or the packer's own format counts (first
 	# bytes ELF or NPK!), so a text that quotes the name (this script, a note) does not.
+	# The name stands behind NUL bytes, which busybox grep does not look past: files are
+	# picked by their first bytes, and only those are read through strs (issue 24).
 	[ -n "$UPPER" ] || return 0
-	find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -lF "$GLH_PACKER" {} + 2>/dev/null | while IFS= read -r f; do
+	find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -lE '^(.ELF|NPK!)' {} + 2>/dev/null | while IFS= read -r f; do
 		case $(head -c 4 "$f" 2>/dev/null | tr -d '\177') in ELF | 'NPK!') ;; *) continue ;; esac
+		strs "$f" | grep -qF "$GLH_PACKER" || continue
 		p=${f#"${UPPER%/}"/}
 		grep -q "${TAB}/$p${TAB}" "$FIND" && continue
 		[ -n "$(pkg_owner "/$p")" ] && continue
