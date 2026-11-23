@@ -667,15 +667,16 @@ ran() {
 writes() {
 	awk '{ print; l = $0 }
 	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
-	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*["\047]?[^[:space:]"\047]*(crontabs?\/|\/etc\/(rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|udhcpc\.user|profile\.d\/|profile([[:space:]"\047;&|)]|$))|\/\.(ash_)?profile([[:space:]"\047;&|)]|$))/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
+	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*["\047]?([^[:space:]"\047]*crontabs?\/|([^[:space:]"\047]*\/etc\/|(\.\/)?)(rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|udhcpc\.user|firewall\.user|firewall\.d\/|kvmd\/user\/scripts\/|profile\.d\/|profile([[:space:]"\047;&|)]|$))|[^[:space:]"\047]*\/\.(ash_)?profile([[:space:]"\047;&|)]|$))/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
 	{
 		sub(/^[[:space:](!{]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l)
 		sub(/[[:space:]]*[|][[:space:]]*(crontab|tee)([[:space:]].*)?$/, "", l)
 		sub(/[[:space:]]*[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l)
 		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n|\005|\|\||&&|;|&/, "\n", l); gsub(/["\047]/, "", l)
 		n = split(l, a, "\n")
-		# a line that starts with a directory, as in echo "/etc/config/.gl/ found", runs nothing
-		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/ && a[k] !~ /^[[:space:]]*[^[:space:]]*\/([[:space:]]|$)/) print a[k] }
+		# a line that starts with a directory or a word with a colon, as in a note like
+		# echo "/etc/config/.gl/ found" or echo "gl-helper: checked", runs nothing
+		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/ && a[k] !~ /^[[:space:]]*[^[:space:]]*[\/:]([[:space:]]|$)/) print a[k] }
 	}'
 }
 # Does a file of commands (as active_in gives them) run a path of the malware, and which?
