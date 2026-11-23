@@ -518,17 +518,15 @@ strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
 # that a \ there cannot hide the next line); lines are split at ; && || and &, so that a
 # name and a tool count together only in the same command. A comment that names the
 # malware or its server is the owner's note (review of 2.53).
-# Quotes are read as sh reads them (review of 2.54): a ; & | or # inside a quoted string
-# neither splits nor starts a comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh.
-# A string that is a command itself (after sh -c, su -c, eval, trap, watch, ssh, xargs
-# and the like, and from $( or a backtick on inside double quotes) is split as before,
-# line by line. A string of data that goes on over several lines is one line here, its
-# line ends kept as \005 (writes() splits there). Wherever this reading could hide what sh
-# runs, the plain reading is used instead, which splits everywhere: the text of a
-# here-document (sh does not read quotes there), a string still open after 20 lines or
-# at the end (the rest of the file is then read plainly), and a line of more than 4096
-# characters, which is also given whole. $2 is 1 for the command line of a process: it
-# has no comments.
+# Quotes (review of 2.54): a ; & | or # inside a quoted string on one line splits nothing
+# and starts no comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh, unless the
+# string is a command itself (after sh -c, eval, watch, xargs and the like). Such a line
+# is given both ways, read with its quotes and plainly, so that nothing the plain reading
+# finds is lost where the quotes are read otherwise than sh reads them. The plain reading
+# alone is used for a quote that does not close on its line, for $( or ` inside double
+# quotes, for $'...', for the text of a here-document (sh reads no quotes there) and
+# for a line of more than 4096 characters, which is also given whole. $2 is 1 for the
+# command line of a process: it has no comments.
 active_in() {
 	awk -v nj="${1:-0}" -v pc="${2:-0}" '
 	function out(l) {
@@ -536,19 +534,19 @@ active_in() {
 		gsub(/\001/, ";", l); gsub(/\002/, "\\&", l); gsub(/\003/, "|", l); gsub(/\004/, "#", l)
 		print l
 	}
-	# the reading before 2.54: a comment from # on, then split
+	# the reading of 2.53: a comment from # on, then split
 	function plain(l) { if (!pc) sub(/(^|[[:space:]])#.*$/, "", l); out(l) }
-	# the lines held for an open string, read plainly after all
-	function flush(  i) { for (i = 1; i <= nr; i++) plain(raw[i]); nr = 0; b = ""; q = ""; hd = "" }
-	# the line with ; & | # inside a string of data replaced, a comment cut off; sets q
-	# (the open quote), code (that string is a command) and hd (a here-document follows)
-	function scan(l,   i, n, c, o, r, sg) {
-		o = ""; n = length(l)
+	# the line with ; & | # inside a quoted string of data replaced and a comment cut off;
+	# sets pr (something was replaced), bail (read plainly) and hd, hdash (a here-document
+	# follows, and whether its end may be indented with tabs)
+	function scan(l,   i, n, c, o, r, sg, q, code) {
+		o = ""; n = length(l); q = ""; pr = 0; bail = 0
 		for (i = 1; i <= n; i++) {
 			c = substr(l, i, 1)
 			if (q == "") {
 				if (c == "\\") { o = o substr(l, i, 2); i++; continue }
-				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:]]/)) break
+				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:];&|()]/)) break
+				if (c == "\047" && substr(l, i - 1, 1) == "$") { bail = 1; return l }
 				if (c == "\"" || c == "\047") {
 					sg = o; sub(/.*[;&|(]/, "", sg)
 					code = (o ~ /(^|[[:space:]])-[A-Za-z]*c[[:space:]]*$/ || sg ~ /(^|[[:space:]\/])(eval|trap|watch|ssh|xargs|su|sudo|timeout|nohup|setsid|env|nice|ionice|flock|chrt|taskset|busybox)[[:space:]]/)
@@ -556,39 +554,35 @@ active_in() {
 				}
 				if (c == "<" && substr(l, i, 2) == "<<" && substr(l, i, 3) != "<<<") {
 					# the word as sh takes it, its quotes removed: <<"E"OF ends at EOF
-					r = substr(l, i + 2); sub(/^-/, "", r); sub(/^[[:space:]]*/, "", r)
+					r = substr(l, i + 2); hdash = (r ~ /^-/); sub(/^-/, "", r); sub(/^[[:space:]]*/, "", r)
 					if (match(r, /^[^[:space:];&|<>()]+/)) { hd = substr(r, 1, RLENGTH); gsub(/["\047\\]/, "", hd) }
 				}
 				o = o c; continue
 			}
 			if (c == q) { q = ""; o = o c; continue }
 			if (q == "\"" && c == "\\") { o = o substr(l, i, 2); i++; continue }
-			if (q == "\"" && (c == "`" || substr(l, i, 2) == "$(")) code = 1
-			if (!code) { if (c == ";") c = "\001"; else if (c == "&") c = "\002"; else if (c == "|") c = "\003"; else if (c == "#") c = "\004" }
+			if (q == "\"" && (c == "`" || substr(l, i, 2) == "$(")) { bail = 1; return l }
+			if (!code && c ~ /[;&|#]/) { c = (c == ";") ? "\001" : (c == "&") ? "\002" : (c == "|") ? "\003" : "\004"; pr = 1 }
 			o = o c
 		}
+		if (q != "") bail = 1
 		return o
 	}
-	# the text of a here-document, up to its end, plainly, line by line
-	body != "" { t = $0; sub(/^[[:space:]]*/, "", t); sub(/[[:space:]]*$/, "", t); if (t == body) body = ""; else plain($0); next }
-	rest { plain($0); next }
-	length($0) > 4096 { if (q != "") rest = 1; if (nr) flush(); plain($0); if (/["\047]/) print; next }
-	q == "" && b == "" && !pc && /^[[:space:]]*#/ { next }
+	# the text of a here-document, up to its end word (after tabs with <<-), plainly
+	body != "" { t = $0; if (bdash) sub(/^\t*/, "", t); if (t == body) body = ""; else plain($0); next }
+	length($0) > 4096 { if (b != "") { plain(b); b = "" } plain($0); if (/["\047]/) print; next }
+	b == "" && !pc && /^[[:space:]]*#/ { next }
 	{
-		raw[++nr] = $0
-		l = scan($0)
-		if (q != "" && code) { out(b l); b = ""; nr = 0; next }
-		if (q != "") {
-			if (nj || nr > 20) { flush(); rest = !nj; next }
-			b = b l "\005"; next
-		}
-		l = b l; b = ""
-		if (!nj && l ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", l); b = l " "; next }
-		nr = 0
-		out(l)
-		if (hd != "") { body = hd; hd = "" }
+		l = b $0; b = ""
+		hd = ""; s = scan(l)
+		# a \ at the end goes on in the next line, not when it ends a comment
+		c = bail ? l : s; if (bail && !pc) sub(/(^|[[:space:]])#.*$/, "", c)
+		if (!nj && c ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", l); b = l " "; next }
+		if (bail) plain(l)
+		else { out(s); if (pr) plain(l) }
+		if (hd != "") { body = hd; bdash = hdash }
 	}
-	END { if (q != "") flush(); else if (b != "") out(b) }'
+	END { if (b != "") plain(b) }'
 }
 # Files that are read line by line: crontabs and the lists of files a firmware update keeps
 linewise() { case $1 in *crontabs/* | *crontabs.d/* | *sysupgrade.conf | */keep.d/*) return 0 ;; esac; return 1; }
@@ -610,7 +604,7 @@ ran() {
 		if ($1 ~ /^@[a-z]+$/) i = 2
 		else if (NF > 5 && ($1 $2 $3) ~ /^[0-9*\/,-]+$/ && ($4 $5) ~ /^[0-9A-Za-z*\/,-]+$/) i = 6
 		if ($0 ~ /[|][[:space:]]*([^[:space:]|]*\/)?(ba|a)?sh([[:space:]]|$)/) { for (; i <= NF; i++) print unq($i); next }
-		pre = 0; sh = 0; skip = 0; arg = 0; aq = ""
+		pre = 0; sh = 0; skip = 0; arg = 0
 		for (; i <= NF; i++) {
 			r = $i
 			# the words of a $( ) or ` ` that is still open: its arguments
@@ -618,13 +612,6 @@ ran() {
 			if (r ~ /\$\(|`/) {
 				s = r; sub(/^[^`$]*(\$\(|`)/, "", s); print unq(s)
 				if (s !~ /[)`]/) skip = 1
-				continue
-			}
-			# the rest of a quoted value: DIRS="/etc/config/.gl/ /etc/glinet/.cache/gb" (review of 2.54)
-			if (aq != "") { if (index(r, aq)) aq = ""; continue }
-			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
-				t = r
-				if (gsub(/"/, "", t) % 2) aq = "\""; else { t = r; if (gsub(/\047/, "", t) % 2) aq = "\047" }
 				continue
 			}
 			if (arg) { arg = 0; continue }
