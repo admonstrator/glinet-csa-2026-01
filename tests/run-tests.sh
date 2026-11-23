@@ -804,6 +804,7 @@ if [ -n "$SIGNIFY" ] && command -v python3 >/dev/null 2>&1; then
 	sleep 1
 	mkver 2.60 "$W/dev/t.sh"; serve 2.61 k1
 	upd; rc=$?
+	[ $rc = 0 ] || { echo "    exit $rc, and the script said:"; sed 's/^/    | /' "$W/out.txt"; }
 	expect "a newer version with a good signature replaces the script, the old one is kept" '[ $rc = 0 ] && [ "$(ver)" = 2.61 ] && grep -q "^VERSION=2.60$" "$W/dev/t.sh.old" && grep -q "Updated to version 2.61" "$W/out.txt" && cmp -s "$W/dev/t.sh" "$W/www/fix"'
 	upd; rc=$?
 	expect "the same version again: nothing to do" '[ $rc = 0 ] && grep -q "This is the current version" "$W/out.txt" && [ "$(ver)" = 2.61 ]'
