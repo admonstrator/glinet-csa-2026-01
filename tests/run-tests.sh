@@ -322,8 +322,12 @@ D=$(mkscen bd "$OWL"); U=$D/u
 backdoor "$U"
 mkdir -p "$U/etc/AdGuardHome/data"; echo '{"QH":"up.adguardns.org"}' >"$U/etc/AdGuardHome/data/querylog.json"
 echo '1.2.3.4 cdn.lede-openproject.org' >"$U/etc/hosts"
+mkdir -p "$U/etc/config"; printf 'x http://up.adsanalypro.com/\n' >"$U/etc/config/other"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "the server name of the second build (RemoteToHome) is IOC too" 'grep -A1 "IOC  *backdoor-host  */etc/config/other" "$D/check.txt" | grep -q "up.adsanalypro.com"'
+expect "the advice names it among the servers to block, and a reinstall from an own file" 'grep -q "adsanalypro.com" "$D/check.txt" && grep -q "downloaded yourself" "$D/check.txt"'
+expect "with its start script in place the loader is not called a remnant" '! grep -q "no longer started at boot" "$D/check.txt"'
 expect "backdoor only: exit 1 and its own verdict" '[ $rc = 1 ] && grep -q "Verdict: INFECTED - older backdoor" "$D/check.txt" && grep -q "no gl-helper indicators found" "$D/check.txt"'
 expect "init script, loader, renamed Lua and keep list are IOC" 'grep -q "IOC  *backdoor-init  */etc/init.d/urandom_seed" "$D/check.txt" && grep -q "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" && grep -q "IOC  *backdoor-file  */usr/bin/monitord" "$D/check.txt" && grep -q "IOC  *backdoor-keep  */lib/upgrade/keep.d/netifd" "$D/check.txt"'
 expect "server name in the configuration is IOC, in the query log REVIEW" 'grep -q "IOC  *backdoor-host  */etc/hosts" "$D/check.txt" && grep -q "REVIEW  *backdoor-dns" "$D/check.txt"'
@@ -352,6 +356,35 @@ echo /etc/my-own-file >"$U/lib/upgrade/keep.d/mine"; echo something-else >"$U/us
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "the ulogd package, an own keep list and another monitord are no indicator" '[ $rc = 0 ] && ! grep -q "backdoor-" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== the loader left behind by GL.iNet's security update (RemoteToHome, 23 November)"
+D=$(mkscen bdrest "$OWL"); U=$D/u
+mkdir -p "$U/bin" "$U/lib/upgrade/keep.d" "$U/usr/lib/opkg"
+printf '\033LuaQ loader\n' >"$U/bin/ulogd"
+printf '/etc/config/network\n/bin/ulogd\n/etc/init.d/urandom_seed\n' >"$U/lib/upgrade/keep.d/netifd"
+printf 'Package: gl-sdk4-system-check\nVersion: 1\n\n' >"$U/usr/lib/opkg/status"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "start script put back: the loader is still IOC and the text says it no longer starts" '[ $rc = 1 ] && grep -A3 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | tr -s " \n" " " | grep -q "no longer started at boot" && ! grep -q "backdoor-init" "$D/check.txt" && grep -q "IOC  *backdoor-keep" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== gl-helper under another name, known by its packer (topic 73056, post 94)"
+D=$(mkscen npk "$OWL"); U=$D/u
+mkdir -p "$U/usr/sbin" "$U/root" "$U/etc/svc"
+{ printf '\177ELF\001\001\001'; head -c 3000 /dev/zero; printf '$Info: Node hardened executable packer; format NPK2 $'; head -c 500 /dev/zero; } >"$U/usr/sbin/svcd"; chmod 755 "$U/usr/sbin/svcd"
+{ printf 'NPK!H'; head -c 2000 /dev/zero; printf 'Node hardened executable packer'; } >"$U/etc/svc/blob"
+{ printf 'my notes: the malware uses the Node hardened executable packer\n'; head -c 2000 /dev/zero | tr '\0' 'n'; } >"$U/root/notes.txt"
+{ printf '\177ELF\001\001\001'; head -c 3000 /dev/zero; } >"$U/usr/sbin/own-tool"; chmod 755 "$U/usr/sbin/own-tool"
+mkdir -p "$U/tmp"; echo x >"$U/tmp/.lp"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a program in the packer's format is IOC marker, also without ELF header" '[ $rc = 1 ] && grep -A1 "IOC  *marker  */usr/sbin/svcd" "$D/check.txt" | grep -q "packer of the malware" && grep -q "IOC  *marker  */etc/svc/blob" "$D/check.txt"'
+expect "a note that quotes the packer's name and another program are not" '! grep -q "IOC.*/root/notes.txt" "$D/check.txt" && ! grep -q "IOC.*own-tool" "$D/check.txt"'
+expect "one finding per path" '[ $(grep -c " /usr/sbin/svcd$" "$D/check.txt") = 1 ]'
+expect "/tmp/.lp is for review" 'grep -q "REVIEW  *tmp-file  */tmp/.lp" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix removes the packed files only, after archiving them (exit 2)" '[ $rc = 2 ] && [ ! -e "$D/m/usr/sbin/svcd" ] && [ ! -e "$D/m/etc/svc/blob" ] && [ -f "$D/m/root/notes.txt" ] && [ -f "$D/m/usr/sbin/own-tool" ] && tar -tzf "$(ls "$D"/out/*.tar.gz | head -n 1)" | grep -q "usr/sbin/svcd"'
 umount "$D/m"
 
 echo "=== base files are package-owned too: a changed one must still be seen (issue 4)"

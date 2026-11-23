@@ -638,7 +638,7 @@ const WHY = {
   'backdoor-init': BD + '/etc/init.d/urandom_seed (or another init script) has extra lines that copy the Lua interpreter to /usr/bin/monitord and run /bin/ulogd with it at every boot.',
   'backdoor-file': BD + '/bin/ulogd is its loader, compiled Lua that reports the device to a server imitating AdGuard or OpenWrt and fetches a second program. Its fingerprint differs from device to device. /usr/bin/monitord is a copy of the Lua interpreter under another name.',
   'backdoor-keep': BD + 'The list of files that a firmware update keeps was changed so that the backdoor survives an update with “keep settings”.',
-  'backdoor-host': BD + 'A configuration file names a server the backdoor reports to: adguardns.com, adguardns.org, lede-openproject.org, adxinsight.com or openwrt-project.org. None of them belongs to AdGuard or OpenWrt.',
+  'backdoor-host': BD + 'A configuration file names a server the backdoor reports to: adguardns.com, adguardns.org, adsanalypro.com, lede-openproject.org, adxinsight.com or openwrt-project.org. None of them belongs to AdGuard or OpenWrt.',
   'backdoor-proc': BD + 'monitord (the loader) or ujaild (the second program, run from a deleted file in /tmp) was running during the check.',
   'marker': 'One of the files the malware puts on a device: gl-helper or gb in /etc/config/.gl/ or /etc/glinet/.cache/, or watch.sh there on a KVM. GL.iNet’s own cleanup in the KVM firmware looks for exactly these.',
   'applet-hijack': 'A system tool such as netstat was swapped for another program, so its output can no longer be trusted. GL.iNet’s cleanup for KVMs removes a replaced netstat.',

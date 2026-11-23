@@ -41,7 +41,8 @@
 # runs GL.iNet's quick check for routers (a process "crond -i /tmp/.log") and looks for a
 # remote shell that users reported in GL.iNet's forum.
 # --fix only touches IOC items and their persistence. REVIEW items are archived and
-# reported, never changed. This is a stopgap: a factory reset is still recommended.
+# reported, never changed. This is a stopgap: a reinstall of the firmware without kept
+# settings is still recommended.
 
 VERSION=2.53
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
@@ -56,6 +57,18 @@ RELEASED='2026-11-23 17:21 UTC'
 MARKER_DIRS="etc/glinet/.cache etc/config/.gl"
 MARKER_DIRS_ALT="etc/gl_nas/.cache userdata/.gl overlay/.gl tmp/.gl"
 MARKER_FILES="gl-helper gb watch.sh run.sh wake.sh boot.sh rtty_keep.sh eco eco.tmp node .u .wc install.log"
+# The malware's programs and its installer as forum users posted them (topic 73056, posts
+# 101 and 153): gl-helper (n5), gb for 64-bit (gb3) and for 32-bit ARM (gb7), the
+# downloader (l5) and ni.sh. The same on every device of one processor type until the
+# operator builds anew, so a match is noted. Another hash clears nothing.
+GLH_SHAS='795ccb39fe2fc7f96bfe0bd8e1ffaf718382988a77c94d0260e5d11d95f6a347
+29d2c70d36b5713d4e6523514ee49d0198a8e8aff4ca02ca86ac429dee908be3
+eab746b6dafc69f829ab23c11bcc80cb6b2f9206f159173e52d3e7c2083b0d7f
+53ba45b9ef490a0200323d582630fa4eb2dad07c0e9adeaa50071d68f63267ca
+36e04e10b4667e59b0a3a25147b032dc038c5a9971a7df88be80f8882e30dd87'
+# gl-helper and its downloader are wrapped in a packer of their own that names itself in
+# clear text (post 94). A program with this text is the malware, whatever it is called.
+GLH_PACKER='Node hardened executable packer'
 PERSIST="etc/rc.local etc/crontabs/root"
 APPLET_DIRS="bin sbin usr/bin usr/sbin"
 REVIEW_PATHS="etc/init.d etc/rc.d etc/inittab etc/profile etc/profile.d etc/hotplug.d
@@ -112,28 +125,35 @@ SHELL_RE="170\\.39\\.226\\.|/tmp/f([ ;|>]|\$)"
 # GL.iNet's forum found it on a GL-AX1800 (4.8.3) and a GL-X2000 (4.7.13), dated back to
 # 2025 (topic 73097 by ehidle; posts 26, 63 and 65 of the notice's topic 73056):
 # Since then confirmed in that topic on a GL-MT3000 (4.11.0) and a second GL-AX1800,
-# with dates from October 2025 to March 2026.
+# with dates from October 2025 to March 2026. RemoteToHome found it on 49 routers it
+# manages, installed from September 2025 to May 2026, and took apart all 49 loaders and
+# both builds of the second stage (its repository, 23 November 2026).
 #   /etc/init.d/urandom_seed  extra lines at the top: copy /usr/bin/lua to
 #                             /usr/bin/monitord, run /bin/ulogd with it
 #   /bin/ulogd                compiled Lua, reports the device to a server whose name
-#                             imitates AdGuard and fetches a second program
+#                             imitates AdGuard or OpenWrt and fetches a second program
 #   ujaild                    that second program, run from a deleted file in /tmp
 #   lib/upgrade/keep.d/netifd /bin/ulogd and /etc/init.d/urandom_seed are appended, so a
 #                             firmware update carries it over (post 78 of topic 73056)
 # Findings of this family have a kind that starts with "backdoor-". --fix leaves them
-# alone: the second stage runs in memory only and nobody has taken it apart yet, so a
+# alone: the second stage runs in memory only and runs any command, writes any file and
+# opens a proxy for its server, so what was done with it cannot be listed, and a
 # "cleaned" would promise more than a script can keep. The answer is a reflash.
-BD_RE='monitord|/bin/ulogd|ujaild|adguardns|lede-openproject|adxinsight|openwrt-project'
+BD_RE='monitord|/bin/ulogd|ujaild|adguardns|adsanalypro|lede-openproject|adxinsight|openwrt-project'
 BD_KEEP_RE='ulogd|monitord|urandom_seed|ujaild'
-# Server names decoded from two variants of the loader (ehidle, acs). Other variants may
-# use other names: /bin/ulogd differs from device to device, four hashes on four devices.
-BD_HOST_RE='adguardns\.(com|org)|lede-openproject\.org|adxinsight\.com|openwrt-project\.org'
+# Server names decoded from both variants of the loader (ehidle, acs; RemoteToHome in all
+# 49 of its copies: cdn.adguardns.com/.org, cdn.lede-openproject.org, cdn.adxinsight.com,
+# cdn.openwrt-project.org) and from both builds of the second stage (RemoteToHome:
+# up.adguardns.com/.org, and up.adsanalypro.com in the build on 7 of its 49 routers).
+# Other variants may use other names: /bin/ulogd differs from device to device.
+BD_HOST_RE='adguardns\.(com|org)|adsanalypro\.com|lede-openproject\.org|adxinsight\.com|openwrt-project\.org'
 # The changed urandom_seed, the same file on three reported devices (X2000, MT3000, AX1800)
+# and on all 49 of RemoteToHome's
 BD_INIT_SHA=3265f27feb954744581cdea2373b88ceae9d85b67e90487353fd48902cf4fc19
 # /bin/ulogd as posted in topic 73097 (posts 1, 2, 3 and 6). The file differs from device
 # to device, so these are no detection rule; a match only says "seen before".
-# A survey of 28 routers with the backdoor found a different hash on every one, none of
-# them in this list. The list is kept for the samples it came from.
+# RemoteToHome found a different hash on each of its 49 routers (each copy holds an id of its
+# own), none of them in this list. The list is kept for the samples it came from.
 # Added from issues 14, 23 and 24: one more device each, and two posts of topic 73097.
 BD_ULOGD_SHAS='c5e87c80f76415f399ce4d1644f5ddc3c8b46bbb2e698b3e05f49a1f7dcd7d06
 204b884cdbeba1d07f2fc954c80d7ec32a59df9e3914e0f13ada7e15d0e0bb83
@@ -144,9 +164,10 @@ af500b2a912c75ae08c96c3cff70339eb8b05365e34b577f7067547236e97abc
 2a020364b1f993b542254db0053ff91248b3efa0dd728b1fa73facaa7e646272
 e009cb771c52c66f5899151345b11aa2d1cc5e64147ade8059413d09b2ed5c87'
 # The second stage ujaild, as the kernel holds it (/proc/<pid>/exe, run from a deleted
-# /tmp/ujaild). Unlike the loader it is the same program on many devices: on 30 routers of
-# four models it had one of these two hashes (6,815,892 bytes on 23, 6,750,356 bytes on 7).
-# Another hash does not clear a process: the name alone is the indicator.
+# /tmp/ujaild). Unlike the loader it is the same program on many devices: on the 49
+# routers of five models that RemoteToHome checked it had one of these two hashes
+# (6,815,892 bytes on 42, 6,750,356 bytes on 7). Another hash does not clear a process:
+# the name alone is the indicator.
 BD_STAGE_SHAS='311b5767e7d63e7dbdc1476c36608b8d7ef729c8bbcc64ded63b9470396351d6
 53736d5db721a358bec5b9ddf6056df73b36fc5330300342c42f866a05191432'
 # Names that stand in clear text in the loader although its strings are hidden
@@ -541,14 +562,18 @@ tool_ok() {
 }
 
 check_markers() {
-	local p hit d
+	local p hit d f known
 	for d in $MARKER_DIRS $MARKER_DIRS_ALT; do
 		exists "$(r "$d")" || { [ -n "$UPPER" ] && exists "$(u "$d")"; } || continue
 		for p in $MARKER_FILES; do
-			p=$d/$p hit=
+			p=$d/$p hit= known=
 			[ -n "$UPPER" ] && exists "$(u "$p")" && hit=upper
 			exists "$(r "$p")" && hit=${hit:+$hit+}merged
-			[ -n "$hit" ] && add IOC marker "/$p" "present ($hit)"
+			[ -n "$hit" ] || continue
+			f=$(src "$p"); exists "$f" || f=$(r "$p")
+			[ -f "$f" ] && printf '%s\n' "$GLH_SHAS" | grep -qxF "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" &&
+				known=', the same file as posted in GL.iNet'"'"'s forum'
+			add IOC marker "/$p" "present ($hit$known)"
 		done
 	done
 	for d in $MARKER_DIRS $MARKER_DIRS_ALT; do
@@ -556,6 +581,20 @@ check_markers() {
 			add REVIEW hidden-dir "/$d" "hidden directory not in base image, no known marker inside"
 		fi
 	done
+	# gl-helper or its downloader under another name: a file in the overlay that carries the
+	# packer's own name for itself. Only a program or the packer's own format counts (first
+	# bytes ELF or NPK!), so a text that quotes the name (this script, a note) does not.
+	[ -n "$UPPER" ] || return 0
+	find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -lF "$GLH_PACKER" {} + 2>/dev/null | while IFS= read -r f; do
+		case $(head -c 4 "$f" 2>/dev/null | tr -d '\177') in ELF | 'NPK!') ;; *) continue ;; esac
+		p=${f#"${UPPER%/}"/}
+		grep -q "${TAB}/$p${TAB}" "$FIND" && continue
+		[ -n "$(pkg_owner "/$p")" ] && continue
+		known=
+		printf '%s\n' "$GLH_SHAS" | grep -qxF "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" && known=', the same file as posted in GL.iNet'"'"'s forum'
+		add IOC marker "/$p" "wrapped in the packer of the malware's gl-helper and its downloader$known (sha256 $(sha256sum "$f" 2>/dev/null | cut -c1-64))"
+	done
+	return 0
 }
 
 # The older backdoor (see BD_RE above). Runs before the general overlay checks, which
@@ -589,6 +628,13 @@ check_backdoor() {
 		[ "$(head -c 4 "$f" 2>/dev/null | tr -d '\033')" = Lua ] && owner='compiled Lua, not from a package'
 		strs "$f" | grep -qE "$BD_ULOGD_NAMES" && owner="$owner, holds the function names of the analysed loader"
 		[ -n "$sha" ] && printf '%s\n' "$BD_ULOGD_SHAS" | grep -qxF "$sha" && owner="$owner, the same file as on another reported device"
+		# GL.iNet's security update puts the start script back but leaves the loader, and the
+		# backdoor's own keep-list line carries it through the update (RemoteToHome, test of
+		# 23 November 2026). Then it is a remnant: no longer started at boot, but the device
+		# had the backdoor, and what was done with it cannot be listed.
+		if vendor_cleanup && ! has_ioc backdoor-init; then
+			owner="$owner; its start script was put back by GL.iNet's security update, so it is no longer started at boot, but this device had the older backdoor"
+		fi
 		add IOC backdoor-file /bin/ulogd "older backdoor: its loader, $owner (sha256 ${sha:-unreadable})"
 	fi
 	# 2a. compiled Lua anywhere in the overlay. The firmware keeps its compiled Lua in the
@@ -607,14 +653,15 @@ check_backdoor() {
 			fi
 		done
 	fi
-	# 2b. Two owners found /etc/config/wireguard_server written eleven seconds after the
-	#     loader was dropped. If that holds on more devices it points to how the backdoor got
-	#     in, so the distance in time is noted. Times only, the file is not read.
+	# 2b. /etc/config/wireguard_server was written 9 to 12 seconds after the loader was
+	#     dropped on 27 of 30 routers RemoteToHome dated, and three owners report the same.
+	#     What changed in it is not known, so the distance in time is noted. Times only, the
+	#     file is not read.
 	f=$(r bin/ulogd)
 	if [ -f "$f" ] && [ -f "$(r etc/config/wireguard_server)" ]; then
 		p=$(( $(date -u -r "$(r etc/config/wireguard_server)" +%s 2>/dev/null || echo 0) - $(date -u -r "$f" +%s 2>/dev/null || echo 0) ))
 		[ "$p" -ge -120 ] && [ "$p" -le 120 ] &&
-			add REVIEW backdoor-wg /etc/config/wireguard_server "written $p s after the older backdoor's loader /bin/ulogd; two owners reported the same"
+			add REVIEW backdoor-wg /etc/config/wireguard_server "written $p s after the older backdoor's loader /bin/ulogd; seen on most devices with this backdoor"
 	fi
 	# 3. the Lua interpreter under another name
 	f=$(r usr/bin/monitord)
@@ -1178,12 +1225,15 @@ check_tmp() {
 	f=$(r tmp/f)
 	[ -p "$f" ] && add IOC pipe /tmp/f "named pipe of the reported remote shell: the shell ran since the last boot, last data $(shown_time "$(file_time "$f")")"
 	exists "$(r tmp/.dg)" && add REVIEW tmp-file /tmp/.dg "the malware's installer leaves a file of this name after its first report following a restart"
+	# A command the attacker sent on 20 November 2026 tried to end a program of this name
+	# along with the remote shell; none has been seen on a device so far (RemoteToHome).
+	exists "$(r tmp/.lp)" && add REVIEW tmp-file /tmp/.lp "a name the attacker's commands of 20 November tried to end along with the remote shell; not seen on any device so far"
 	# the live crontab of GL.iNet's firmware; the installer adds its watchdog there too
 	f=$(r tmp/gl_crontabs/root)
 	safe "$f" && [ -n "$(cron_bad "$f" | head -n 1)" ] &&
 		add IOC cron-ref /tmp/gl_crontabs/root "the running crontab starts the malware: $(cron_bad "$f" | head -n 2 | tr '\n' ' ' | cut -c1-160)"
 	# The firmware keeps crontab files of its own in /etc/gl_crontabs/crontabs.d, and they
-	# survive a restart. GL.iNet's cleanup (router firmware 4.9.3) removes the malware's lines
+	# survive a restart. GL.iNet's cleanup (its security firmware) removes the malware's lines
 	# there too, so they are looked for here as well; --fix drops those lines and no others.
 	for f in "$(r etc/gl_crontabs/crontabs.d)"/*; do
 		safe "$f" && [ -n "$(cron_bad "$f" | head -n 1)" ] &&
@@ -1383,7 +1433,8 @@ rtty_note() {
 # the malware's files, so a device started since the attacks began is clean now, which
 # says nothing about before (issue 5; GL.iNet staff say the same of their quick check).
 RESTART_FROM='2026-11-19 00:00:00 UTC'
-# GL.iNet's fixed router firmware (4.9.3 on) brings the package gl-sdk4-system-check. Its
+# GL.iNet's security firmware for routers (builds of 22 and 23 November 2026: 4.7.14 to
+# 4.11.1, depending on the model) brings the package gl-sdk4-system-check. Its
 # script /etc/uci-defaults/00-system-check runs once, at the first start after the update:
 # where /etc/config/.gl exists it deletes that directory, the malware's line in rc.local
 # and its cron lines, and it always puts /etc/init.d/urandom_seed back. So on such
@@ -1877,6 +1928,12 @@ fix() {
 		exists "$(r "$p")" && grep -q "^IOC${TAB}marker${TAB}/$p/" "$FIND" || continue
 		if rm -rf "$(r "$p")"; then act "removed /$p"; else failed=1; fi
 	done
+	# a program of the malware elsewhere, known by its packer: that file only
+	awk -F '\t' '$1=="IOC" && $2=="marker" {print substr($3,2)}' "$FIND" | sort -u | while IFS= read -r p; do
+		f=$(r "$p")
+		[ -f "$f" ] && [ ! -L "$f" ] || continue
+		if rm -f "$f"; then act "removed /$p"; else echo fail >>"$TMP/fixfail"; fi
+	done
 	if [ -p "$(r tmp/f)" ] && grep -q "^IOC${TAB}pipe${TAB}" "$FIND"; then
 		if rm -f "$(r tmp/f)"; then act "removed the pipe /tmp/f"; else failed=1; fi
 	fi
@@ -1984,27 +2041,33 @@ recommend() {
 		say "     the device, so the steps below apply even though nothing was installed."
 	fi
 	if [ "$(count_bd)" -gt 0 ]; then
-		say "   ${B}- The older backdoor: reflash the firmware with \"keep settings\" OFF. Where it added${N}"
-		say "   ${B}  itself to the keep list it survives an update that keeps settings. Do not restore a${N}"
-		say "   ${B}  backup taken from this device.${N}"
-		say "   - Its second stage runs in memory only. Until the reflash, take the device off the"
+		say "   ${B}- The older backdoor: reinstall the firmware with \"keep settings\" OFF, from a file you${N}"
+		say "   ${B}  downloaded yourself. Where it added itself to the keep list it survives an update${N}"
+		say "   ${B}  that keeps settings, GL.iNet's security update included. Do not restore a backup${N}"
+		say "   ${B}  taken from this device.${N}"
+		say "   - Its second stage runs in memory only. Until the reinstall, take the device off the"
 		say "     internet. Known server names, to block in your network: adguardns.com, adguardns.org,"
-		say "     lede-openproject.org, adxinsight.com, openwrt-project.org. Other variants may use others."
+		say "     adsanalypro.com, lede-openproject.org, adxinsight.com, openwrt-project.org. Other"
+		say "     variants may use others."
 		say "   - It may have been there for months: treat every password and key on it as copied."
 	fi
 	case $PLATFORM in
 	openwrt)
-		say "   - Update the firmware WITHOUT keeping settings: OpenWrt keeps /etc/config across"
-		say "     sysupgrade, and the implant hides in /etc/config/.gl."
-		say "   - A factory reset (firstboot / reset button) wipes the whole overlay and is the safe option."
+		say "   - Reinstall the firmware WITHOUT keeping settings, from a file you downloaded yourself."
+		say "     An update that keeps settings keeps /etc/config, where the implant hides, and what"
+		say "     else was added to rc.local, cron, the accounts or the SSH keys."
+		say "   - Prefer a reinstall to a factory reset: a reset keeps the installed firmware image,"
+		say "     and on at least one model root can write to that image."
 		say "   - Check every client that used this router as gateway or DNS." ;;
 	glkvm-*)
-		say "   - Install GL.iNet's security firmware. Only RM1PE 1.10.2 removes these IOCs at boot;"
-		say "     an update that keeps settings also keeps the password, SSH keys and /etc/kvmd/user."
-		say "   - A factory reset is still recommended: this cleanup only removes known IOCs."
+		say "   - Install GL.iNet's security firmware (1.10.3 or later, 1.8.7 or later for the RMQ1) with"
+		say "     \"Save current configuration\" OFF, or reset the KVM afterwards. A kept configuration"
+		say "     keeps the password, the SSH keys and /etc/kvmd/user, boot scripts there included. The"
+		say "     update removes the known files and keeps no copy: keep the evidence archive."
 		say "   - Check the computer connected to the KVM (unknown software, accounts, autostart)." ;;
 	*)
-		say "   - Update the firmware and do a factory reset: this cleanup only removes known IOCs." ;;
+		say "   - Reinstall the firmware without keeping settings, from a file you downloaded yourself:"
+		say "     this script's cleanup only removes known IOCs." ;;
 	esac
 	say "   - Change the device password, the GL.iNet cloud account password and SSH keys."
 	say "   - Everything this device held a key for is exposed too: remove its VPN profile on the"
@@ -2350,7 +2413,7 @@ cloud_advice() {
 	if [ "$gc" = off ]; then
 		say "   ${GRN}GoodCloud is switched off on this device. Leave it off until fixed firmware is installed.${N}"
 		say "   ${D}Check again after every firmware upgrade: one owner reports that an upgrade with settings${N}"
-		say "   ${D}kept switched it back on.${N}"
+		say "   ${D}kept switched it back on, with its remote SSH and web access and AstroWarp.${N}"
 		astrowarp_on && say "   ${YEL}AstroWarp is still switched on. It works through GoodCloud; switch it off as well.${N}"
 		return 0
 	fi
@@ -2370,7 +2433,7 @@ cloud_advice() {
 	say "   ${D}reach a remote device another way first. This does not clean a device that was already hit.${N}"
 	say "   ${D}\"I never used AstroWarp\" and \"remote access was off\" do not help: the code runs regardless.${N}"
 	say "   ${D}Check again after every firmware upgrade: one owner reports that an upgrade with settings${N}"
-	say "   ${D}kept switched it back on.${N}"
+	say "   ${D}kept switched it back on, with its remote SSH and web access and AstroWarp.${N}"
 }
 
 # The result as an address, printed under the verdict (and under the verdict after a

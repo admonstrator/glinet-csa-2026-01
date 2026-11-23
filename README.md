@@ -107,6 +107,16 @@ This script also detects:
   malware, is no trace of it (since 2.53).
   - the replaced `netstat`: a two-line script that calls the real one and hides the
     connections to its server.
+  - the malware's program or its downloader under any name: `gl-helper` and the downloader
+    are wrapped in a packer of their own that names itself in clear text, "Node hardened
+    executable packer" ([post 94](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/94)).
+    A file in the overlay that holds this text and starts like a program (or with the
+    packer's own `NPK!`) is a `marker`, unless a package installed it; `--fix` removes that
+    file. A text that only quotes the name is not counted (since 2.54),
+  - a marker file whose sha256 is one that forum users posted for `gl-helper`, `gb`, the
+    downloader or `ni.sh` ([post 101](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/101),
+    [post 153](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/153))
+    is noted as such. Another hash clears nothing: the operator can build anew at any time.
 
   `crond -i /tmp/.log`, the process GL.iNet's check looks for, is the name the malware
   gives its own process.
@@ -117,6 +127,9 @@ This script also detects:
 - a link in a tool directory that the firmware does not have, for example a new
   `/usr/bin/netstat` (`REVIEW`),
 - scripts in `/etc/udhcpc.user.d`, which the router runs on every DHCP event (`REVIEW`),
+- a file `/tmp/.lp` (`REVIEW`): a command the attacker sent on 20 November tried to end a
+  program of that name along with the remote shell. None has been seen on a device so far
+  ([RemoteToHome](https://github.com/RemoteToHome-io/gl-security-incident-2026)),
 - the name `gl-inet.top` in `/etc/rtty_conf`, and a fetch from it as above. It is in the
   malware's helper as a fallback server (`gl-inet.top:8899`), so it counts like the two
   addresses,
@@ -212,11 +225,14 @@ and posts 26, 63 and 65 of the [notice's thread](https://forum.gl-inet.com/t/202
 At least five devices are described so far: two GL-AX1800 (4.8.3), a GL-X2000 (4.7.13),
 a GL-MT3000 (4.11.0) and one whose model was not given, with files dated from October 2025 to March 2026; one user says since
 September 2025. A second GL-AX1800 with the same firmware, also on GoodCloud, was clean.
-How it got onto the devices is not known.
+How it got onto the devices is not known. RemoteToHome found it on 49 routers it manages
+(GL-MT2500, GL-MT3000, GL-MT6000, GL-AX1800, GL-AXT1800), installed from September 2025 to
+May 2026, and took apart all 49 loaders and both builds of the second stage
+([its repository](https://github.com/RemoteToHome-io/gl-security-incident-2026), 23 November 2026).
 
 The changed `urandom_seed` is the same file on three of them (sha256 `3265f27f…fc19`).
-`/bin/ulogd` differs from device to device, four hashes on four devices, so its hash is
-no use as an indicator. The server names are not readable in it: acs
+`/bin/ulogd` differs from device to device (each copy holds an id of its own; RemoteToHome
+found 49 hashes on 49 routers), so its hash is no use as an indicator. The server names are not readable in it: acs
 [decoded them](https://forum.gl-inet.com/t/found-other-malware-while-looking-for-11-20-evidence/73097/2) from one variant, and nick2's
 [write-up](https://forum.gl-inet.com/t/found-other-malware-while-looking-for-11-20-evidence/73097/6) compares an infected router with a clean one of the same kind.
 
@@ -230,31 +246,43 @@ only. The script reports as `IOC`, with a kind that starts with `backdoor-`:
   `/usr/bin/lua` (`backdoor-file`),
 - a changed list of files that a firmware update keeps, when it names those files
   (`backdoor-keep`): the backdoor appends `/bin/ulogd` and `/etc/init.d/urandom_seed` to
-  `/lib/upgrade/keep.d/netifd`. Not always: on 8 of 28 surveyed routers with the backdoor
-  that file was the firmware's own, with the start-up script, the loader and both processes
-  present, so a missing `backdoor-keep` says nothing about whether the backdoor is there,
+  `/lib/upgrade/keep.d/netifd`. Not always: on 9 of RemoteToHome's 49 routers with the
+  backdoor that file was the firmware's own, so a missing `backdoor-keep` says nothing
+  about whether the backdoor is there,
 - one of the known server names in the configuration (`backdoor-host`): `adguardns.com`,
-  `adguardns.org`, `lede-openproject.org`, `adxinsight.com`, `openwrt-project.org`.
+  `adguardns.org`, `adsanalypro.com` (in the second stage on 7 of RemoteToHome's 49 routers,
+  since 2.54), `lede-openproject.org`, `adxinsight.com`, `openwrt-project.org`.
   A line that blocks such a name is no indicator (`backdoor-block`, `INFO`): a hosts
   entry to `0.0.0.0`, `127.0.0.1`, `::` or `::1`, or dnsmasq's `address=/name/`,
   `server=/name/` and `local=/name/` without a real address,
 - a running `monitord` or `ujaild` (`backdoor-proc`). The second stage `ujaild` runs from
-  a deleted file, so the script fingerprints the copy the kernel holds: on 30 routers of
-  four models it was one of two programs, and a match is noted as the known second stage.
+  a deleted file, so the script fingerprints the copy the kernel holds: on RemoteToHome's
+  49 routers of five models it was one of two programs, and a match is noted as the known
+  second stage.
   Another fingerprint does not clear the process,
 - compiled Lua anywhere in the overlay that no package installed: with the loader's
   function names in it, it is the loader under another name (`backdoor-file`), otherwise
   `REVIEW lua-bytecode`. The firmware keeps its own compiled Lua in the read-only image,
 - `/etc/config/wireguard_server` written within two minutes of `/bin/ulogd` (`REVIEW
-  backdoor-wg`, with the distance in seconds). Two owners found it written eleven seconds
-  after the loader; if more devices show it, it points to how the backdoor got in.
+  backdoor-wg`, with the distance in seconds). RemoteToHome found it written 9 to 12
+  seconds after the loader on 27 of 30 routers with a dated install, and three owners
+  report the same. What changes in it is not known; one owner's backups show the content
+  unchanged.
 
 A request for one of those names in AdGuard Home's query log is `REVIEW`: it shows that
 some device in the network asked, not which one.
 
 The verdict names the backdoor apart from the gl-helper indicators. `--fix` does not
-remove it: the second stage leaves no file, and nobody has taken it apart yet. Reflash the
-firmware with "keep settings" off and do not restore a backup taken from that device.
+remove it: the second stage runs in memory only, runs any command, writes any file and
+opens a proxy for its server (RemoteToHome), so what was done with it cannot be listed.
+Install the firmware again with "keep settings" off, from a file you downloaded yourself,
+and do not restore a backup taken from that device.
+
+GL.iNet's security firmware for routers (22 and 23 November 2026) puts `urandom_seed`
+back at its first start but leaves `/bin/ulogd`, and the backdoor's own keep-list line
+carries the loader through an update that keeps settings (RemoteToHome's test of 23
+November). The script then still reports `/bin/ulogd` as `IOC` and says in the finding
+that it is no longer started at boot (since 2.54). The device had the backdoor.
 
 ### Firewall
 
@@ -638,13 +666,16 @@ On the device `/tmp` is RAM. Copy the archive off the device before rebooting.
 - Keep the evidence archive. Run the triage **before** you restart, reset or update:
   some traces live only in memory, and the RM1PE 1.10.2 cleanup deletes the implant's
   files at boot without keeping a copy.
-- KVM: install GL.iNet's security firmware. Only RM1PE 1.10.2 runs the vendor cleanup;
-  the builds for RM1 and RM1V2 do not. On an RM1, an update that keeps settings carries
-  over the password file, the SSH keys and everything under `/etc/kvmd/user`
-  (found by RemoteToHome): change them and look for keys and scripts you did not add.
-- Router: update **without keeping settings**. OpenWrt keeps `/etc/config` across a
-  sysupgrade, and the implant hides in `/etc/config/.gl`.
-- A factory reset wipes the whole overlay and is the safe option on both.
+- KVM: install GL.iNet's security firmware, 1.10.3 or later (1.8.7 or later for the
+  RMQ1), with "Save current configuration" unticked, or reset the KVM afterwards. 1.10.3
+  removes the implant at boot on all six models RemoteToHome read, and keeps no copy. An
+  update that keeps the configuration carries over the password file, the SSH keys and
+  everything under `/etc/kvmd/user`, boot scripts there included (RemoteToHome's test).
+- Router: install the firmware again **without keeping settings**, from a file you
+  downloaded yourself. An update that keeps settings keeps `/etc/config`, where the
+  implant hides, and whatever else was added to `rc.local`, cron, the accounts or the SSH
+  keys. Prefer this to a factory reset: a reset keeps the installed firmware image, and on
+  at least one model root can write to that image (RemoteToHome, GL-AXT1800).
 - Check the computer attached to a KVM, and the clients behind a router.
 - Change the device password, the GL.iNet cloud account password and SSH keys.
 - If the device was hit, everything it held a key for is exposed as well. Remove the
@@ -665,7 +696,9 @@ From the firmware images we compared (1.10.1 vs 1.10.2; both 1.10.2 builds are f
 - **RM1PE 1.10.2** contains the boot cleanup in `/etc/init.d/S08overlayfs`.
 - **RM1V2 1.10.2** does not contain it. Its `S08overlayfs` is unchanged.
 - **RM1 1.10.2** does not contain it either, as [RemoteToHome found](https://github.com/RemoteToHome-io/gl-security-incident-2026/blob/main/docs/kvm-firmware.md).
-  Their page also covers what an RM1 update keeps and that it leaves SSH switched off.
+- **1.10.3** (and 1.8.7 for the RMQ1) runs the cleanup on all six models RemoteToHome
+  read, without keeping a copy. An update with "Save current configuration" ticked carried
+  a boot script and an added SSH key into 1.10.3 on their test RM1.
 - Both 1.10.2 builds change `rtty` (the cloud remote terminal): the `-s`, `-C/--cacert`
   and `-x/--insecure` options are gone, the CA path `/var/run/gl-rtty/ca.crt` is built
   in, and `S99rtty` no longer reads a `tls` setting from the cloud-provided config.
@@ -790,7 +823,8 @@ This is community work, and not one person's.
 This script is provided **as-is** without any warranty. Use it at your own risk.
 
 It changes files on your device when you run it with `--fix`. It is a stopgap: it cannot
-prove that a device is clean, and a factory reset is still recommended.
+prove that a device is clean, and installing the firmware again without keeping settings
+is still recommended.
 
 In a business network, talk to your cyber insurer or incident response provider before you
 change or reset the device.
