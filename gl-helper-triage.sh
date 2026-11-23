@@ -545,6 +545,8 @@ ran() {
 			if (w == "case") { while (i < NF && $i != "in") i++; continue }
 			if (w == "cd") { cwd = unq($(i + 1)); next }
 			if (w == "procd_set_param") { if ($(i + 1) != "command") next; i++; pre = 1; continue }
+			# command -v and -V only look a name up, they start nothing
+			if (base(w) == "command" && $(i + 1) ~ /^-[A-Za-z]*[vV]/) next
 			if (w ~ /^(do|then|else|elif|if|while|until|time|eval|\.|source)$/ || base(w) ~ /^(nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|watch|chrt|taskset)$/) { pre = 1; sh = 0; continue }
 			if (base(w) == "flock") { pre = 1; sh = 0; arg = 1; continue }
 			if (pre && w ~ /^-/) {

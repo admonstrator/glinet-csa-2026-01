@@ -664,13 +664,13 @@ D=$(mkscen checks "$OWL"); U=$D/u
 mkdir -p "$U/etc/hotplug.d/iface" "$U/etc/crontabs" "$U/etc/config"
 printf '/root/start-vpn.sh\nPID=$(pidof gl-helper) && kill $PID\niptables -I OUTPUT -d 65.20.71.131 -j DROP\nexit 0\n' >"$U/etc/rc.local"
 printf '0 4 * * * /root/backup.sh\n*/30 * * * * wget -qO- -T 5 http://65.20.71.131:8000/ >/dev/null 2>&1 && logger -t csa "block failed"\n*/20 * * * * uclient-fetch -q -O - http://gl-inet.top/ >/dev/null || logger -t csa ok\n' >"$U/etc/crontabs/root"
-printf '#!/bin/sh\nn=$(ls /etc/config/.gl/ 2>/dev/null | wc -l)\n[ "$n" -gt 0 ] && logger -t csa ALERT\n' >"$U/etc/hotplug.d/iface/99-count"
+printf '#!/bin/sh\nn=$(ls /etc/config/.gl/ 2>/dev/null | wc -l)\n[ "$n" -gt 0 ] && logger -t csa ALERT\ncommand -v gl-helper >/dev/null && killall gl-helper\n' >"$U/etc/hotplug.d/iface/99-count"
 printf '#!/bin/sh\niptables -D FORWARD -d openwrt-project.org -j DROP 2>/dev/null\niptables -I FORWARD -d openwrt-project.org -j DROP\niptables -D OUTPUT -d 65.20.71.131 -j DROP 2>/dev/null\niptables -I OUTPUT -d 65.20.71.131 -j DROP\n' >"$U/etc/hotplug.d/iface/99-block"
 printf "config dnsmasq\n\tlist ipset '/adguardns.com/adguardns.org/openwrt-project.org/bdblock'\n" >"$U/etc/config/dhcp"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "no IOC, a clean verdict (exit $rc)" '[ $rc = 0 ] && ! grep -qE "^ +IOC " "$D/check.txt" && grep -q "Verdict: no gl-helper indicators found" "$D/check.txt"'
-expect "pidof in \$( ) and ls in \$( ) only name a path" 'grep -A1 "PERSIST  *persistence  */etc/rc.local" "$D/check.txt" | grep -q "names a path of the malware, but does not run it" && grep -q "REVIEW  *path-ref  */etc/hotplug.d/iface/99-count" "$D/check.txt"'
+expect "pidof in \$( ), ls in \$( ) and command -v only name a path" 'grep -A1 "PERSIST  *persistence  */etc/rc.local" "$D/check.txt" | grep -q "names a path of the malware, but does not run it" && grep -q "REVIEW  *path-ref  */etc/hotplug.d/iface/99-count" "$D/check.txt"'
 expect "wget -qO- and uclient-fetch -O - into /dev/null are probes" 'grep -A1 "PERSIST  *persistence  */etc/crontabs/root" "$D/check.txt" | grep -q "names a server of the malware (.*), but does not fetch from it"'
 expect "delete before insert is a block, for the malware and for the older backdoor" 'grep -q "INFO  *server-block  */etc/hotplug.d/iface/99-block" "$D/check.txt" && grep -q "INFO  *backdoor-block  */etc/hotplug.d/iface/99-block" "$D/check.txt"'
 expect "an ipset of the older backdoor's names is INFO backdoor-block" 'grep -q "INFO  *backdoor-block  */etc/config/dhcp" "$D/check.txt" && ! grep -q "backdoor-host" "$D/check.txt"'

@@ -132,7 +132,8 @@ This script also detects:
   `sh -s < file`, `procd_set_param command` or `start-stop-daemon`, as `./name` after
   `cd`, as the program in `$( )`, and in a crontab behind the time fields. A command
   that only names it, such as `rm -rf /etc/config/.gl`, `pgrep -f gl-helper`,
-  `PID=$(pidof gl-helper)` or `[ -e /etc/config/.gl/gl-helper ]`, is your guard and no trace:
+  `PID=$(pidof gl-helper)`, `command -v gl-helper` or `[ -e /etc/config/.gl/gl-helper ]`,
+  is your guard and no trace:
   `REVIEW` (`path-ref`) in an autostart file, noted on the `PERSIST` line in `rc.local` and
   the root crontab. A keep list counts when it keeps a path of the malware.
   - the replaced `netstat`: a two-line script that calls the real one and hides the
