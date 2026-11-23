@@ -1611,6 +1611,19 @@ astrowarp_on() {
 		END { exit !f }' "$(r etc/config/mptun)" 2>/dev/null
 }
 
+# Was a state file written at the SD-WAN module's start: within two minutes of its other
+# state files (issue 19)?
+mp_module_start() {
+	local t o g
+	t=$(date -u -r "$1" +%s 2>/dev/null) || return 1
+	for o in etc/mp_connection_info etc/mphosts; do
+		safe "$(r "$o")" || continue
+		g=$(date -u -r "$(r "$o")" +%s 2>/dev/null) || continue
+		[ $((t - g)) -le 120 ] && [ $((g - t)) -le 120 ] && return 0
+	done
+	return 1
+}
+
 check_tmp() {
 	local f
 	exists "$(r tmp/.log)" && add REVIEW tmp-file /tmp/.log "path from GL.iNet's quick check (crond -i /tmp/.log) exists"
@@ -1653,11 +1666,14 @@ check_tmp() {
 		# firmware first started is not the attack's. One owner found it written at the first
 		# start after the upgrade, in the same seconds as the SD-WAN module's other state files
 		# (/etc/mp_connection_info, /etc/mphosts; issue 19). "After" is told by the day the
-		# firmware was built. A file that tells the first start, /etc/board.json, is no help:
-		# it is written before the clock is set and carries a date in 1970 on real devices.
+		# firmware was built, and the module's start by those files: written within two
+		# minutes of one of them. A file written after the build day but on its own may be the
+		# attack on the old firmware before the upgrade, with settings kept (review of 2.54).
+		# A file that tells the first start, /etc/board.json, is no help: it is written before
+		# the clock is set and carries a date in 1970 on real devices.
 		if [ "$n" = 0 ] && [ "$aw" = off ] && vendor_cleanup && a=$(built_epoch) &&
-			[ "$(date -u -r "$f" +%s 2>/dev/null || echo 0)" -ge "$a" ]; then
-			add REVIEW state-file /etc/mp_ip_mapping_info "$w, empty: written after this firmware was built. This firmware has the fix and refuses the attack's command; its SD-WAN module can write the file at its own start. Not counted as a trace"
+			[ "$(date -u -r "$f" +%s 2>/dev/null || echo 0)" -ge "$a" ] && mp_module_start "$f"; then
+			add REVIEW state-file /etc/mp_ip_mapping_info "$w, empty: written after this firmware was built, together with the SD-WAN module's other state files. This firmware has the fix and refuses the attack's command; its SD-WAN module writes the file at its own start. Not counted as a trace"
 		elif [ "$n" = 0 ] && [ "$aw" = off ] && awk -v a="$t" -v b="$ATTACK_FROM" 'BEGIN { exit !(a >= b) }'; then
 			add IOC cloud-command /etc/mp_ip_mapping_info "$w, empty, AstroWarp off: a crafted command from the cloud ran here, as in the reported attack. This trace survives a restart"
 		else

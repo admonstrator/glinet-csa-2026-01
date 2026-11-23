@@ -1121,6 +1121,8 @@ echo '2026-11-22 12:36:07' >"$U/etc/version.date"
 # as on a real device: written at the first start, before the clock is set
 echo '{}' >"$U/etc/board.json"; touch -d '1970-01-01 00:00:11 UTC' "$U/etc/board.json"
 : >"$U/etc/mp_ip_mapping_info"; touch -d '2026-11-22 17:26:53 UTC' "$U/etc/mp_ip_mapping_info"
+# the SD-WAN module's other state files, written in the same seconds at its start
+echo '{}' >"$U/etc/mp_connection_info"; touch -d '2026-11-22 17:26:52 UTC' "$U/etc/mp_connection_info"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "an empty state file written after the fixed firmware was built is REVIEW, not a trace" '[ $rc = 0 ] && grep -q "REVIEW  *state-file  */etc/mp_ip_mapping_info" "$D/check.txt" && grep -q "written after this firmware was built" "$D/check.txt" && ! grep -q "IOC  *cloud-command" "$D/check.txt" && grep -q "no gl-helper indicators found" "$D/check.txt"'
@@ -1129,6 +1131,12 @@ touch -d '2026-11-21 02:50:11 UTC' "$U/etc/mp_ip_mapping_info"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "one from before the build day stays a trace, whatever the date of board.json" '[ $rc = 1 ] && grep -q "IOC  *cloud-command  */etc/mp_ip_mapping_info" "$D/check.txt"'
+umount "$D/m"
+# after the build day, but on its own: the attack on the old firmware before the upgrade (review of 2.54)
+touch -d '2026-11-22 22:10:00 UTC' "$U/etc/mp_ip_mapping_info"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "one written after the build day but not with the module's other files stays a trace" '[ $rc = 1 ] && grep -q "IOC  *cloud-command  */etc/mp_ip_mapping_info" "$D/check.txt"'
 umount "$D/m"
 
 echo "=== binary files hold NUL bytes (issue 24): names behind them must still be found"
