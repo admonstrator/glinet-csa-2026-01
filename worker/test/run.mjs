@@ -555,6 +555,10 @@ if (process.argv[2] === 'serve') {
     const rows0 = env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n;
     await look(ask([[sha('a'), h('6')], [sha('b'), h('8')]]));
     expect('a file that is not in the table leaves no trace; the counter keeps rising', env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n === rows0 && !row(h('6')) && row(h('8')).asked === 2);
+    // the answer does not wait for the counter: with a database whose writes never end, it comes all the same
+    const stuck = { ...env, DB: new Proxy(env.DB, { get(t, k) { if (k === 'batch') return () => new Promise(() => {}); const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }) };
+    const notWaiting = await Promise.race([worker.fetch(new Request('https://example.org' + LK, { method: 'POST', body: ask([[sha(noKey), h('8')]]) }), stuck, { waitUntil() {} }).then((r) => r.status), new Promise((r) => setTimeout(() => r('waited'), 2000))]);
+    expect('the answer does not wait for the counter: a write that never ends does not hold it', notWaiting === 200);
     await look(ask(Array.from({ length: 40 }, (_, i) => [sha('same file ' + i), h('8')])));
     expect('one file under 40 keys in one request: one more, not 40', row(h('8')).asked === 3);
     const forty = Array.from({ length: 40 }, (_, i) => [sha('k' + i), sha('f' + i)]);

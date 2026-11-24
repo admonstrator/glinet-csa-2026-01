@@ -32,13 +32,16 @@ chroot that holds only a static busybox, and answer it from a small `python3` se
 `127.0.0.1`: with each of the three words, with an error, and with answers broken on
 purpose (another random number, a hash that was not asked, a wrong word, a line missing,
 added or out of order, control characters, escape sequences, bytes above 0x7e, more than
-8192 bytes, several megabytes, `\r\n`, no line break at the end, an answer that trickles
-in for a minute). They compare the request byte for byte with one built from the report's
-own `review_items`, check that accounts are never asked, that busybox's own `wget` is
-never used over HTTPS, and that known malware next to a trace of the attack still reads
-`INFECTED`. The question on a terminal is tested through `script` where that gives one,
-and Ctrl-C at the question through a terminal `python3` opens. Without `python3` or a
-static busybox these tests are skipped.
+8192 bytes, several megabytes, an answer without end, `\r\n`, no line break at the end,
+an answer that trickles in for a minute, a header line every 8 seconds). They compare the
+request byte for byte with one built from the report's own `review_items`, check that
+accounts are never asked, that a file in `/tmp` is still asked when 45 start scripts are
+listed too, that an error costs exactly one request, that busybox's own `wget` is never
+used over HTTPS, and that known malware next to a trace of the attack still reads
+`INFECTED`, also through `triage-remote.sh --fix --lookup` with an `ssh` that runs the
+command in the chroot. The question on a terminal is tested through `script` where that
+gives one, and Ctrl-C at the question and while waiting for the answer through a terminal
+`python3` opens. Without `python3` or a static busybox these tests are skipped.
 
 The tests point the script at a local address with `GL_TRIAGE_REPORT_URL`,
 `GL_TRIAGE_RESULT_URL`, `GL_TRIAGE_UPDATE_URL` and `GL_TRIAGE_LOOKUP_URL` (since 2.60).

@@ -704,7 +704,7 @@ async function reported(request, env, ctx) {
 
 // ---------------------------------------------------------------- the fingerprint check
 // From 2.60 the script can ask, after its user agreed, whether the files it listed for
-// review are known: known malware, known to be all right, or not known. It sends the
+// review are known: known malware, probably safe, or not known. It sends the
 // SHA-256 of "<kind> <path>" and the SHA-256 of the file per line; docs/lookup.md is the
 // contract for request and answer. The answer can only make the script's verdict worse.
 // Every request is taken for an attack: the size is capped while reading, the bytes are
@@ -721,7 +721,7 @@ const plain = (body, status = 200) =>
 
 // A request as bytes: its nonce and its lines as [key hash, file hash], or null when a
 // single byte or line does not fit. Only 0x0a and 0x20 to 0x7e may occur; nothing is
-// trimmed, normalised or replaced.
+// trimmed, normalized or replaced.
 export function lookupRequest(bytes) {
   for (let i = 0; i < bytes.length; i++) if (bytes[i] !== 0x0a && (bytes[i] < 0x20 || bytes[i] > 0x7e)) return null;
   if (bytes.length === 0 || bytes[bytes.length - 1] !== 0x0a) return null;
@@ -788,25 +788,23 @@ async function safeMarks(env) {
 
 // One word per line, in the order asked: known_bad before known_safe before unknown.
 async function lookupWords(env, items, day, ctx) {
-  let bad = new Map();
-  if (env.DB) {
-    bad = await badHashes.find(env, [...new Set(items.map(([, file]) => file))]);
-    // one more for each file of this request that is in the table, released or not. Written
-    // after the answer: an answer that waited for it would take longer for a file in the
-    // table, and so tell an entry that waits from a file nobody listed.
-    const found = [...bad.keys()];
-    if (found.length) {
-      const counted = badHashes.count(env, found, day).catch(() => { /* the answer does not depend on the counter */ });
-      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(counted);
-      else await counted;
-    }
-  }
+  const bad = env.DB ? await badHashes.find(env, [...new Set(items.map(([, file]) => file))]) : new Map();
   const marks = await safeMarks(env);
-  return items.map(([key, file]) => {
+  const words = items.map(([key, file]) => {
     if (bad.get(file) === 1) return 'known_bad';
     if ((marks.has(key) && marks.get(key).has(file)) || KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
     return 'unknown';
   });
+  // One more for each file of this request that is in the table, released or not. Started
+  // when every read is done and not waited for: an answer that waited for the write, or
+  // read the marks behind it, would take longer for a file in the table, and so tell an
+  // entry that waits from a file nobody listed (review of 2.60).
+  if (bad.size) {
+    const counted = badHashes.count(env, [...bad.keys()], day).catch(() => { /* the answer does not depend on the counter */ });
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(counted);
+    else await counted;
+  }
+  return words;
 }
 
 async function lookup(request, env, ctx) {

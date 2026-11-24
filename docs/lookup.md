@@ -13,7 +13,8 @@ says.
 ## What is sent
 
 For each file listed for review that has a fingerprint (the report and the check take at
-most 40 findings, programs first, and the script says how many it left out):
+most 40 findings: programs first, then odd files and files in `/tmp`, then new and changed
+files, then hidden ones and the rest; the script says how many it left out):
 
 - the SHA-256 of the line `<kind> <path>`, exactly as the anonymous report would carry kind
   and path (only the characters `A-Za-z0-9 ._:/+@=,()-`, the kind cut to 24 characters,
@@ -109,15 +110,18 @@ the first line, the nonce it sent, exactly the lines it asked in the same order,
 the three words. Anything else and the whole answer is set aside, with one line saying so;
 the result is what it would have been without the check. The same when there is no
 connection, the certificate does not check out, or no answer came within 25 seconds: the
-script cuts the answer at 8193 bytes while it arrives and gives up after 25 seconds,
-whatever the tool's own limits are.
+script cuts the answer at 8193 bytes while it arrives, and after 25 seconds it stops the
+tool and gives up, whatever the tool's own limits are. Ctrl-C while it waits does the same
+at once, with one line saying so, and the run goes on to its result.
 
 It asks over HTTPS only and never falls back to plain HTTP or to an unchecked certificate.
-It sends with `curl`, else OpenWrt's `uclient-fetch`, else a `wget` that is not busybox's
-own: that one takes any certificate. Without such a tool it sends nothing and says so. The
-request goes out once; `--post-data` takes the place of `--post-file` only where the tool
-does not know `--post-file`. The script does not depend on the `Content-Type` it can set,
-and neither does the server.
+It sends with `curl`, else OpenWrt's `uclient-fetch`, else GNU `wget`. busybox's own `wget`
+is never used for it: that one takes any certificate. Without such a tool it sends nothing
+and says so. `curl` runs with `-q` and GNU `wget` with `--no-config`, so that no settings
+file of the tool changes where or how it sends. The request goes out once (`wget` with
+`-t 1`); `--post-data` takes the place of `--post-file` only where the tool does not know
+`--post-file`. The script does not depend on the `Content-Type` it can set, and neither
+does the server.
 
 | Answer | Effect |
 | --- | --- |

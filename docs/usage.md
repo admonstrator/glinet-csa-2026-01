@@ -73,10 +73,11 @@ as no, and the run goes on to its result. Without a terminal, for example throug
 without the question, `--no-lookup` never asks. With `--fix` the check does not run.
 
 Accounts listed for review are never asked about. The report and the check take at most
-40 findings listed for review, programs first; where there are more, the section says how
-many were left out. The script sends only with a tool that checks the server's
-certificate (`curl`, OpenWrt's `uclient-fetch`, or a `wget` that is not busybox's own) and
-gives up after 25 seconds.
+40 findings listed for review, programs first, then odd files and files in `/tmp`, then
+new and changed files; where there are more, the section says how many were left out. The
+script sends only with a tool that checks the server's certificate (`curl`, OpenWrt's
+`uclient-fetch`, or GNU `wget`, never busybox's own) and gives up after 25 seconds. Ctrl-C
+while it waits for the answer stops the check, and the run goes on to its result.
 
 ```
    Answer received and checked (2026-11-24 16:40 UTC).

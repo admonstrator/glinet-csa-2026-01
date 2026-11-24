@@ -631,7 +631,7 @@ expect "another new link that the firmware does not have = REVIEW" 'grep -A1 "RE
 expect "a script in udhcpc.user.d = REVIEW" 'grep -q "REVIEW  *new  */etc/udhcpc.user.d/10-mine" "$D/check.txt"'
 expect "an init script that starts watch.sh = IOC persist-ref" 'grep -q "IOC  *persist-ref  */etc/init.d/S99w" "$D/check.txt"'
 expect "an autostart file that fetches from a server of the malware = IOC persist-ref" 'grep -A1 "IOC  *persist-ref  */etc/hotplug.d/iface/99-x" "$D/check.txt" | grep -q "66.245.219.252"'
-expect "the loader is recognised by its function names" 'grep -A1 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | grep -q "compiled Lua.*function names of the analyzed loader"'
+expect "the loader is recognized by its function names" 'grep -A1 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | grep -q "compiled Lua.*function names of the analyzed loader"'
 expect "GoodCloud state, client version, binding and remote access are printed" 'grep -q "GoodCloud now  *on (gl-sdk4-cloud 1.2.3-4), bound to an account: on" "$D/check.txt" && grep -q "Remote access  *SSH: on, web: off (through GoodCloud)" "$D/check.txt"'
 umount "$D/m"
 sed -i "s/option enable '1'/option enable '0'/" "$U/etc/config/gl-cloud"
@@ -887,7 +887,7 @@ mkdir -p "$U/usr/sbin"
 mnt "$D" "$OWS"
 rm "$D/m/usr/sbin/tailscale" "$D/m/usr/sbin/tailscaled"; printf 'ELF 1.104.7-tcbc74fe48-tiny.by.admon.1463 more\n' >"$D/m/usr/sbin/tailscaled"; ln -s /usr/sbin/tailscaled "$D/m/usr/sbin/tailscale"
 run "$D" "$OWS" --check >"$D/check.txt"; rc=$?
-expect "the uncompressed build is recognised by its version string: INFO for both files" '[ $rc = 0 ] && grep -q "INFO  *updater-file  */usr/sbin/tailscaled" "$D/check.txt" && grep -q "INFO  *updater-file  */usr/sbin/tailscale$" "$D/check.txt" && ! grep -q "REVIEW.*tailscale" "$D/check.txt"'
+expect "the uncompressed build is recognized by its version string: INFO for both files" '[ $rc = 0 ] && grep -q "INFO  *updater-file  */usr/sbin/tailscaled" "$D/check.txt" && grep -q "INFO  *updater-file  */usr/sbin/tailscale$" "$D/check.txt" && ! grep -q "REVIEW.*tailscale" "$D/check.txt"'
 printf 'ELF UPX! packed\n' >"$D/m/usr/sbin/tailscaled"
 run "$D" "$OWS" --check >"$D/check.txt"
 expect "a compressed build without the updater's traces stays REVIEW" 'grep -q "REVIEW  *modified-binary  */usr/sbin/tailscaled" "$D/check.txt"'
@@ -1822,6 +1822,29 @@ class H(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
             return
+        if mode == 'endless':
+            # no end and no length: only the script's own limit stops it
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            try:
+                while True:
+                    self.wfile.write(b'E' * 65536)
+            except OSError:
+                pass
+            return
+        if mode == 'dribble':
+            # the header, a line every 8 seconds for two minutes: no idle timeout of a tool ends it
+            try:
+                self.wfile.write(b'HTTP/1.0 200 OK\r\n')
+                self.wfile.flush()
+                for i in range(15):
+                    time.sleep(8)
+                    self.wfile.write(b'X-Wait: %d\r\n' % i)
+                    self.wfile.flush()
+            except OSError:
+                pass
+            return
         data = text.encode('latin-1')
         if mode == 'huge':
             data = data + b'EVIL\n' * 2000000
@@ -1928,9 +1951,20 @@ EOF
 	lk --lookup >"$K/many.txt"; rc=$?
 	expect "more than 40 listed for review: programs first and asked, and a line for the rest" '[ $rc = 1 ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/many.txt" && grep -q "Not asked: 8 more findings listed for review. The report and this check take 40, programs first." "$K/many.txt"'
 	cp "$K/passwd" "$KL/etc/passwd"
+	# 45 hidden files in the overlay sort before new-binary and tmp-file by kind: programs and
+	# /tmp come first all the same (review of 2.60)
+	mkdir -p "$KL/usr/bin" "$KL/overlay/upper/etc" "$KL/overlay/upper/usr/bin"
+	i=1; while [ $i -le 45 ]; do echo $i >"$KL/etc/.h$i"; cp "$KL/etc/.h$i" "$KL/overlay/upper/etc/.h$i"; i=$((i + 1)); done
+	{ printf '\177ELF'; head -c 200 /dev/urandom; } >"$KL/usr/bin/zz"; chmod +x "$KL/usr/bin/zz"; cp -p "$KL/usr/bin/zz" "$KL/overlay/upper/usr/bin/zz"
+	cp "$KS/table" "$K/table.keep"; echo "$(sha256sum <"$KL/usr/bin/zz" | cut -c1-64) known_bad" >>"$KS/table"
+	lk --lookup >"$K/rank.txt"; rc=$?
+	expect "more than 40, hidden files sorting first by kind: the new program and the file in /tmp are still asked" '[ $rc = 1 ] && grep -Eq "KNOWN BAD +new-binary +/usr/bin/zz" "$K/rank.txt" && grep -Eq "KNOWN BAD +tmp-file +/tmp/.dg" "$K/rank.txt" && grep -Eq "Not asked: [0-9]+ more findings listed for review" "$K/rank.txt"'
+	cp "$K/table.keep" "$KS/table"; rm -rf "${KL:?}"/etc/.h* "${KL:?}/usr" "${KL:?}/overlay"
 	# over HTTPS busybox's own wget is never used: it takes any certificate (review of 2.60)
-	n0=$(nreq)
+	# app.gl-i.net is this machine here, where nothing listens on 443: a broken test sends nothing out
+	n0=$(nreq); echo "127.0.0.1 app.gl-i.net" >"$KL/etc/hosts"
 	TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ chroot "$KL" /bin/sh /t.sh --no-device-id --lookup </dev/null >"$K/https.txt" 2>&1; rc=$?
+	rm -f "$KL/etc/hosts"
 	expect "over HTTPS with only busybox's wget: one line, nothing sent" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && grep -q "Not checked: no curl or wget here that checks the server.s certificate. Nothing was sent." "$K/https.txt" && ! grep -q "No answer from" "$K/https.txt"'
 	# answers that do not fit, each with known_bad in the table: used, they would change the result
 	ESC=$(printf '\033')
@@ -1939,12 +1973,18 @@ EOF
 		lk --lookup >"$K/broken-$m.txt"; rc=$?
 		expect "an answer that does not fit ($m) is set aside: one line, nothing changed, none of it printed" '[ $rc = 0 ] && [ "$(nreq)" -gt "$n0" ] && [ "$(grep -c "The answer did not check out and was not used. Nothing changed." "$K/broken-$m.txt")" = 1 ] && ! grep -qE "EVIL|lookup-bad|KNOWN BAD|known_|Answer received" "$K/broken-$m.txt" && ! grep -q "$ESC" "$K/broken-$m.txt" && grep -q "Verdict: no gl-helper indicators found" "$K/broken-$m.txt"'
 	done
-	kmode 500
+	kmode 500; n0=$(nreq)
 	lk --lookup >"$K/500.txt"; rc=$?
-	expect "an error of the server: one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/500.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/500.txt"'
+	expect "an error of the server: one request, one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(nreq)" = "$((n0 + 1))" ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/500.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/500.txt"'
 	kmode slow; t0=$(date +%s)
 	lk --lookup >"$K/slow.txt"; rc=$?; t1=$(date +%s)
-	expect "an answer that trickles in: given up after 25 seconds, one line, nothing changed" '[ $rc = 0 ] && [ $((t1 - t0)) -lt 45 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/slow.txt")" = 1 ] && ! grep -q EEE "$K/slow.txt"'
+	expect "an answer that trickles in: given up after 25 seconds, one line, nothing changed" '[ $rc = 0 ] && [ $((t1 - t0)) -lt 45 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/slow.txt")" = 1 ] && ! grep -q EEE "$K/slow.txt" && ! grep -q Terminated "$K/slow.txt"'
+	kmode dribble; t0=$(date +%s)
+	lk --lookup >"$K/dribble.txt"; rc=$?; t1=$(date +%s)
+	expect "a header line every 8 seconds: the tool is stopped after 25 seconds, one line, nothing changed" '[ $rc = 0 ] && [ $((t1 - t0)) -lt 45 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/dribble.txt")" = 1 ] && ! grep -q Terminated "$K/dribble.txt"'
+	kmode endless; t0=$(date +%s)
+	lk --lookup >"$K/endless.txt"; rc=$?; t1=$(date +%s)
+	expect "an answer without end: cut at 8193 bytes while it arrives, set aside at once" '[ $rc = 0 ] && [ $((t1 - t0)) -lt 15 ] && [ "$(grep -c "The answer did not check out and was not used. Nothing changed." "$K/endless.txt")" = 1 ] && ! grep -q EEE "$K/endless.txt"'
 	kmode ok
 	KURL=http://127.0.0.1:9/lookup lk --lookup >"$K/down.txt"; rc=$?
 	expect "no server: one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/down.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/down.txt"'
@@ -1971,6 +2011,14 @@ EOF
 	expect "--archive with an answer set aside: lookup.txt says so and holds none of it" '[ $rc = 0 ] && tar -xzOf "$A" evidence/lookup.txt | grep -q "did not check out and was set aside" && ! tar -xzOf "$A" evidence/lookup.txt | grep -qE "EVIL|answer 1|$ESC"'
 	rm -f "$KL"/tmp/gl-triage-*
 	kmode ok
+	# triage-remote.sh through an ssh that runs the command in the chroot: known malware from
+	# step 1 is not "clean" after --fix, which does not remove it
+	mkdir -p "$K/fakessh"
+	printf '#!/bin/bash\nexec env TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=%s chroot %s /bin/sh -c "${!#}"\n' "$KURL" "$KL" >"$K/fakessh/ssh"
+	chmod +x "$K/fakessh/ssh"
+	PATH="$K/fakessh:$PATH" bash "$(dirname "$T")/triage-remote.sh" --fix --lookup -o "$K/ev" root@dev >"$K/remote.txt" 2>&1; rc=$?
+	expect "triage-remote.sh --fix --lookup: known malware from the check ends as incomplete, with what to do" '[ $rc = 3 ] && grep -q "Verdict: INFECTED - a file listed for review is known malware" "$K/remote.txt" && grep -q "fix does not remove the file the community list knows as malware: reinstall the firmware" "$K/remote.txt" && grep -q "remediation incomplete" "$K/remote.txt"'
+	rm -rf "$K/ev" "$KL"/tmp/gl-triage-*
 	lk --lookup --show-report >"$K/rep.txt"
 	expect "the report knows nothing of the check" 'grep -q "Verdict: INFECTED - a file listed" "$K/rep.txt" && grep -q "^   \"ioc\": 0,$" "$K/rep.txt" && ! sed -n "/^== Anonymous report/,\$p" "$K/rep.txt" | grep -q lookup'
 	# On a terminal it asks. The terminal comes from script(1), where it works here.
@@ -1983,17 +2031,20 @@ EOF
 		expect "y sends, and the answer is used" '[ "$(nreq)" = "$((n0 + 1))" ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/tty2.txt"'
 		printf 'v\nn\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=http://127.0.0.1:1@evil.example/ chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty3.txt"
 		expect "an address of this machine with a user part (127.0.0.1:1@host) is not taken for the check" 'grep -q "What would be sent to https://app.gl-i.net/csa-2026-01-report/lookup, line by line:" "$K/tty3.txt" && ! grep -q evil.example "$K/tty3.txt"'
-		# Ctrl-C at the question is a No, and the result still comes (review of 2.60)
-		n0=$(nreq)
-		python3 - "$KL" "$KURL" >"$K/intr.txt" 2>/dev/null <<'EOF'
-import os, pty, sys, time
-kl, url = sys.argv[1], sys.argv[2]
+		# Ctrl-C at the question is a No, and the result still comes (review of 2.60). The driver
+		# waits at most 2 seconds per read and 120 seconds in all, then stops the run.
+		cat >"$K/drive.py" <<'EOF'
+import os, pty, select, signal, sys, time
+kl, url, trigger = sys.argv[1], sys.argv[2], sys.argv[3].encode()
 env = dict(os.environ, TERM='dumb', TMPDIR='/tmp', GL_TRIAGE_REPORT_URL='http://127.0.0.1:9/', GL_TRIAGE_LOOKUP_URL=url)
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvpe('chroot', ['chroot', kl, '/bin/sh', '/t.sh', '--no-device-id', '--no-report'], env)
+    os.execvpe('chroot', ['chroot', kl, '/bin/sh', '/t.sh', '--no-device-id', '--no-report'] + sys.argv[4:], env)
 out, sent, end = b'', False, time.time() + 120
 while time.time() < end:
+    r = select.select([fd], [], [], 2)[0]
+    if not r:
+        continue
     try:
         d = os.read(fd, 4096)
     except OSError:
@@ -2001,15 +2052,24 @@ while time.time() < end:
     if not d:
         break
     out += d
-    if not sent and b'Check them?' in out:
-        time.sleep(0.3)
+    if not sent and trigger in out:
+        time.sleep(1.5)
         os.write(fd, b'\x03')
         sent = True
+if time.time() >= end:
+    os.kill(pid, signal.SIGKILL)
 st = os.waitpid(pid, 0)[1]
 sys.stdout.write(out.decode('utf-8', 'replace').replace('\r', ''))
 print('\nRC=%d' % (os.WEXITSTATUS(st) if os.WIFEXITED(st) else -1))
 EOF
+		n0=$(nreq)
+		python3 "$K/drive.py" "$KL" "$KURL" 'Check them?' >"$K/intr.txt" 2>/dev/null
 		expect "Ctrl-C at the question is a No: nothing sent, and the run goes on to its result" '[ "$(nreq)" = "$n0" ] && grep -q "Not checked. Nothing was sent." "$K/intr.txt" && grep -q "Verdict:" "$K/intr.txt" && grep -q "^RC=0$" "$K/intr.txt"'
+		# Ctrl-C while it waits for the answer stops the check, and the result still comes
+		kmode dribble; n0=$(nreq); t0=$(date +%s)
+		python3 "$K/drive.py" "$KL" "$KURL" 'Ctrl-C stops it' --lookup >"$K/intr2.txt" 2>/dev/null; t1=$(date +%s)
+		kmode ok
+		expect "Ctrl-C while waiting for the answer: stopped at once, nothing changed, the run goes on to its result" '[ "$(nreq)" = "$((n0 + 1))" ] && [ $((t1 - t0)) -lt 20 ] && grep -q "Stopped (Ctrl-C). Nothing changed." "$K/intr2.txt" && ! grep -q "No answer from the community list" "$K/intr2.txt" && grep -q "Verdict:" "$K/intr2.txt" && grep -q "^RC=0$" "$K/intr2.txt"'
 	else
 		echo "  SKIP: the question on a terminal (script(1) gives no terminal here)"
 	fi

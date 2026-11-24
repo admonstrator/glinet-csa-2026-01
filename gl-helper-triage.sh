@@ -24,7 +24,7 @@
 #
 # Before the result, on the device itself (--check, --archive), the script offers to ask
 # the community's list whether the files it listed for review are known: as malware, as
-# all right, or not at all. Only fingerprints are sent, never a path or a file. --lookup
+# probably safe, or not at all. Only fingerprints are sent, never a path or a file. --lookup
 # asks without the question, --no-lookup never asks. The answer can only make the result
 # worse, never better (docs/lookup.md).
 #
@@ -296,7 +296,7 @@ Exit: 0 clean, 1 IOC found, 2 fixed, 3 fix incomplete, 4 error
 EOF
 }
 
-# Colours: empty strings unless switched on, so every message works both ways.
+# Colors: empty strings unless switched on, so every message works both ways.
 palette() {
 	if [ "$1" = 1 ]; then
 		ESC=$(printf '\033')
@@ -304,7 +304,7 @@ palette() {
 		RED="$ESC[1;31m" YEL="$ESC[33m" CYA="$ESC[36m" GRN="$ESC[32m"
 		# The one line every reader should see: a green bar, and its address underlined.
 		# The bar is green in reverse video, not white on green: the text then takes the
-		# terminal's own background colour, which stands out against green in a dark theme
+		# terminal's own background color, which stands out against green in a dark theme
 		# and in a light one. White on a theme's pale green could not be read.
 		HL="$ESC[1;7;32m" LINK="$ESC[1;4;36m"
 	else
@@ -2476,7 +2476,7 @@ level_color() {
 	case $1 in IOC) printf '%s' "$RED" ;; PERSIST) printf '%s' "$YEL" ;; REVIEW) printf '%s' "$CYA" ;; *) printf '%s' "$D" ;; esac
 }
 
-# "IOC=3", coloured like its level unless the count is 0
+# "IOC=3", colored like its level unless the count is 0
 tally() {
 	local n
 	n=$(count "$1")
@@ -3196,7 +3196,7 @@ recommend() {
 	elif [ "$MODE" = check ]; then
 		say "   - Keep the evidence: run the script with --archive and copy the archive off the device."
 	fi
-	if [ "$(count_cmd)" -gt 0 ] && [ "$(count_hard)" = 0 ]; then
+	if [ "$(count_cmd)" -gt 0 ] && [ "$(count_hard)" = 0 ] && ! has_ioc lookup-bad; then
 		say "   - A command from the attacker ran here as root. It could read every key and password on"
 		say "     the device, so the steps below apply even though nothing was installed."
 	fi
@@ -3371,8 +3371,10 @@ build_report() {
 	# forum user found one (glcloud, uid 2, empty password) that nobody can explain yet.
 	: >"$TMP/revlines"
 	: >"$TMP/lookup.items"
-	# At most 40, programs first: where there are more, a changed configuration must not push
-	# a new program out of the report and out of the fingerprint check (review of 2.60).
+	# At most 40, programs first, then files in /tmp and odd files, then new and changed
+	# files, then hidden files, then the rest: where there are more, a changed configuration
+	# must not push a new program out of the report and out of the fingerprint check (review
+	# of 2.60).
 	awk -F '\t' '$1=="REVIEW" {
 			p = $3; pid = ""; x = ""
 			if ($2 == "process") p = ""
@@ -3390,8 +3392,12 @@ build_report() {
 				if (b != "") x = x " base=" b
 			}
 			# "-" stands for an empty field: the shell would swallow two tabs in a row
-			first = ($2 ~ /^(new-binary|modified-binary|changed-lib|applet-replaced|replaced-link|deleted-exe|running|tmp-file|hidden|overlay-hidden|odd-file|odd-name|lua-bytecode)$/) ? 0 : 1
-			print first "\t" $2 "\t" (p == "" ? "-" : p) "\t" (pid == "" ? "-" : pid) "\t" (x == "" ? "-" : x)
+			rank = 50
+			if ($2 ~ /^(new-binary|modified-binary|running|deleted-exe|changed-lib|applet-replaced|replaced-link|netstat)$/) rank = 10
+			else if ($2 ~ /^(tmp-file|lua-bytecode|odd-file|odd-name)$/) rank = 20
+			else if ($2 == "new" || $2 == "changed") rank = 30
+			else if ($2 == "hidden" || $2 == "overlay-hidden") rank = 40
+			print rank "\t" $2 "\t" (p == "" ? "-" : p) "\t" (pid == "" ? "-" : pid) "\t" (x == "" ? "-" : x)
 		}' "$FIND" | sort -u >"$TMP/revall"
 	LOOKUP_LEFT=$(($(wc -l <"$TMP/revall" | tr -d ' ') - 40))
 	[ "$LOOKUP_LEFT" -gt 0 ] || LOOKUP_LEFT=0
@@ -3598,8 +3604,8 @@ offer_report() {
 # verdict. It asks first; --lookup goes on without the question, --no-lookup never asks.
 # For each file it sends two fingerprints: the SHA-256 of its kind and path exactly as the
 # report carries them, so that the server can recognize a path it already knows and
-# nothing else, and the SHA-256 of the file. Never a path, a file or anything about the
-# device. The report itself is built before and knows nothing of the check.
+# nothing else, and the SHA-256 of the file. Never a path, a file, an account, or the
+# device's ID, model or name. The report itself is built before and knows nothing of the check.
 # The answer is not trusted. It is used only when all of it is what was asked for, and then
 # it can only make the result worse: a file known as malware adds "IOC lookup-bad", a file
 # known as probably safe stays listed for review, and a trace the script found itself stays
@@ -3620,56 +3626,78 @@ lookup_item() { # kind, path as in the report, sha256 of the file, path of the f
 	printf '%s %s\t%s\t%s\t%s\n' "$k" "$3" "$1" "$4" "$2" >>"$TMP/lookup.items"
 }
 # Runs the command given and keeps what it prints in lookup.answer, cut at 8193 bytes while it
-# arrives (more never checks out) and given up after 25 seconds, whatever the tool's own
-# limits are. True when the command itself ended well, or when it was cut off because it
-# sent too much: that answer came, and lookup_read sets it aside.
+# arrives (more never checks out). The tool is stopped after 25 seconds, as soon as 8193
+# bytes came, or at Ctrl-C, whatever its own limits are: one retries, one waits between
+# bytes without end, one goes on reading after its output was closed (review of 2.60).
+# 0: the tool ended well, or it sent too much (that answer came, and lookup_read sets it
+# aside). 1: no answer. 3: stopped by Ctrl-C.
+LOOKUP_STOP=0
 lookup_get() {
-	local hp dog
-	rm -f "$TMP/lookup.answer" "$TMP/lookup.rc"
-	# nothing in the background may hold this script's output open: whoever reads it would
-	# wait for them
-	{ "$@"; echo $? >"$TMP/lookup.rc"; } </dev/null 2>/dev/null 3>&- | head -c 8193 >"$TMP/lookup.answer" 3>&- &
+	local i=0 tp hp
+	rm -f "$TMP/lookup.rc" "$TMP/lookup.pid"
+	: >"$TMP/lookup.answer"
+	# Nothing in the background may hold this script's output open: whoever reads it would
+	# wait for it. The tool's number goes to a file, so that it can be stopped.
+	{
+		"$@" </dev/null 2>/dev/null &
+		echo $! >"$TMP/lookup.pid"
+		wait $!
+		echo $? >"$TMP/lookup.rc"
+	} 2>/dev/null 3>&- | head -c 8193 >"$TMP/lookup.answer" 3>&- &
 	hp=$!
-	(sleep 25; kill "$hp") </dev/null >/dev/null 2>&1 3>&- &
-	dog=$!
-	wait "$hp"
-	kill "$dog" 2>/dev/null
-	[ "$(cat "$TMP/lookup.rc" 2>/dev/null)" = 0 ] || [ "$(wc -c <"$TMP/lookup.answer" 2>/dev/null | tr -d ' ')" = 8193 ]
+	LOOKUP_STOP=0
+	trap 'LOOKUP_STOP=1' INT
+	while [ "$LOOKUP_STOP" = 0 ] && [ "$i" -lt 25 ] && [ ! -f "$TMP/lookup.rc" ] &&
+		[ "$(wc -c <"$TMP/lookup.answer" | tr -d ' ')" -lt 8193 ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	trap 'exit 4' INT
+	if [ ! -f "$TMP/lookup.rc" ]; then
+		tp=$(cat "$TMP/lookup.pid" 2>/dev/null)
+		case $tp in '' | *[!0-9]*) ;; *) kill "$tp" 2>/dev/null ;; esac
+	fi
+	wait "$hp" 2>/dev/null
+	[ "$LOOKUP_STOP" = 1 ] && return 3
+	[ "$(cat "$TMP/lookup.rc" 2>/dev/null)" = 0 ] || [ "$(wc -c <"$TMP/lookup.answer" | tr -d ' ')" = 8193 ]
 }
 # The request, sent only with a tool that checks the server's certificate: curl, OpenWrt's
-# uclient-fetch, or a wget that is not busybox's own. That one takes any certificate (it
-# says so, and -q hides it), so over HTTPS it is never used (review of 2.60); the tests talk
-# plain HTTP to this machine, where there is no certificate. 0: an answer came. 1: sent, no
-# answer (no connection, a certificate that does not check out, an error of the server).
-# 2: nothing sent, no tool for it.
+# uclient-fetch, or GNU wget. Busybox's own wget takes any certificate (it says so, and -q
+# hides it), so over HTTPS it is never used (review of 2.60); the tests talk plain HTTP to
+# this machine, where there is no certificate. No configuration file of the tool counts
+# (curl -q, wget --no-config): one could switch the check of the certificate off. Each tool
+# tries once. 0: an answer came. 1: sent, no answer (no connection, a certificate that does
+# not check out, an error of the server, nothing within 25 seconds). 2: nothing sent, no
+# tool for it. 3: stopped by Ctrl-C.
 lookup_send() {
-	local w body
+	local w body gnu=0
 	if tool_ok curl; then
-		lookup_get curl -fsS -m 20 -H 'Content-Type: text/plain' --data-binary "@$TMP/lookup.req" "$LOOKUP_URL" || return 1
-		return 0
+		lookup_get curl -q -fsS -m 20 -H 'Content-Type: text/plain' --data-binary "@$TMP/lookup.req" "$LOOKUP_URL"
+		return
 	fi
 	w=
 	if tool_ok uclient-fetch; then w=uclient-fetch
 	elif tool_ok wget; then
+		wget --version 2>/dev/null | head -n 1 | grep -q '^GNU Wget' && gnu=1
 		case $LOOKUP_URL in
-		https:*) wget --help 2>&1 | grep -qi busybox || w=wget ;;
+		https:*) [ "$gnu" = 1 ] && w=wget ;;
 		*) w=wget ;;
 		esac
 	fi
 	[ -n "$w" ] || return 2
 	set -- -q -T 20 -O -
-	# uclient-fetch knows no --header; the server does not depend on the type
-	[ "$w" = wget ] && set -- "$@" --header='Content-Type: text/plain'
+	[ "$gnu" = 1 ] && set -- --no-config "$@"
+	# uclient-fetch knows neither --header nor -t; the server does not depend on the type
+	[ "$w" = wget ] && set -- "$@" -t 1 --header='Content-Type: text/plain'
 	# --post-data only for a tool without --post-file: trying one after the other would send
 	# the request twice whenever the server answers with an error
 	if "$w" --help 2>&1 | grep -q -- '--post-file'; then
-		lookup_get "$w" "$@" --post-file="$TMP/lookup.req" "$LOOKUP_URL" || return 1
+		lookup_get "$w" "$@" --post-file="$TMP/lookup.req" "$LOOKUP_URL"
 	else
 		# the request ends in a line break, which $( ) drops
 		body=$(cat "$TMP/lookup.req"; echo x); body=${body%x}
-		lookup_get "$w" "$@" --post-data="$body" "$LOOKUP_URL" || return 1
+		lookup_get "$w" "$@" --post-data="$body" "$LOOKUP_URL"
 	fi
-	return 0
 }
 # Is the answer exactly what was asked for? At most 8192 bytes of line breaks and printable
 # ASCII only; the first line; the random number of this run; the time in its shape; then one
@@ -3764,10 +3792,10 @@ lookup() {
 		if [ -t 0 ] && [ -t 3 ]; then
 			while :; do
 				say ""
-				printf '   %sCheck %s? [y/N, v = show what would be sent]%s ' "$B" "$([ "$n" = 1 ] && echo it || echo them)" "$N" >&3
 				# Ctrl-C here is a No: the run goes on to the result, which used to come before
 				# any question (review of 2.60)
 				trap 'echo >&3' INT
+				printf '   %sCheck %s? [y/N, v = show what would be sent]%s ' "$B" "$([ "$n" = 1 ] && echo it || echo them)" "$N" >&3
 				read -r answer || answer=
 				trap 'exit 4' INT
 				case $answer in
@@ -3782,11 +3810,16 @@ lookup() {
 			return 0
 		fi
 	fi
-	say "   Asking the community list (at most 25 seconds) ..."
+	say "   Asking the community list (at most 25 seconds, Ctrl-C stops it) ..."
 	lookup_send; rc=$?
+	if [ "$rc" = 3 ]; then
+		say "   ${YEL}Stopped (Ctrl-C). Nothing changed.${N}"
+		lookup_txt "Stopped with Ctrl-C while waiting for the answer. Nothing changed." sent
+		return 0
+	fi
 	if [ "$rc" = 2 ]; then
 		say "   ${YEL}Not checked: no curl or wget here that checks the server's certificate. Nothing was sent.${N}"
-		lookup_txt "Not checked: no curl, uclient-fetch or wget of the firmware that checks the server's certificate. Nothing was sent."
+		lookup_txt "Not checked: no curl, uclient-fetch or GNU wget of the firmware, which check the server's certificate. Nothing was sent."
 		return 0
 	fi
 	if [ "$rc" != 0 ]; then
@@ -3982,7 +4015,7 @@ result_link() {
 		case $ext in ?????) ext="-$ext" ;; *) ext= ;; esac
 	fi
 	say ""
-	# set apart by colour, and by the arrows where there is no colour
+	# set apart by color, and by the arrows where there is no color
 	say "   ${HL} >>> This result in plain words, with what to do (English, German, Chinese): ${N}"
 	say "   ${B}>>>${N} ${LINK}${RESULT_URL}#$code$ext${N}"
 	say "   ${D}Open the address in a browser on any device, or type it; capitals do not matter. The code${N}"
