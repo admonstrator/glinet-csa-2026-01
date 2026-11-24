@@ -165,12 +165,44 @@ const labels = {
   },
 };
 
+// Suggestions: findings that an analysis of the reports takes for probably safe, each with
+// its reason and the fingerprints it covers. A suggestion hides nothing. It waits until
+// someone on the team confirms it, which sets a label in that person's name and removes
+// the suggestion, or declines it, which keeps it with who said no, so that loading the same
+// suggestions again does not bring it back. They come in as SQL (tools/suggestions-sql.mjs),
+// so only with D1; the dashboard cannot add one.
+export const SUGGESTIONS_TABLE = 'CREATE TABLE IF NOT EXISTS suggestions (key TEXT PRIMARY KEY, note TEXT NOT NULL, hashes TEXT NOT NULL, by TEXT NOT NULL, at TEXT NOT NULL, declined_by TEXT NOT NULL DEFAULT \'\', declined_at TEXT NOT NULL DEFAULT \'\')';
+let suggestionsTable = false;
+const suggestions = {
+  async ready(env) {
+    if (suggestionsTable) return;
+    await env.DB.prepare(SUGGESTIONS_TABLE).run();
+    suggestionsTable = true;
+  },
+  async all(env) {
+    if (!env.DB) return {};
+    await suggestions.ready(env);
+    const { results } = await env.DB.prepare('SELECT key, note, hashes, by, at, declined_by, declined_at FROM suggestions').all();
+    return Object.fromEntries(results.map((r) => [r.key, { note: r.note, hashes: JSON.parse(r.hashes), by: r.by, at: r.at, declined_by: r.declined_by, declined_at: r.declined_at }]));
+  },
+  // answered with a yes: the label carries it from now on
+  async drop(env, key) {
+    if (!env.DB) return;
+    await suggestions.ready(env);
+    await env.DB.prepare('DELETE FROM suggestions WHERE key = ?1').bind(key).run();
+  },
+  async decline(env, key, user) {
+    await suggestions.ready(env);
+    await env.DB.prepare("UPDATE suggestions SET declined_by = ?2, declined_at = ?3 WHERE key = ?1 AND declined_by = ''").bind(key, user, new Date().toISOString()).run();
+  },
+};
+
 // A label as the dashboard sends it. The key is a kind and a path as the reports carry
-// them; the note is plain text and shown as text.
+// them; the note is plain text and shown as text. "decline" answers a suggestion with no.
 export function validLabel(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return 'not an object';
   if (!(typeof body.key === 'string' && body.key.length >= 3 && body.key.length <= 200 && SAFE.test(body.key))) return 'bad key';
-  if (!['safe', ''].includes(body.verdict)) return 'bad verdict';
+  if (!['safe', '', 'decline'].includes(body.verdict)) return 'bad verdict';
   if (!(typeof body.note === 'string' && body.note.length <= 200 && /^[\x20-\x7e]*$/.test(body.note))) return 'bad note';
   if (!(Array.isArray(body.hashes) && body.hashes.length <= 60 && body.hashes.every((h) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)))) return 'bad hashes';
   return null;
@@ -312,7 +344,8 @@ async function dashboard(request, env, data) {
   if (!user) return text('not found', 404);
   if (data === 'labels') {
     const out = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-    if (request.method === 'GET') return out({ labels: await labels.all(env), you: user });
+    const both = async () => out({ labels: await labels.all(env), suggestions: await suggestions.all(env), you: user });
+    if (request.method === 'GET') return both();
     // a change: only from the dashboard itself. A form on another site cannot send JSON,
     // and the browser names the page a request comes from.
     if (!(request.headers.get('content-type') || '').startsWith('application/json') || request.headers.get('origin') !== new URL(request.url).origin) return text('not from the dashboard', 403);
@@ -320,8 +353,14 @@ async function dashboard(request, env, data) {
     try { body = JSON.parse((await request.text()).slice(0, 8192)); } catch { return text('not JSON', 400); }
     const bad = validLabel(body);
     if (bad) return text(bad, 400);
+    if (body.verdict === 'decline') {
+      if (!env.DB) return text('suggestions need the database', 400);
+      await suggestions.decline(env, body.key, user);
+      return both();
+    }
     await labels.set(env, body.key, body.verdict ? { verdict: body.verdict, note: body.note, hashes: body.hashes, by: user, at: new Date().toISOString() } : null);
-    return out({ labels: await labels.all(env), you: user });
+    if (body.verdict) await suggestions.drop(env, body.key);
+    return both();
   }
   if (!data) {
     return new Response(DASHBOARD, {
