@@ -56,8 +56,19 @@ button, select, input { font: inherit; color: inherit; }
 .tab em:empty { display: none; }
 /* the board: twelve columns and rows of 52 px. Each card spans some of both; the cards are
    placed in their order, and a card that fits goes into a gap left above it. */
-.board { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 52px; gap: 12px; margin-top: 14px; }
+.board { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 52px; gap: 12px; margin-top: 14px; container: board / inline-size; }
 .board > .card { grid-column: span var(--w, 12); grid-row: span var(--h, 4); }
+/* A board narrower than 900 px (a tablet, or a laptop with the side panel beside it): two
+   columns of a twelfth are too narrow for a number and its note. The numbers at the top of
+   a page get half the width, the two short ones on the overview a quarter. */
+@container board (max-width: 900px) {
+  .board:not(.edit) > .card.kpi { grid-column: span 6; }
+  .board:not(.edit) > .card.kpi:is([data-card=shell], [data-card=back]) { grid-column: span 3; }
+  /* the course of an attack needs the width for its steps; the count of devices checked
+     again then goes below it, as high as it needs */
+  .board:not(.edit) > .card[data-card=course] { grid-column: span 12; }
+  .board:not(.edit) > .card[data-card=healed] { grid-column: span 12; grid-row: span 3; }
+}
 .card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 14px 12px; }
 /* a card is a layer of its own; the one with an open note goes over its neighbours */
 .card.raise { z-index: 4; }
@@ -86,6 +97,16 @@ button, select, input { font: inherit; color: inherit; }
 .board.edit > .card { outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: -1px; user-select: none; }
 .board.edit .ch { flex-wrap: wrap; }
 @container (max-width: 480px) { .card:not(.kpi) > .ch { flex-wrap: wrap; } }
+/* in a narrow card the title wraps and keeps its i and its focus button on its line; a
+   switch, a button or a count goes on a line of its own below */
+@container (max-width: 480px) {
+  .board:not(.edit) > .card:not(.kpi) > .ch { display: grid; grid-template-columns: minmax(0, max-content) auto minmax(0, 1fr) auto; }
+  .board:not(.edit) > .card:not(.kpi) > .ch > h2 { grid-area: 1 / 1; white-space: normal; }
+  .board:not(.edit) > .card:not(.kpi) > .ch > h2 + .ib { grid-area: 1 / 2; }
+  .board:not(.edit) > .card:not(.kpi) > .ch > .grow { grid-area: 1 / 3; }
+  .board:not(.edit) > .card:not(.kpi) > .ch > .ib:last-child { grid-area: 1 / 4; }
+  .board:not(.edit) > .card:not(.kpi) > .ch > :is(.sub, .seg, .btn, .linkbtn) { grid-column: 1 / -1; justify-self: start; margin-left: 0; white-space: normal; }
+}
 /* in a narrow card the tools go on a line of their own */
 @container (max-width: 420px) { .board.edit .ch h2 { flex: 1 1 calc(100% - 32px); } }
 .board > .card.dragging { opacity: .45; outline: 2px dashed var(--accent); }
@@ -113,6 +134,10 @@ button, select, input { font: inherit; color: inherit; }
 button.val { cursor: pointer; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 5px; }
 button.val:hover { text-decoration-color: currentColor; }
 .val.lead { color: var(--danger); }
+.val.ok { color: var(--accent); }
+/* a legend whose entries lead to the reports behind them */
+.legend button { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font-size: inherit; cursor: pointer; }
+.legend button:hover b { text-decoration: underline; text-underline-offset: 3px; }
 .kv1 small { font-size: 14px; font-weight: 600; color: var(--text-2); }
 .card.kpi .split { margin-top: 8px; }
 .card.kpi .legend { margin-top: 6px; gap: 0 14px; line-height: 1.35; }
@@ -297,12 +322,36 @@ pre { margin: 6px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--
 .reports tr.row td:last-child { color: var(--text-2); font-size: 16px; text-align: right; padding-right: 14px; }
 .reports tr.row.sel > td { background: var(--accent-soft); box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent); }
 @container (max-width: 820px) { .hide-s { display: none; } }
+/* a narrow table of reports: each report as a block, date and arrow on top, device and
+   firmware below, then the result over the whole width */
+@container (max-width: 560px) {
+  .reports table, .reports tbody { display: block; }
+  .reports thead { display: none; }
+  .reports tr.row { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 14px 10px; border-top: 1px solid var(--border); }
+  .reports tr.row:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
+  .reports tr.row:hover, .reports tr.row.fresh { background: var(--surface-2); }
+  .reports tr.row.sel { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .reports tr.row > td { display: block; padding: 0; border: 0; background: none; box-shadow: none; }
+  .reports tr.row > td.hide-s { display: none; }
+  .reports tr.row > td:first-child { grid-column: 1 / 3; padding: 0; font-size: 12.5px; color: var(--text-2); }
+  .reports tr.row > td.dev { grid-column: 1; } .reports tr.row > td.fw { grid-column: 2; max-width: none; }
+  .reports tr.row > td.dev small, .reports tr.row > td.fw small { display: inline; margin-left: 5px; }
+  .reports tr.row > td:nth-child(4) { grid-column: 1 / 3; margin-top: 2px; }
+  .reports tr.row > td:last-child { grid-column: 3; grid-row: 1 / 4; align-self: center; padding: 0; }
+}
 .dev b { font-weight: 650; white-space: nowrap; } td.tnum { white-space: nowrap; } .dev small, .fw small { display: block; font-size: 12px; color: var(--text-2); }
 .fw { max-width: 210px; }
 .tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
 .tag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; padding: 0 8px; border-radius: 980px; font-size: 11.5px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
 .tag.warn { background: var(--warn-bg); color: var(--warn); }
 .tag.ok { background: var(--accent-soft); color: var(--accent); }
+.tag.bad { background: var(--danger-bg); color: var(--danger); }
+/* the reports of one device, in the side panel */
+.devreps { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.devreps button { width: 100%; display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 12px; align-items: baseline; padding: 5px 8px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13.5px; cursor: pointer; }
+.devreps button span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.devreps button:hover:not(:disabled) { background: var(--surface-2); }
+.devreps button:disabled { background: var(--accent-soft); color: inherit; cursor: default; }
 .tag i { width: 8px; height: 8px; border-radius: 2px; }
 .body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 28px; }
 .body h3 { margin: 12px 0 0; font-size: 12px; font-weight: 650; color: var(--text-2); }
@@ -348,7 +397,8 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
 .course .conn { flex: 0 1 96px; min-width: 56px; height: 14px; }
 .course .conn span { position: absolute; left: 50%; top: -20px; translate: -50% 0; padding: 1px 8px; border-radius: 980px; background: var(--surface-2); font-size: 11.5px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
 .courseBox .kpis2 { grid-template-columns: 1fr; margin-top: 0; }
-@container (max-width: 760px) {
+/* the steps need about 700 px beside the two numbers, or the times run into them */
+@container (max-width: 1000px) {
   .courseBox { grid-template-columns: 1fr; }
   .courseBox .kpis2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -390,18 +440,31 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
 #tip { position: fixed; z-index: 50; pointer-events: none; padding: 6px 10px; border-radius: 8px; background: var(--text); color: var(--bg); font-size: 12.5px; font-weight: 550; line-height: 1.45; white-space: pre-line; width: max-content; max-width: 400px; opacity: 0; translate: -50% calc(-100% - 12px); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
+/* The filters scroll away with the page here. They stay a layer above the cards, or their
+   menus open behind them. */
 @media (max-width: 1000px) {
-  .filters { position: static; }
+  .filters { position: relative; z-index: 6; }
   .pop, #fMore .pop { width: min(360px, 86vw); }
 }
-/* on a phone: one column, every card as high as it needs, no layout editing */
+/* on a phone: one column, every card as high as it needs, no layout editing; the pages on
+   two lines rather than hidden to the right; a filter's menu over the whole width, right
+   under its button */
 @media (max-width: 760px) {
+  main { padding: 16px 14px 48px; }
+  .filters { margin: 0 -14px; padding: 10px 14px; }
+  .tabs { flex-wrap: wrap; overflow-x: visible; }
+  .tab { padding: 8px 11px 9px; }
+  .filters input[type=search] { min-width: 0; flex-basis: 100%; }
+  .ms { position: static; }
+  .pop, #fMore .pop { top: auto; left: 14px; right: 14px; width: auto; margin-top: 6px; }
+  .pop { max-height: min(340px, 60vh); }
   .board { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
-  .board > .card { grid-column: 1 / -1; grid-row: auto; }
+  .board > .card, .board:not(.edit) > .card[data-card], .board:not(.edit) > .card.kpi[data-card] { grid-column: 1 / -1; grid-row: auto; }
   .cb { max-height: 75vh; }
   .cb > .plot { flex: none; height: 240px; }
   #editBtn, .eo { display: none !important; }
-  #fMore .pop { left: 0; right: auto; }
+  /* in the panel a long label takes no more than its share; the value keeps room */
+  .kv { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); column-gap: 12px; }
 }
 </style>
 </head>
@@ -434,6 +497,8 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
         <div class="seg" id="fRecv" role="group" aria-label="Received"><button type="button" data-v="all">Any time</button><button type="button" data-v="24h">Last 24 h</button><button type="button" data-v="7d">Last 7 days</button></div>
         <p class="ph">Restarted since the attack began on 20 November</p>
         <div class="seg" id="fRestart" role="group" aria-label="Restarted since the attack"><button type="button" data-v="any">Restarted or not</button><button type="button" data-v="yes">Restarted</button><button type="button" data-v="no">Not restarted</button></div>
+        <p class="ph">Checked again after traces (same device ID)</p>
+        <div class="seg" id="fRecheck" role="group" aria-label="Checked again after traces"><button type="button" data-v="any">Any</button><button type="button" data-v="clean">Clean now</button><button type="button" data-v="still">Traces still there</button></div>
         <p class="ph">View</p>
         <div class="toggles" role="group" aria-label="View">
           <label class="tg"><input type="checkbox" id="onlyUnusual"><span>Unusual only</span></label>
@@ -483,6 +548,11 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="ch"><h2>How an attack ran</h2></div>
       <div class="about" hidden><p id="courseSub"></p></div>
       <div class="cb"><div class="courseBox"><ol class="course" id="course"></ol><div class="grid kpis2" id="courseStats"></div></div></div>
+    </section>
+    <section class="card" data-card="healed">
+      <div class="ch"><h2>Clean on a later check</h2></div>
+      <div class="about" hidden><p>Devices that sent a report with traces of the attack and checked again later, told apart by their device ID (script 2.9 and later). The newest report of each device decides: clean, or traces still there.</p><p>“After a firmware change”: the newest report comes from other firmware than the last one with traces, mostly an update. Firmware with GL.iNet’s cleanup removes the known traces at its first start. “Same firmware”: cleaned some other way, for example with the script’s --fix. The older backdoor is not counted here.</p><p>Click a number to see these devices.</p></div>
+      <div class="cb"></div>
     </section>
 
     <!-- Devices & firmware -->
@@ -767,7 +837,7 @@ const KPIS = [['hit', 4, 3], ['shell', 2, 3], ['back', 2, 3], ['restart', 2, 3],
 const BDK = [['bdn', 3, 2], ['bdrun', 3, 2], ['bdkeep', 3, 2], ['bdboth', 3, 2]];
 const TPL = {
   standard: {
-    overview: [...KPIS, ['when', 8, 6], ['going', 4, 6], ['course', 12, 5]],
+    overview: [...KPIS, ['when', 8, 6], ['going', 4, 6], ['course', 8, 5], ['healed', 4, 5]],
     devices: [['matrix', 8, 7], ['series', 4, 7], ['devices', 4, 5], ['firmware', 4, 5], ['cloud', 4, 6]],
     attack: [['evidence', 5, 5], ['files', 7, 5], ['ports', 12, 3], ['left', 12, 5]],
     backdoor: [...BDK, ['bdkinds', 6, 5], ['bdmodel', 3, 5], ['bdfw', 3, 5], ['bdwhen', 6, 5], ['bdfiles', 6, 5]],
@@ -775,7 +845,7 @@ const TPL = {
     reports: [['reports', 12, 11]],
   },
   compact: {
-    overview: [...KPIS, ['when', 7, 5], ['going', 5, 5], ['course', 12, 5]],
+    overview: [...KPIS, ['when', 7, 5], ['going', 5, 5], ['course', 8, 5], ['healed', 4, 5]],
     devices: [['matrix', 8, 7], ['series', 4, 7], ['devices', 4, 4], ['firmware', 4, 4], ['cloud', 4, 5]],
     attack: [['evidence', 4, 6], ['files', 8, 3], ['ports', 8, 3], ['left', 12, 4]],
     backdoor: [...BDK, ['bdkinds', 4, 5], ['bdmodel', 4, 5], ['bdfw', 4, 5], ['bdwhen', 6, 4], ['bdfiles', 6, 4]],
@@ -783,7 +853,7 @@ const TPL = {
     reports: [['reports', 12, 9]],
   },
   large: {
-    overview: [...KPIS, ['when', 12, 8], ['going', 12, 3], ['course', 12, 5]],
+    overview: [...KPIS, ['when', 12, 8], ['going', 12, 3], ['course', 12, 5], ['healed', 12, 3]],
     devices: [['matrix', 12, 8], ['series', 6, 6], ['cloud', 6, 6], ['devices', 6, 5], ['firmware', 6, 5]],
     attack: [['evidence', 6, 7], ['ports', 6, 7], ['files', 12, 4], ['left', 12, 5]],
     backdoor: [...BDK, ['bdkinds', 12, 5], ['bdwhen', 12, 4], ['bdmodel', 6, 5], ['bdfw', 6, 5], ['bdfiles', 12, 4]],
@@ -805,10 +875,11 @@ const pageAt = (p) => PAGES.findIndex((x) => x[0] === p);
 const sortByPage = (items) => items.sort((a, b) => pageAt(a.p) - pageAt(b.p));
 function tplItems(name) { const t = TPL[name] || TPL.standard; return PAGES.flatMap(([p]) => (t[p] || []).map(([k, w, h]) => ({ k, p, w, h }))); }
 // A saved layout made whole: cards that no longer exist go, cards that are new since it
-// was saved come in at the end of their page, sizes stay inside the grid.
+// was saved come in at the end of their page, sizes stay inside the grid. A layout nobody
+// changed is its template as it is now, so new cards come in where the template has them.
 function normalize(saved) {
   const s = saved && typeof saved === 'object' ? saved : {}, tpl = TPL[s.tpl] ? s.tpl : 'standard', base = tplItems(tpl), dflt = new Map(base.map((i) => [i.k, i])), seen = new Set(), items = [];
-  for (const i of Array.isArray(s.items) ? s.items : []) {
+  for (const i of s.custom && Array.isArray(s.items) ? s.items : []) {
     const d = i && dflt.get(i.k); if (!d || seen.has(i.k)) continue; seen.add(i.k);
     items.push({ k: i.k, p: pageAt(i.p) < 0 ? d.p : i.p, w: clamp(i.w, 2, 12, d.w), h: clamp(i.h, 2, 16, d.h) });
   }
@@ -836,7 +907,7 @@ const pageName = (p) => (PAGES[pageAt(p)] || PAGES[0])[1];
 /* ---------- filters ---------- */
 let all = [], pool = [], NOW = Date.now();
 let zoom = 'attack', page = 0, sortKey = 'received', asc = false;
-const F = { q: '', result: 'hit', type: 'all', model: new Set(), firmware: new Set(), kind: new Set(), recv: 'all', restart: 'any', hideTests: true, bin: null, unusual: false, since: null };
+const F = { q: '', result: 'hit', type: 'all', model: new Set(), firmware: new Set(), kind: new Set(), recv: 'all', restart: 'any', recheck: 'any', hideTests: true, bin: null, unusual: false, since: null };
 const FACET = { model: (r) => r.model, firmware: (r) => r.fw, kind: (r) => r.kinds };
 const LABEL = { model: 'Device', firmware: 'Firmware', kind: 'Evidence' };
 function pass(r, skip) {
@@ -847,6 +918,7 @@ function pass(r, skip) {
   if (F.type !== 'all' && (F.type === 'kvm') !== r.kvm) return false;
   if (F.recv !== 'all' && r.recv < NOW - (F.recv === '24h' ? DAY : 7 * DAY)) return false;
   if (F.restart !== 'any' && (F.restart === 'yes') !== r.restarted) return false;
+  if (!sk.includes('recheck') && F.recheck !== 'any') { const h = HEAL.get(r.dev); if (!h || !(F.recheck === 'clean' ? h.state !== 'still' : h.state === F.recheck)) return false; }
   for (const k of ['model', 'firmware', 'kind']) if (!sk.includes(k) && F[k].size && ![].concat(FACET[k](r)).some((v) => F[k].has(v))) return false;
   if (!sk.includes('bin') && F.bin && !(r.first >= F.bin[0] && r.first < F.bin[1])) return false;
   if (F.unusual && !r.odd.length) return false;
@@ -860,7 +932,7 @@ function seg(id, key) {
   sync(); return sync;
 }
 /* ---------- the filters in the address, so a view can be shared ---------- */
-const SIMPLE = { result: 'hit', type: 'all', recv: 'all', restart: 'any' };
+const SIMPLE = { result: 'hit', type: 'all', recv: 'all', restart: 'any', recheck: 'any' };
 // the page in view, what the side panel shows, and the card shown over the whole page
 let curPage = 'overview', D = null, focusKey = '';
 // the panel's width per kind of content, once its edge was dragged (see dock())
@@ -902,7 +974,7 @@ function fromHash() {
 }
 
 fromHash();
-const syncs = [seg('fResult', 'result'), seg('fType', 'type'), seg('fRecv', 'recv'), seg('fRestart', 'restart')];
+const syncs = [seg('fResult', 'result'), seg('fType', 'type'), seg('fRecv', 'recv'), seg('fRestart', 'restart'), seg('fRecheck', 'recheck')];
 function facet(id, key) {
   const d = $(id), pop = d.querySelector('.pop'), val = d.querySelector('summary b');
   let find = '';
@@ -953,12 +1025,13 @@ function chips() {
   // the filters in "More filters" show here too, so a set one is not missed
   if (F.recv !== 'all') add('Received: ' + (F.recv === '24h' ? 'last 24 h' : 'last 7 days'), () => (F.recv = 'all'));
   if (F.restart !== 'any') add(F.restart === 'yes' ? 'Restarted since the attack' : 'Not restarted since the attack', () => (F.restart = 'any'));
+  if (F.recheck !== 'any') add(RECHECK[F.recheck] || 'Checked again: ' + F.recheck, () => (F.recheck = 'any'));
   if (F.unusual) add('Unusual only', () => { F.unusual = false; $('onlyUnusual').checked = false; });
-  const more = [F.recv !== 'all', F.restart !== 'any', F.unusual, !$('perDevice').checked, !F.hideTests].filter(Boolean).length;
+  const more = [F.recv !== 'all', F.restart !== 'any', F.recheck !== 'any', F.unusual, !$('perDevice').checked, !F.hideTests].filter(Boolean).length;
   $('fMore').querySelector('summary b').textContent = more || ''; $('fMore').classList.toggle('on', more > 0);
   syncs.forEach((s) => s());
   box.hidden = !box.children.length;
-  if (!box.hidden) { const r = el('button', 'Reset all filters', 'linkbtn'); r.type = 'button'; r.addEventListener('click', () => { Object.assign(F, { q: '', result: 'hit', type: 'all', recv: 'all', restart: 'any', bin: null, unusual: false, since: null }); $('onlyUnusual').checked = false; for (const k of ['model', 'firmware', 'kind']) F[k].clear(); $('q').value = ''; syncs.forEach((s) => s()); page = 0; render(); }); box.append(r); }
+  if (!box.hidden) { const r = el('button', 'Reset all filters', 'linkbtn'); r.type = 'button'; r.addEventListener('click', () => { Object.assign(F, { q: '', result: 'hit', type: 'all', recv: 'all', restart: 'any', recheck: 'any', bin: null, unusual: false, since: null }); $('onlyUnusual').checked = false; for (const k of ['model', 'firmware', 'kind']) F[k].clear(); $('q').value = ''; syncs.forEach((s) => s()); page = 0; render(); }); box.append(r); }
 }
 
 /* ---------- pieces ---------- */
@@ -1161,6 +1234,25 @@ function repool() {
   pool = all.filter((r) => !r.dev || best.get(r.dev) === r);
   for (const r of pool) if (r.dev) r.reports = n.get(r.dev);
 }
+// A device that sent a report with traces and checked again later: its newest report says
+// whether the traces are gone, and whether the firmware changed since the last report with
+// traces (mostly an update). By device id only. HEAL: device id -> { hit, last, state }
+// with state 'update' (clean on other firmware), 'same' (clean on the same) or 'still'.
+// DEVREP: device id -> all its reports, oldest first.
+let HEAL = new Map(), DEVREP = new Map(), healN = -1;
+const RECHECK = { clean: 'Clean on a later check', update: 'Clean after a firmware change', same: 'Clean on the same firmware', still: 'Traces still there on a later check' };
+function healing() {
+  if (healN === all.length) return; healN = all.length;
+  DEVREP = new Map(); HEAL = new Map();
+  for (const r of all) if (r.dev && !r.isTest) (DEVREP.get(r.dev) || DEVREP.set(r.dev, []).get(r.dev)).push(r);
+  for (const [dev, list] of DEVREP) {
+    list.sort((a, b) => a.recv - b.recv);
+    const last = list[list.length - 1], i = list.findIndex((r) => r.ioc > 0);
+    if (i < 0 || i === list.length - 1) continue;
+    const hit = list.findLast((r) => r.ioc > 0);
+    HEAL.set(dev, { hit, last, state: last.ioc > 0 ? 'still' : last.firmware !== hit.firmware ? 'update' : 'same' });
+  }
+}
 
 // What a device with traces has that no other device has: a file fingerprint, a command,
 // an autostart line, a firewall rule. Counted over all devices with traces, whatever the
@@ -1350,7 +1442,7 @@ $('yamlBtn').addEventListener('click', async () => {
 // Only the cards of the page in view are drawn; the rest is drawn when its page is opened.
 let revN = -1, current = [];
 function render() {
-  dock(); repool(); markUnusual();
+  dock(); repool(); healing(); markUnusual();
   if (revN !== all.length) { REVALL = revGroups(all.filter((r) => r.schema >= 6)); revN = all.length; }
   const rows = pool.filter((r) => pass(r)), base = pool.filter((r) => pass(r, 'result')), isHit = (r) => (F.result === 'bd' ? r.bd : r.ioc > 0), hit = base.filter(isHit);
   facets.forEach((f) => f()); chips();
@@ -1377,6 +1469,7 @@ const DRAW = {};
     when: ({ isHit }) => chart(pool.filter((r) => pass(r, 'bin') && isHit(r))),
     going: ({ base, hit }) => ongoing(base, hit),
     course: ({ hit }) => course(hit),
+    healed: () => healed(),
     matrix: () => matrix(),
     series: ({ base }) => series(base),
     devices: ({ isHit }) => rank($('devices'), $('devicesMore'), count(pool.filter((r) => pass(r, 'model') && isHit(r)), FACET.model), 0, 'model'),
@@ -1400,7 +1493,7 @@ function goReports(set) {
 const cardBody = (k) => CARD[k] && CARD[k].querySelector('.cb');
 function fillKpi(k, value, small, note, o = {}) {
   const box = cardBody(k); if (!box) return; box.replaceChildren();
-  const row = el('div', null, 'kv1'), v = el(o.go ? 'button' : 'span', String(value), 'val' + (o.lead ? ' lead' : ''));
+  const row = el('div', null, 'kv1'), v = el(o.go ? 'button' : 'span', String(value), 'val' + (o.lead ? ' lead' : '') + (o.ok ? ' ok' : ''));
   if (o.go) { v.type = 'button'; v.title = 'Show these reports'; v.addEventListener('click', o.go); }
   row.append(v); if (small) row.append(el('small', small));
   box.append(row, ...(o.extra || [])); if (note) box.append(el('p', note, 'knote'));
@@ -1419,6 +1512,23 @@ function kpis(base, hit) {
   fillKpi('restart', restarted.length, 'of ' + base.length, restarted.filter((r) => r.ioc === 0).length + ' of them look clean.', { go: restarted.length ? () => goReports(() => { F.restart = 'yes'; }) : null });
   const k = base.filter((r) => r.goodcloud === 'on' || r.goodcloud === 'off'), on = k.filter((r) => r.goodcloud === 'on'), off = k.filter((r) => r.goodcloud === 'off'), h = (x) => x.filter((r) => r.ioc > 0).length, pc = (x) => (x.length ? Math.round(h(x) / x.length * 100) + '%' : '–');
   fillKpi('gc', pc(on), k.length ? 'off: ' + pc(off) : '', k.length ? `${h(on)} of ${on.length} with it on, ${h(off)} of ${off.length} with it off.` : 'No report says yet. That comes with script 2.23 and later.');
+}
+// devices with traces that checked again: the devices of this selection, whatever the
+// result filter and this card's own filter say
+function healed() {
+  const devs = new Set(pool.filter((r) => r.dev && pass(r, ['result', 'recheck'])).map((r) => r.dev)), hs = [...devs].map((d) => HEAL.get(d)).filter(Boolean);
+  const by = (s) => hs.filter((x) => x.state === s), upd = by('update'), same = by('same'), still = by('still'), clean = upd.length + same.length;
+  const go = (v) => () => goReports(() => { F.recheck = v; F.result = 'all'; });
+  const split = el('div', null, 'split'), lg = el('ul', null, 'legend');
+  for (const [name, n, c, v] of [['After a firmware change', upd.length, 'var(--accent)', 'update'], ['Same firmware', same.length, 'color-mix(in srgb, var(--accent) 40%, var(--surface-2))', 'same'], ['Traces still there', still.length, 'var(--danger)', 'still']]) {
+    const s = el('i'); s.style.cssText = `flex:${Math.max(n, .001)};background:${c}`; hover(s, `${name}\n${n} devices`); split.append(s);
+    const li = el('li'), b = el(n ? 'button' : 'span'), sw = el('i'); sw.style.background = c; b.append(sw, name, el('b', n));
+    if (n) { b.type = 'button'; b.title = 'Show these devices'; b.addEventListener('click', go(v)); }
+    li.append(b); lg.append(li);
+  }
+  const vc = [...upd, ...same].filter((x) => x.last.vendor_cleanup === 'on').length;
+  const note = hs.length ? (clean ? `${vc} of the ${clean} clean ones run firmware with GL.iNet’s cleanup. ` : '') + 'The newest report of each device counts.' : 'No device with traces has checked again yet, or none in this selection. Needs the device ID (script 2.9 and later).';
+  fillKpi('healed', clean.toLocaleString('en'), 'of ' + hs.length.toLocaleString('en') + ' devices that checked again', note, { ok: true, extra: hs.length ? [split, lg] : [], go: clean ? go('clean') : null });
 }
 function files(hit) {
   const fm = new Map();
@@ -1470,6 +1580,9 @@ function tagsOf(r) {
   if (r.restarted) tags.append(el('span', 'Restarted since the attack', 'tag warn'));
   if (r.persist) tags.append(el('span', 'rc.local or crontab changed', 'tag'));
   if (r.reports > 1) tags.append(el('span', r.reports + ' reports from this device', 'tag'));
+  const h = r.dev && HEAL.get(r.dev);
+  if (h && r !== h.last && r.ioc > 0) { const t = el('span', h.state === 'still' ? 'Traces still there on a later check' : 'Clean on a later check', 'tag ' + (h.state === 'still' ? 'bad' : 'ok')); hover(t, `Newest report from this device: ${fmt(h.last.recv)} UTC\nfirmware ${h.last.firmware}`); tags.append(t); }
+  if (h && r === h.last && h.state !== 'still') { const t = el('span', 'Had traces before', 'tag warn'); hover(t, `Last report with traces: ${fmt(h.hit.recv)} UTC\nfirmware ${h.hit.firmware}`); tags.append(t); }
   if (r.odd.length) { const t = el('span', 'Unusual', 'tag odd'); hover(t, 'Only on this device:\n' + r.odd.slice(0, 4).map((o) => o[0] + ': ' + o[1].slice(0, 90)).join('\n')); tags.append(t); }
   return tags;
 }
@@ -1512,6 +1625,18 @@ function detailBody(r) {
   for (const [k, v] of [['Received', fmt(r.recv) + ' UTC'], ['Checked', fmt(ts(r.checked_at)) + ' UTC'], ['Device', `${r.model} · ${r.platform}`], ['Firmware', r.firmware], ['Script', r.tool + ' (format ' + r.schema + ')'], ['Device ID', r.dev || 'none (older script, or not sent)'], ['Note from the sender', r.note || (r.schema >= 9 ? 'none' : 'not reported (older script)')], ['Up since', fmt(r.upSince) + ' UTC' + (r.restarted ? ' (restarted since the attack)' : '')], ['Counts', `${r.ioc} known traces · ${r.persist} persistence · ${r.review} to review`], ['GoodCloud at the check', r.goodcloud ? r.goodcloud + (r.cloud_client ? ' · client ' + r.cloud_client : '') : 'not reported (older script)'], ['AstroWarp', r.astrowarp || 'not reported (older script)'], ['Bound to a GoodCloud account', r.cloud_bound || 'not reported (older script)'], ['Remote SSH / remote web', r.rtty_ssh ? r.rtty_ssh + ' / ' + r.rtty_web : 'not reported (older script)'], ['State file size', r.state_file_size === null ? 'not reported (older script)' : r.state_file_size === -1 ? 'no such file' : r.state_file_size === 0 ? 'empty, as the attack leaves it' : r.state_file_size + ' B']])
     { const dt = el('dt', k); if (FIELD_WHY[k]) dt.append(info(FIELD_WHY[k])); kv.append(dt, el('dd', v)); }
   sec('Device and check', kv);
+  // every report this device sent, oldest first: what changed between them
+  const mine = (r.dev && DEVREP.get(r.dev)) || [];
+  if (mine.length > 1) {
+    const ul = el('ul', null, 'devreps');
+    for (const x of mine) {
+      const li = el('li'), b = el('button', null, x === r ? 'cur' : ''), res = x.ioc > 0 ? `${x.ioc} known trace${x.ioc === 1 ? '' : 's'}` : x.bd ? 'Older backdoor' : 'Clean';
+      b.type = 'button'; b.append(el('span', fmt(x.recv), 'tnum'), el('span', x.firmware, 'dim'), el('span', res, 'tag ' + (x.ioc > 0 ? 'bad' : x.bd ? 'warn' : 'ok')));
+      if (x === r) b.disabled = true; else { b.title = 'Open this report'; b.addEventListener('click', () => openDrawer({ mode: 'report', id: String(x.id) })); }
+      li.append(b); ul.append(li);
+    }
+    sec(`Reports from this device (${mine.length}), oldest first`, ul, true);
+  }
   const tl = el('dl', null, 'kv');
   for (const [k, v] of [['Remote shell started', r.shell_started], ['Shell pipe, last data', r.pipe_time], ['Cloud handler first ran', r.state_file_first], ['Cloud handler last ran', r.state_file_time], ['First trace', isNaN(r.first) ? '' : fmt(r.first) + ' UTC']]) if (v)
     { const dt = el('dt', k); if (FIELD_WHY[k]) dt.append(info(FIELD_WHY[k])); tl.append(dt, el('dd', v.includes('UTC') && v.length > 20 ? fmt(ts(v)) + ' UTC' : v)); }
@@ -1564,7 +1689,7 @@ $('prev').addEventListener('click', () => { page--; render(); }); $('next').addE
 for (const b of $('zoom').children) { b.setAttribute('aria-pressed', String(b.dataset.v === zoom)); b.addEventListener('click', () => { zoom = b.dataset.v; F.bin = null; for (const o of $('zoom').children) o.setAttribute('aria-pressed', String(o === b)); render(); }); }
 addEventListener('resize', () => { clearTimeout(qt); qt = setTimeout(render, 150); });
 $('csv').addEventListener('click', () => {
-  const cols = [['received_utc', (r) => fmt(r.recv)], ['device_id', (r) => r.dev], ['reports_from_device', (r) => r.reports], ['model', (r) => r.model], ['platform', (r) => r.platform], ['firmware', (r) => r.fw], ['firmware_as_reported', (r) => r.firmware], ['unusual', (r) => r.odd.map((o) => o[0]).join(' ')], ['script', (r) => r.tool], ['class', (r) => r.cls], ['known_traces', (r) => r.ioc], ['persistence', (r) => r.persist], ['review', (r) => r.review],
+  const cols = [['received_utc', (r) => fmt(r.recv)], ['device_id', (r) => r.dev], ['reports_from_device', (r) => r.reports], ['later_check', (r) => { const h = HEAL.get(r.dev); return h ? { update: 'clean_other_firmware', same: 'clean_same_firmware', still: 'traces_still' }[h.state] : ''; }],['model', (r) => r.model], ['platform', (r) => r.platform], ['firmware', (r) => r.fw], ['firmware_as_reported', (r) => r.firmware], ['unusual', (r) => r.odd.map((o) => o[0]).join(' ')], ['script', (r) => r.tool], ['class', (r) => r.cls], ['known_traces', (r) => r.ioc], ['persistence', (r) => r.persist], ['review', (r) => r.review],
     ['remote_shell', (r) => r.shell], ['gl_helper', (r) => r.implant], ['first_trace_utc', (r) => fmt(r.first)], ['shell_ports', (r) => r.shell_ports.join(' ')], ['up_since_utc', (r) => fmt(r.upSince)], ['restarted_since_attack', (r) => r.restarted], ['state_file_time_utc', (r) => r.state_file_time.replace(' UTC', '')], ['state_file_size', (r) => (r.state_file_size === null ? '' : r.state_file_size)], ['astrowarp', (r) => r.astrowarp], ['goodcloud', (r) => r.goodcloud], ['cloud_bound', (r) => r.cloud_bound], ['remote_ssh', (r) => r.rtty_ssh], ['remote_web', (r) => r.rtty_web], ['cloud_client', (r) => r.cloud_client], ['review_items', (r) => r.review_items.map((i) => i.kind + ' ' + i.path).join('; ')], ['findings', (r) => r.findings.join('; ')], ['file_hashes', (r) => r.files.map((f) => f.path + '=' + f.sha256).join('; ')]];
   // a leading = + - @ would be run as a formula by a spreadsheet
   const cell = (v) => { let s = String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
