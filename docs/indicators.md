@@ -86,9 +86,10 @@ This script also detects:
   here-documents with a quoted end word (`<< "E O F"`) and `{ crontab -l; echo ...; } |
   crontab -`. Host names count in any case (`GL-INET.TOP`), and `//` or `/./` in a path
   changes nothing. Quoted text that is only data does not make a command: the comment of
-  a firewall rule and what `logger`, `echo` or `printf` put in the log or on the screen,
-  so `--comment "block nc shell"` next to the attacker's address is a block, not a
-  download. The patterns of a `case` on one line are no commands either. The exact rules
+  a firewall rule and what `logger` writes to the log, so `--comment "block nc shell"`
+  next to the attacker's address is a block, not a download. What `echo` or `printf`
+  write still counts, because a group or a loop around them can send it to `sh` or into
+  a file. The patterns of a `case` on one line are no commands either. The exact rules
   are in the script and its tests.
 
   `crond -i /tmp/.log`, the process GL.iNet's check looks for, is the name the malware

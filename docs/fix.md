@@ -46,9 +46,9 @@ Part of the [gl-helper triage script](../README.md).
 
 Changes go through the merged root filesystem, so the overlay stays consistent while it
 is mounted. With `--root`, a path is left alone when a directory on its way is a link
-that leads out of the root (an image's `etc/glinet -> ../../victim`): `--fix` says so and
-exits 3, and the archive names it in `files/NOT-COPIED.txt` instead of copying what lies
-outside (since 2.55). `REVIEW` items are never touched (apart from the malware's lines in the
+that leads out of the root (an image's `etc/glinet -> ../../victim`), and a file that is
+itself a link is not rewritten: `--fix` says so and exits 3, and the archive names it
+in `files/NOT-COPIED.txt` instead of copying what lies outside (since 2.55). `REVIEW` items are never touched (apart from the malware's lines in the
 firewall's start script, see step 6), and neither is the
 [older backdoor](indicators.md#the-older-backdoor-urandom_seed--ulogd): with only that on the device
 `--fix` changes nothing and exits 1, with both it removes the gl-helper indicators and

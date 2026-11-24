@@ -23,6 +23,11 @@ Part of the [gl-helper triage script](../README.md).
 - The script reads shell the way `sh` would in the common cases, not in every case. A
   command that is put together while it runs (from pieces, from another file, from text
   that `eval` builds) is not seen. A variable counts only where the same file sets it.
+  Text in single quotes that runs over more than 2,000 lines or 64 KB, and a file that
+  is still over 1 MB without its comments and empty lines, are read line by line: there
+  a start that only the lines around it make one can go unseen, and a line that only
+  looks like a start can count as one (since 2.55, so that such a file does not hold the
+  check up for minutes).
 - The script only reads regular files. A named pipe or a link into `/proc` in a place it
   scans is not opened, because reading one could block the run for good; where such a
   thing stands in for `rc.local` or the root crontab it is listed as `REVIEW`.

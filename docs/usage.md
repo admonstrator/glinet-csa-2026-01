@@ -83,7 +83,8 @@ device in use the list runs to hundreds or thousands of lines: settings, install
 packages, logs. It is not a finding and not a verdict: the script judges nothing here,
 writes no archive and sends no report. Anyone with root can set a file's time, and a
 year before 2020 means the clock was not set yet. Control characters in names are shown
-as `?`, so a file name cannot change your terminal. A directory the overlay hides as a
+as `?`, so a file name cannot change a terminal that reads UTF-8. A terminal set to an
+8-bit character set may still act on a single byte from 0x80 to 0x9F in a name. A directory the overlay hides as a
 whole (an opaque directory) does not show the base image's files in it as removed. Only
 what a file holds is compared: a change of its mode or owner alone is not listed.
 
