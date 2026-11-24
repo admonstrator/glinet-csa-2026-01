@@ -22,7 +22,8 @@ itself.
   update anyway. Then only the encrypted connection protects the download. Where
   nobody can be asked, add `--unsigned`.
 - **Whatever fails, the existing script stays.** The previous version is kept next
-  to it as `gl-helper-triage.sh.old`.
+  to it as `gl-helper-triage.sh.old`. The new script keeps the old one's mode, so one
+  started as `./gl-helper-triage.sh` still starts (since 2.55).
 
 What it does not protect against: an attacker who is root on the device, or who controls
 the repository the script comes from. The first download is protected by the encrypted

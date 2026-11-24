@@ -84,7 +84,8 @@ packages, logs. It is not a finding and not a verdict: the script judges nothing
 writes no archive and sends no report. Anyone with root can set a file's time, and a
 year before 2020 means the clock was not set yet. Control characters in names are shown
 as `?`, so a file name cannot change your terminal. A directory the overlay hides as a
-whole (an opaque directory) does not show the base image's files in it as removed.
+whole (an opaque directory) does not show the base image's files in it as removed. Only
+what a file holds is compared: a change of its mode or owner alone is not listed.
 
 Without an overlay but with a base image, the running system is compared with the base
 image. With neither, the script says that there is nothing to compare with and exits

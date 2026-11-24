@@ -1199,6 +1199,112 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "the netstat that shadows the link is IOC applet-hijack (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *applet-hijack  */usr/bin/netstat" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== second review of 2.55: a copy of this script, addresses from the environment"
+D=$(mkscen r255s1 "$OWL"); U=$D/u
+mkdir -p "$U/usr/bin"; cp "$T" "$U/usr/bin/gl-helper-triage.sh"
+mnt "$D" "$OWL"
+GL_TRIAGE_RESULT_URL='http://127.0.0.1:1@evil.example/' run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "a copy of the script in /usr/bin is no IOC (exit $rc)" '[ $rc = 0 ] && ! grep -q "IOC .*/usr/bin/gl-helper-triage.sh" "$D/check.txt"'
+expect "an address of this machine with a user part (127.0.0.1:1@host) is not taken" 'grep -q "csa.gl-i.net/#" "$D/check.txt" && ! grep -q evil.example "$D/check.txt"'
+umount "$D/m"
+
+echo "=== second review of 2.55: line breaks at the end of a name and in a directory's name"
+D=$(mkscen r255s2 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d" "$U/etc/config/.gl" "$U/etc/init.d/x
+etc/config" "$U/etc/config" "$D/cwd/etc/config"
+echo x >"$U/etc/config/.gl/gl-helper"
+printf '#!/bin/sh\n/etc/config/.gl/gl-helper &\n' >"$U/etc/init.d/svc
+"
+printf '#!/bin/sh /etc/rc.common\nSTART=50\n' >"$U/etc/init.d/svc"
+echo "option ipaddr 10.9.8.1" >"$U/etc/init.d/x
+etc/config/network"
+echo "option ipaddr 10.9.8.1" >"$U/etc/config/network"
+echo '/etc/config/.gl/gl-helper &' >"$D/cwd/etc/config/network"
+mnt "$D" "$OWL"
+(cd "$D/cwd" && run "$D" "$OWL" --check >"$D/check.txt"); rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "a name that ends in a line break is IOC as itself, the owner's file of the same name is not (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  *?/etc/init.d/svc?" "$D/check.txt" && ! grep -q "IOC  *persist-ref  */etc/init.d/svc *$" "$D/check.txt"'
+expect "the pieces of a directory's name with a line break are no paths of their own" '! grep -q "IOC .*/etc/config/network" "$D/check.txt"'
+(cd "$D/cwd" && run "$D" "$OWL" --fix --no-report >"$D/fix.txt" 2>&1); rc=$?
+expect "--fix removes the file with the line break and leaves the owner's files (exit $rc)" '[ $rc = 2 ] && [ -f "$D/m/etc/init.d/svc" ] && grep -q START=50 "$D/m/etc/init.d/svc" && [ ! -e "$D/m/etc/init.d/svc
+" ] && grep -q 10.9.8.1 "$D/m/etc/config/network"'
+umount "$D/m"
+
+echo "=== second review of 2.55: starts the parser did not see, and an owner's case"
+D=$(mkscen r255s3 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d" "$U/etc/crontabs"
+printf '# Put your custom commands here\n(sleep 5; /etc/config/.gl/gl-helper) >/dev/null 2>&1 &\nexit 0\n' >"$U/etc/rc.local"
+printf '#!/bin/sh\nsh<<EOF\n/etc/config/.gl/gl-helper &\nEOF\n' >"$U/etc/init.d/hd"
+printf '#!/bin/sh\ncat << "E O F" > /dev/null\nx\nE O F\n/etc/config/.gl/gl-helper &\n' >"$U/etc/init.d/qhd"
+printf '#!/bin/sh\n{ crontab -l; echo "*/3 * * * * /etc/config/.gl/watch.sh"; } | crontab -\n' >"$U/etc/init.d/grp"
+printf '#!/bin/sh\nfor f in /x /y; do case $f in /etc/config/.gl/gl-helper|/tmp/.gl/gl-helper) rm -f "$f" ;; esac; done\n' >"$U/etc/init.d/guard"
+printf '#!/bin/sh\ncase "$1" in\nstart) (sleep 5; /etc/config/.gl/gl-helper) >/dev/null 2>&1 &\n;;\nesac\n' >"$U/etc/init.d/cs"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "( ...; prog ) &, also inside a case, sh<<EOF, a quoted end word and { echo; } | crontab - each IOC persist-ref (exit $rc)" '[ $rc = 1 ] && (for p in rc.local init.d/hd init.d/qhd init.d/grp init.d/cs; do grep -q "IOC  *persist-ref  */etc/$p" "$D/check.txt" || exit 1; done)'
+expect "a case on one line that names the malware's paths in its patterns starts nothing" '! grep -q "IOC .*/etc/init.d/guard" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== second review of 2.55: a tool's name in a comment or a log text fetches nothing"
+D=$(mkscen r255s4 "$OWL"); U=$D/u
+mkdir -p "$U/etc"
+printf '# Put your custom commands here\n/root/start-vpn.sh\niptables -I OUTPUT -d 65.20.71.131 -m comment --comment "block nc shell" -j DROP\nlogger -t csa "blocked wget to 65.20.71.131"\nexit 0\n' >"$U/etc/rc.local"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW|INFO) ' "$D/check.txt"
+expect "the owner's block with nc and wget in its texts is no IOC (exit $rc)" '[ $rc = 0 ] && ! grep -q "IOC .*/etc/rc.local" "$D/check.txt"'
+run "$D" "$OWL" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix leaves that rc.local (exit $rc)" '[ $rc = 0 ] && grep -q start-vpn "$D/m/etc/rc.local"'
+umount "$D/m"
+
+echo "=== second review of 2.55: control characters from the package list, and from UTF-8"
+D=$(mkscen r255s5 "$OWL"); U=$D/u
+mkdir -p "$U/usr/lib/opkg" "$U/etc/init.d"
+printf 'Package: gl-sdk4-cloud\nVersion: \033[2J\033[1;1rX\nStatus: install ok installed\n\n' >"$U/usr/lib/opkg/status"
+printf '#!/bin/sh\n' >"$U/etc/init.d/$(printf 'a\302\233[2Jb')"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "no escape from the package list or a name in UTF-8 reaches the screen" '! grep -q "$(printf "\033")" "$D/check.txt" && ! grep -q "$(printf "\302\233")" "$D/check.txt" && grep -q "gl-sdk4-cloud ?\[2J?\[1;1rX" "$D/check.txt" && grep -q "/etc/init.d/a?\[2Jb" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== second review of 2.55: --root and a linked directory that leads out of the image"
+D=$(mkscen r255s6 "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl" "$D/victim/.cache"
+echo x >"$U/etc/config/.gl/gl-helper"
+echo notes >"$D/victim/.cache/owner-notes.txt"
+ln -s ../../victim "$U/etc/glinet"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix removes nothing outside the root (exit $rc)" '[ -f "$D/victim/.cache/owner-notes.txt" ] && [ ! -e "$D/m/etc/config/.gl" ]'
+a=$(ls "$D/out"/*.tar.gz 2>/dev/null | head -n 1)
+expect "the archive holds nothing from outside the root and names what it left out" '[ -n "$a" ] && ! tar -tzf "$a" | grep -q owner-notes && tar -xzOf "$a" --wildcards "*NOT-COPIED.txt" | grep -q "^/etc/glinet/.cache.*a directory on its way is a link"'
+umount "$D/m"
+
+echo "=== second review of 2.55: --changes with line breaks in a link and in a directory"
+D=$(mkscen r255s7 "$OWL"); U=$D/u
+mkdir -p "$U/etc" "$U/x
+etc" "$D/cwd/etc"
+ln -s "/tmp/n
+removed  2026-11-20 21:03:15  /etc/passwd" "$U/etc/lnk"
+echo s >"$U/x
+etc/shadow"
+echo s >"$D/cwd/etc/shadow"
+mnt "$D" "$OWL"
+(cd "$D/cwd" && run "$D" "$OWL" --changes >"$D/chg.txt" 2>&1); rc=$?
+cat "$D/chg.txt"
+expect "--changes prints no line that a link's target or a directory's name made up (exit $rc)" '[ $rc = 0 ] && ! grep -q "^removed .*/etc/passwd$" "$D/chg.txt" && ! grep -q "^new .*  /etc/shadow$" "$D/chg.txt" && grep -q "^new .*/etc/lnk -> /tmp/n?removed" "$D/chg.txt"'
+umount "$D/m"
+
+echo "=== second review of 2.55: a large init script is read in time"
+D=$(mkscen r255s8 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+{ echo '#!/bin/sh'; i=0; while [ $i -lt 2000 ]; do echo "echo 1 >/sys/class/gpio/gpio$i/value"; i=$((i + 1)); done; } >"$U/etc/init.d/gpio-setup"
+mnt "$D" "$OWL"
+s=$(date +%s); run "$D" "$OWL" --check >"$D/check.txt"; rc=$?; e=$(($(date +%s) - s))
+expect "a 2000-line init script takes no more than 15 s ($e s, exit $rc)" '[ $rc = 0 ] && [ $e -le 15 ]'
+umount "$D/m"
+
 echo "=== what the base image's busybox loads must be the base image's (issue 8)"
 OWB=$BASE/openwrt-rom-libs
 cp -a "$OWL" "$OWB"; mkdir -p "$OWB/lib"
@@ -1477,10 +1583,11 @@ if [ -n "$SIGNIFY" ] && command -v python3 >/dev/null 2>&1; then
 	ver() { sed -n 's/^VERSION=//p' "$W/dev/t.sh"; }
 	(cd "$W/www" && exec python3 -m http.server 18473 --bind 127.0.0.1 >/dev/null 2>&1) & SRV=$!
 	sleep 1
-	mkver 2.60 "$W/dev/t.sh"; serve 2.61 k1
+	mkver 2.60 "$W/dev/t.sh"; chmod 755 "$W/dev/t.sh"; serve 2.61 k1
 	upd; rc=$?
 	[ $rc = 0 ] || { echo "    exit $rc, and the script said:"; sed 's/^/    | /' "$W/out.txt"; }
 	expect "a newer version with a good signature replaces the script, the old one is kept" '[ $rc = 0 ] && [ "$(ver)" = 2.61 ] && grep -q "^VERSION=2.60$" "$W/dev/t.sh.old" && grep -q "Updated to version 2.61" "$W/out.txt" && cmp -s "$W/dev/t.sh" "$W/www/fix"'
+	expect "the new script keeps the mode of the old one" '[ "$(stat -c %a "$W/dev/t.sh")" = 755 ] && [ "$(stat -c %a "$W/dev/t.sh.old")" = 755 ]'
 	upd; rc=$?
 	expect "the same version again: nothing to do" '[ $rc = 0 ] && grep -q "This is the current version" "$W/out.txt" && [ "$(ver)" = 2.61 ]'
 	serve 2.62 k1; echo 'echo added on the way' >>"$W/www/fix"

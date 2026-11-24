@@ -27,7 +27,8 @@ Part of the [gl-helper triage script](../README.md).
    2.55): the overlay hid the firmware's own link as well.
 
    A file in an autostart place with a line break in its name that starts the malware is
-   removed; other files with such names are left (since 2.55).
+   removed; other files with such names are left (since 2.55). A file of the same name
+   without the line break, the owner's, stays as it is.
 6. Removes only the implant's lines (and lines that fetch from its servers) from sysupgrade
    keep lists, from the running crontabs `/tmp/gl_crontabs/root` and
    `/var/spool/cron/crontabs/root`, from the firmware's
@@ -44,7 +45,10 @@ Part of the [gl-helper triage script](../README.md).
    `/tmp/gl_crontabs` too), restarts cron and checks again.
 
 Changes go through the merged root filesystem, so the overlay stays consistent while it
-is mounted. `REVIEW` items are never touched (apart from the malware's lines in the
+is mounted. With `--root`, a path is left alone when a directory on its way is a link
+that leads out of the root (an image's `etc/glinet -> ../../victim`): `--fix` says so and
+exits 3, and the archive names it in `files/NOT-COPIED.txt` instead of copying what lies
+outside (since 2.55). `REVIEW` items are never touched (apart from the malware's lines in the
 firewall's start script, see step 6), and neither is the
 [older backdoor](indicators.md#the-older-backdoor-urandom_seed--ulogd): with only that on the device
 `--fix` changes nothing and exits 1, with both it removes the gl-helper indicators and

@@ -82,9 +82,14 @@ This script also detects:
   crontab reads, what `$( )` runs anywhere on a line, the program behind `xargs`,
   `flock`, `trap`, `su -c` and `find -exec`, a program or server held in a variable that
   the same file sets, a command string run by `sh -c "$CMD"` or `eval`, and a file that
-  the same lines write and then run. Host names count in any case (`GL-INET.TOP`), and
-  `//` or `/./` in a path changes nothing. The exact rules are in the script and its
-  tests.
+  the same lines write and then run, `( ...; prog ) &`, `sh<<EOF` without a blank,
+  here-documents with a quoted end word (`<< "E O F"`) and `{ crontab -l; echo ...; } |
+  crontab -`. Host names count in any case (`GL-INET.TOP`), and `//` or `/./` in a path
+  changes nothing. Quoted text that is only data does not make a command: the comment of
+  a firewall rule and what `logger`, `echo` or `printf` put in the log or on the screen,
+  so `--comment "block nc shell"` next to the attacker's address is a block, not a
+  download. The patterns of a `case` on one line are no commands either. The exact rules
+  are in the script and its tests.
 
   `crond -i /tmp/.log`, the process GL.iNet's check looks for, is the name the malware
   gives its own process.
