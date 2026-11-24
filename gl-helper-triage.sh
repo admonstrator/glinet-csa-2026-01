@@ -3489,7 +3489,13 @@ offer_report() {
 	grep -q '^"commands": \[\],$' "$TMP/report.json" || extra="$extra, the attacker's commands"
 	nl=0; [ -s "$TMP/rlines" ] && nl=$(wc -l <"$TMP/rlines" | tr -d ' ')
 	nr=0; [ -s "$TMP/revlines" ] && nr=$(wc -l <"$TMP/revlines" | tr -d ' ')
-	if [ "$ioc" = 0 ]; then
+	if [ "$ioc" = 0 ] && has_ioc lookup-bad; then
+		# the report was built before the fingerprint check and knows nothing of its answer
+		ysay "The script itself found no known traces, and the report says so. The file the community"
+		ysay "list knows as malware goes along with its fingerprint, as a file listed for review."
+		ysay "Sent: model, firmware, time of the check, the cloud settings (on or off) and that the"
+		ysay "script itself found no known traces."
+	elif [ "$ioc" = 0 ]; then
 		ysay "Nothing known was found. Sending that helps too: it shows which devices were not hit."
 		ysay "Sent: model, firmware, time of the check, the cloud settings (on or off) and that no"
 		ysay "known traces were found."

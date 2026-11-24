@@ -20,8 +20,10 @@ The page behind it explains what was found, what that means and what to do, in E
 German and Chinese. Over ssh the address often cannot be clicked, so it is short enough to
 type: nine characters, in upper or lower case. They hold the script's version, router or KVM, the
 kinds of findings, whether GoodCloud is on, whether the device was restarted since the
-attacks began, what `--fix` did and whether other changes are listed for review. The ninth
-character is a check, so a mistyped code is refused instead of explaining another result.
+attacks began, what `--fix` did and whether other changes are listed for review (since
+2.60 also whether the fingerprint check found one of them on the community list as known
+malware, see [lookup.md](lookup.md)). The ninth character is a check, so a mistyped code is
+refused instead of explaining another result.
 
 Where the script knows the model and its firmware version, five more characters follow
 after a dash (`csa.gl-i.net/#AA006011D-2PJ2W`, since 2.45). With them the page says whether

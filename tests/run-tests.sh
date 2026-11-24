@@ -1882,6 +1882,7 @@ EOF
 	expect "known_bad: a clean device is INFECTED, exit 1, by IOC lookup-bad, with a verdict of its own" '[ $rc = 1 ] && grep -q "KNOWN BAD    tmp-file        /tmp/.dg" "$K/bad.txt" && grep -q "Summary: IOC=1 " "$K/bad.txt" && grep -q "IOC      lookup-bad: a file listed for review that the community list knows as malware. --fix does NOT remove it." "$K/bad.txt" && grep -q "Verdict: INFECTED - a file listed for review is known malware (community list)" "$K/bad.txt"'
 	expect "known_bad: nothing says --fix removes it or that gl-helper was found; the REVIEW lines stay" '! grep -q "fix removes it" "$K/bad.txt" && ! grep -q "gl-helper indicators found" "$K/bad.txt" && [ "$(grep -o "REVIEW=[0-9]*" "$K/bad.txt" | tail -n 1)" = "$(grep -o "REVIEW=[0-9]*" "$K/nolookup.txt" | tail -n 1)" ]'
 	expect "known_bad: the next steps still say to reinstall" 'grep -q "known malware on the community list. --fix does not remove it" "$K/bad.txt" && grep -q "Reinstall the firmware" "$K/bad.txt"'
+	expect "known_bad: the offer of the report does not say that nothing was found" '! grep -q "Nothing known was found" "$K/bad.txt" && grep -q "The script itself found no known traces, and the report says so." "$K/bad.txt"'
 	codebits "$K/nolookup.txt"; codebits "$K/bad.txt"
 	expect "known_bad: the field for review in the result code is 2, the rest as without the check" '[ "$(codebits "$K/bad.txt")" = "$(codebits "$K/nolookup.txt" | awk "{ print \$1, \$2, 2, \$4 }")" ] && codebits "$K/nolookup.txt" | grep -q " 1 1$"'
 	ktable tmp/.dg known_safe
