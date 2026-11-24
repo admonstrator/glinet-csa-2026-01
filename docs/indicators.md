@@ -77,12 +77,19 @@ This script also detects:
 
   The script reads commands roughly as `sh` does: quotes, line continuations, `;`, `&&`
   and `|`. Where a line can be read two ways, it checks both. What `echo` or `printf`
-  writes into a crontab or `rc.local` is read as a command too (since 2.54). The exact
-  rules are in the script and its tests.
+  writes into a crontab or `rc.local` is read as a command too (since 2.54). Since 2.55
+  it also reads quotes that go on over several lines, here-documents that a shell or
+  crontab reads, what `$( )` runs anywhere on a line, the program behind `xargs`,
+  `flock`, `trap`, `su -c` and `find -exec`, a program or server held in a variable that
+  the same file sets, a command string run by `sh -c "$CMD"` or `eval`, and a file that
+  the same lines write and then run. Host names count in any case (`GL-INET.TOP`), and
+  `//` or `/./` in a path changes nothing. The exact rules are in the script and its
+  tests.
 
   `crond -i /tmp/.log`, the process GL.iNet's check looks for, is the name the malware
   gives its own process.
-- a `netstat` link to busybox that was made on November 20 or 21 (`installer-trace`).
+- a `netstat` link to busybox that was made between November 19 and 21 (`installer-trace`;
+  before 2.55 from November 20: a forum user recorded a KVM taken over on November 19).
   The anonymous reports show it on KVMs, always made on the evening of the attack, on
   some next to the malware's files and on others with nothing else left. With only this,
   the verdict is `ATTACKED`: the installer was at work, its files are gone. A link made
@@ -112,7 +119,18 @@ This script also detects:
 - autostart and config files that reference implant paths: crontabs, `rc.local`, init
   scripts, hotplug, profile, and **sysupgrade keep lists** (an entry there makes the
   implant survive a firmware update with "keep settings"),
-- implant persistence even when the marker files were deleted.
+- implant persistence even when the marker files were deleted,
+- a link in an autostart place that leads to a file of the malware, such as
+  `/etc/rc.d/S98x -> /etc/config/.gl/boot.sh` (`persist-ref`, since 2.55),
+- a file in an autostart place with a line break in its name (since 2.55). Such a name
+  is shown with `?` for the line break. The file is read: when it starts the malware it
+  is `IOC persist-ref` and `--fix` removes it, otherwise it is `REVIEW odd-name`,
+- a tool in place of a busybox applet that is neither a program nor a script, although
+  the list of packages names a package for it (`REVIEW applet-replaced`, since 2.55):
+  the list lies in the overlay as well and can be written like any other file,
+- on a running device, an overlay whose layer of changes cannot be seen because
+  something is mounted over it (`REVIEW overlay-hidden`, since 2.55). The check then
+  reads the running system as it does without an overlay.
 
 ## Running processes
 
@@ -147,7 +165,8 @@ and says to treat a router with such a shell as compromised. The script reports 
 `/etc/mp_ip_mapping_info` is the state file that the cloud handler writes at the end of
 each run. The attack's message leaves it empty, and the file stays after a restart while
 the firewall rule does not. So the script reports as `IOC` (`cloud-command`) a state
-file that is empty, was written on or after November 20, 2026, and sits on a device where
+file that is empty, was written on or after November 19, 2026 (before 2.55: November 20;
+a forum user recorded a KVM taken over on November 19), and sits on a device where
 AstroWarp is switched off. In every other case the file is `REVIEW` with its time and
 size, because it is normal on a router that uses AstroWarp. Firmware with GL.iNet's fix
 writes the file empty at its own start, together with its other state files; the script

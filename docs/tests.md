@@ -26,3 +26,9 @@ only, together with the tests of the worker and dashboard
 Without `KVM_LOWER` only the OpenWrt scenarios run (synthetic base image). The script
 was also run in check and archive mode on a GL.iNet router with firmware 4.11
 (OpenWrt 25.12).
+
+The tests point the script at a local address with `GL_TRIAGE_REPORT_URL`,
+`GL_TRIAGE_RESULT_URL` and `GL_TRIAGE_UPDATE_URL`. Since 2.55 the script takes these
+only when they name this machine (`http://127.0.0.1`), and `GL_TRIAGE_ATTACK_UNTIL` only
+when it moves the end of the attack's window later (a year from 2100 on): a value set on
+a device can neither send the report somewhere else nor make a trace count less.

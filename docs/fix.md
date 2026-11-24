@@ -2,7 +2,9 @@
 
 Part of the [gl-helper triage script](../README.md).
 
-1. Writes and verifies the evidence archive. No archive, no changes.
+1. Writes and verifies the evidence archive. No archive, no changes. A file already
+   there under the archive's name is never written over; a second run in the same
+   second gets a number in its name (since 2.55).
 2. Holds every `crond` until step 8, so that cron cannot start the malware again while
    its files go (since 2.55). Stops implant processes (SIGSTOP all, then SIGKILL), each
    only while its number still belongs to the process that was found (same start time).
@@ -11,14 +13,21 @@ Part of the [gl-helper triage script](../README.md).
 4. Resets `rc.local` and the root crontab to the base image version, or removes them
    if the base image has none, but only when the malware itself was found (its files,
    autostart entries, processes, connections to its servers or the `gl-agent` key). The
-   previous versions are in the archive.
+   previous versions are in the archive. An `rc.local` that differs from the base image
+   only by lines the firmware writes itself (`gl_util.sh`, `remount_ubifs`) is left as it
+   is (since 2.55).
 5. Restores replaced applets from the base image and removes other autostart files that
    start the implant, including OpenWrt `rc.d` links to removed init scripts.
 
    Where there is no base image to compare with (a KVM, which has no `/rom`, or `--root`
    without `--lower`), steps 4 and 5 take out only the malware's lines, as in the
    firewall's start script, and leave a file without such a line as it is: the file may
-   be the firmware's own, such as `/etc/init.d/rcS` (since 2.54).
+   be the firmware's own, such as `/etc/init.d/rcS` (since 2.54). A replaced applet is
+   removed and, where busybox has that applet, put back as a link to busybox (since
+   2.55): the overlay hid the firmware's own link as well.
+
+   A file in an autostart place with a line break in its name that starts the malware is
+   removed; other files with such names are left (since 2.55).
 6. Removes only the implant's lines (and lines that fetch from its servers) from sysupgrade
    keep lists, from the running crontabs `/tmp/gl_crontabs/root` and
    `/var/spool/cron/crontabs/root`, from the firmware's

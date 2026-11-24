@@ -15,8 +15,9 @@ Part of the [gl-helper triage script](../README.md).
 | `--with-secrets` | Keep the private keys and passwords that the script would otherwise take out of the evidence archive. |
 | `--color`, `--no-color` | Force or disable colored output. By default colors are used only on a terminal; `NO_COLOR=1` also turns them off. |
 
-Exit codes: `0` clean, `1` indicators found, `2` fixed and clean, `3` fix incomplete,
-`4` error.
+Exit codes: `0` clean, `1` indicators found, `2` fixed (what `--fix` removes is gone; the
+traces it leaves on purpose, `cloud-command` and `installer-trace`, may still be listed),
+`3` fix incomplete, `4` error.
 
 Every run ends with a section on GoodCloud: when it is on, or cannot be read, the script
 says to switch GoodCloud and AstroWarp off and gives the command. The attack came in

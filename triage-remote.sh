@@ -14,6 +14,8 @@
 # 3 fix incomplete, 4 error).
 
 set -uo pipefail
+# the evidence can hold keys and passwords (--with-secrets): for this user only
+umask 077
 
 here=$(cd "$(dirname "$0")" && pwd)
 script=$here/gl-helper-triage.sh
@@ -35,6 +37,10 @@ while [[ $# -gt 0 ]]; do
 	shift
 done
 [[ $# -ge 1 ]] || { usage; exit 4; }
+# a target that starts with - would be read by ssh as one of its options
+for target in "$@"; do
+	[[ $target != -* ]] || { echo "not a device: $target" >&2; exit 4; }
+done
 [[ -r $script ]] || { echo "missing $script" >&2; exit 4; }
 mkdir -p "$outdir"
 
@@ -42,7 +48,9 @@ mkdir -p "$outdir"
 color=
 [[ -t 1 && -z ${NO_COLOR:-} ]] && color=--color
 
-ctl=$(mktemp -d)
+# short, so that the control socket's path stays under the 104 bytes macOS allows;
+# mktemp -d alone gives a long path in /var/folders there
+ctl=$(mktemp -d /tmp/glt.XXXXXX) || exit 4
 # shellcheck disable=SC2154 # $s is the loop variable inside the trap string
 trap 'for s in "$ctl"/cm-*; do [[ -S $s ]] && ssh -o ControlPath="$s" -O exit x 2>/dev/null; done; rm -rf "$ctl"' EXIT
 
@@ -53,8 +61,9 @@ for target in "$@"; do
 	echo
 	echo "################ $target"
 	cm=(-o ControlMaster=auto -o "ControlPath=$ctl/cm-%C" -o ControlPersist=120 -o ConnectTimeout=10)
+	# each word quoted for the remote shell
 	# shellcheck disable=SC2029 # the options are meant to reach the remote sh
-	run() { ssh ${ssh_opts[@]+"${ssh_opts[@]}"} "${cm[@]}" "$target" "sh -s -- $*" <"$script"; }
+	run() { ssh ${ssh_opts[@]+"${ssh_opts[@]}"} "${cm[@]}" "$target" "sh -s --$(printf ' %q' "$@")" <"$script"; }
 
 	run --check $color
 	rc=$?
@@ -73,7 +82,13 @@ for target in "$@"; do
 		note 4
 		continue
 	fi
-	(cd "$outdir" && sha256sum "${name##*/}" >"${name##*/}.sha256")
+	# sha256sum on Linux, shasum on macOS; the same line either way
+	if command -v sha256sum >/dev/null 2>&1; then
+		(cd "$outdir" && sha256sum "${name##*/}" >"${name##*/}.sha256")
+	else
+		(cd "$outdir" && shasum -a 256 "${name##*/}" >"${name##*/}.sha256")
+	fi
+	[[ -s $name.sha256 ]] || { echo "!! $target: could not compute the archive's sha256"; note 4; continue; }
 	echo "   $(cut -d ' ' -f1 "$name.sha256")  $(du -h "$name" | cut -f1)"
 
 	if (( rc == 0 )); then note 0; continue; fi

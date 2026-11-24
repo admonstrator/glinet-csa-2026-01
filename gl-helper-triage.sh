@@ -33,7 +33,8 @@
 # /overlay/upper (OpenWrt), read-only base image /rom.
 # Test options: --root DIR (merged root, default /), --upper DIR, --lower DIR.
 #
-# Exit codes: 0 clean | 1 IOC found | 2 fixed, no IOC left | 3 fix incomplete | 4 error
+# Exit codes: 0 clean | 1 IOC found | 2 fixed: what --fix removes is gone (traces that only
+#             show the attack, cloud-command and installer-trace, stay) | 3 fix incomplete | 4 error
 #
 # The IOCs come from GL.iNet's own boot cleanup in RM1PE firmware 1.10.2
 # (/etc/init.d/S08overlayfs). That cleanup only fires when one of four marker files
@@ -76,7 +77,7 @@ eab746b6dafc69f829ab23c11bcc80cb6b2f9206f159173e52d3e7c2083b0d7f
 GLH_PACKER='Node hardened executable packer'
 PERSIST="etc/rc.local etc/crontabs/root"
 APPLET_DIRS="bin sbin usr/bin usr/sbin"
-REVIEW_PATHS="etc/init.d etc/rc.d etc/inittab etc/profile etc/profile.d etc/hotplug.d
+REVIEW_PATHS="etc/init.d etc/rc.d etc/inittab etc/profile etc/profile.d etc/hotplug.d lib/functions
 etc/uci-defaults etc/kvmd/user/scripts etc/crontabs root/.ssh etc/dropbear
 etc/sysupgrade.conf lib/upgrade/keep.d etc/udhcpc.user.d"
 # etc/udhcpc.user.d: the router runs every script there on each DHCP event, and the keep
@@ -100,11 +101,16 @@ FW_PATHS="etc/config/firewall etc/firewall.user etc/firewall.d etc/nftables.d us
 # ran, also after a restart. Worked out by a forum user from the memory of the cloud
 # client on a GL-BE9300; the one message recovered there only listed the malware's
 # folders and sent the listing to the attacker's server, it installed nothing.
-ATTACK_FROM='2026-11-20 00:00:00 UTC'
+# From 19 November: a forum user recorded a KVM taken over that day (see KVM_NETS below),
+# and the restart note counts from then as well (review of 2.55).
+ATTACK_FROM='2026-11-19 00:00:00 UTC'
 # The installer ran on the evening of 20 November, and the attacker's server was suspended
 # on 21 November. A netstat link made later is an owner's repair, not the installer's
-# (issue 25). The tests move the end, since a link they make carries today's time.
-ATTACK_UNTIL=${GL_TRIAGE_ATTACK_UNTIL:-'2026-11-22 00:00:00 UTC'}
+# (issue 25). The tests move the end, since a link they make carries today's time; only
+# a much later end is taken from outside, never one that would hide a trace (review of
+# 2.55: a line in /etc/profile works on every run).
+ATTACK_UNTIL='2026-11-22 00:00:00 UTC'
+case ${GL_TRIAGE_ATTACK_UNTIL:-} in 2[1-9][0-9][0-9]-*) ATTACK_UNTIL=$GL_TRIAGE_ATTACK_UNTIL ;; esac
 FW_RULE_RE='^-A SDWAN_IP_MAPPING .*-d 127\.0\.0\.1(/32)? .*--to-destination 127\.0\.0\.1'
 # Running processes. PROC_RE is GL.iNet's own quick check for routers (forum, 2026-11-21):
 # "ps | grep tmp" shows "crond -i /tmp/.log". SHELL_RE is a remote root shell that users
@@ -220,9 +226,14 @@ BD_HOST_PATHS="etc/hosts etc/config etc/dnsmasq.conf etc/dnsmasq.d etc/rc.local 
 BD_LOG_PATHS="etc/AdGuardHome/data/querylog.json etc/AdGuardHome/data/querylog.json.1 tmp/AdGuardHome/data/querylog.json"
 FULL_UPPER_MAX_KB=65536
 TAB=$(printf '\t')
+NL=$(printf '\nx'); NL=${NL%x}
 
 SECRETS=0 MODE=check STDOUT=0 OUTDIR=/tmp ROOT=/ UPPER='' LOWER='' UPPER_SET=0 LOWER_SET=0 COLOR=auto REPORT=ask DEVICE_ID=1 NOTE='' UNSIGNED=0
-REPORT_URL=${GL_TRIAGE_REPORT_URL:-https://app.gl-i.net/csa-2026-01-report}
+# The tests send the report, fetch the update and show the result page on this machine.
+# Only such an address is taken from outside: a line in /etc/profile must not send the
+# report or point the result page elsewhere (review of 2.55).
+REPORT_URL=https://app.gl-i.net/csa-2026-01-report
+case ${GL_TRIAGE_REPORT_URL:-} in http://127.0.0.1[:/]*) REPORT_URL=$GL_TRIAGE_REPORT_URL ;; esac
 
 usage() {
 	cat <<'EOF'
@@ -381,7 +392,9 @@ exists() { [ -e "$1" ] || [ -L "$1" ]; }
 unset LD_PRELOAD LD_LIBRARY_PATH
 TRUSTED=no
 OLDPATH=$PATH
-if [ -n "$LOWER" ] && [ -x "$(l bin/busybox)" ] && "$(l bin/busybox)" true 2>/dev/null; then
+# Only on the running device: an image that is only read (--root, --lower) is not run, it
+# can come from anywhere (review of 2.55).
+if [ "$LIVE" = 1 ] && [ -n "$LOWER" ] && [ -x "$(l bin/busybox)" ] && "$(l bin/busybox)" true 2>/dev/null; then
 	TBB=$(l bin/busybox)
 	mkdir "$TMP/bin"
 	for a in $("$TBB" --list 2>/dev/null); do ln -s "$TBB" "$TMP/bin/$a" 2>/dev/null; done
@@ -410,7 +423,7 @@ rd() { safe "$1" && cat "$1" 2>/dev/null; }
 if [ -f "$(r etc/openwrt_release)" ]; then
 	PLATFORM=openwrt
 elif rd "$(r etc/version)" | grep -q '^RK_MODEL='; then
-	PLATFORM="glkvm-$(rd "$(r etc/version)" | sed -n 's/^RK_MODEL=//p' | head -n 1)"
+	PLATFORM="glkvm-$(rd "$(r etc/version)" | sed -n 's/^RK_MODEL=//p' | head -n 1 | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"
 else
 	PLATFORM=unknown
 fi
@@ -453,6 +466,21 @@ self_copy() {
 		grep -qE '^VERSION=[0-9]+\.[0-9]+$' "$1" 2>/dev/null &&
 		grep -q '^BD_HOST_RE=' "$1" 2>/dev/null && grep -q '^IOC_RE=' "$1" 2>/dev/null
 }
+# One finding into the findings file. A path, a link's target, a command line or a line of
+# a file can hold any byte: a tab or a line break in it made findings lines of its own (a
+# link to "x<NL>INFO<TAB>package-file<TAB>/etc/init.d/evil" let an init script off, and
+# one with "IOC<TAB>persist-ref<TAB>/" had --fix remove everything), and an escape sequence
+# reached the screen and could write over the verdict. So every control character becomes
+# "?". A path changed that way, a path with . or .. in it, or / alone is no path any step
+# may act on: it is kept for the reader with a "?" in front (review of 2.55).
+put() {
+	local p d
+	p=$(printf '%s' "$3" | tr '\001-\037\177' '?')
+	d=$(printf '%s' "$4" | tr '\001-\037\177' '?')
+	[ "$p" = "$3" ] || p="?$p"
+	case $p in / | */./* | */. | */../* | */..) p="?$p" ;; esac
+	printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$p" "$d" >>"$FIND"
+}
 add() {
 	case "$1 $2" in
 	'IOC backdoor-host' | 'REVIEW server-ref' | 'REVIEW path-ref' | 'INFO server-block')
@@ -462,15 +490,28 @@ add() {
 			fi ;;
 		esac ;;
 	esac
-	printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$FIND"
+	put "$@"
 }
+# The kinds of the findings for exactly this path, and whether there is one of a kind. A path
+# was matched as a pattern before: a . or * in a name stood for other names, and a finding
+# for bXd let b.d off (review of 2.55).
+kinds_at() { P=$1 awk -F '\t' '$3 == ENVIRON["P"] { print $2 }' "$FIND"; }
+has_at() { P=$2 K=$1 awk -F '\t' '$2 == ENVIRON["K"] && $3 == ENVIRON["P"] { f = 1 } END { exit !f }' "$FIND"; }
+# Whether a path has been dealt with: a finding stands on it, and not only that it looks
+# like a copy of this script or like compiled Lua. Such a file is still read for a start
+# of the malware: a file in that shape could carry anything after it (review of 2.55).
+done_at() { kinds_at "$1" | grep -qvE '^(script-copy|lua-bytecode)$'; }
+# Lines of a list of paths below a directory, without the directory in front: $1 the
+# directory, $2 what to put in front instead. sed took the directory as a pattern, and a #
+# in it broke the scan (review of 2.55).
+strip_dir() { P="${1%/}/" Q=$2 awk '{ if (index($0, ENVIRON["P"]) == 1) print ENVIRON["Q"] substr($0, length(ENVIRON["P"]) + 1) }'; }
 
 # Package that installed a file: apk (OpenWrt 24.10+), opkg (older OpenWrt / GL 4.x).
 pkg_owner() {
 	local p db info
 	p=${1#/}
 	db=$(r lib/apk/db/installed)
-	if [ -f "$db" ]; then
+	if safe "$db"; then
 		awk -v t="$p" '/^P:/{pk=substr($0,3)} /^F:/{d=substr($0,3)}
 			/^R:/{f = (d == "" ? "" : d "/") substr($0,3); if (f == t) {print pk; exit}}' "$db"
 		return
@@ -542,15 +583,15 @@ strs() { tr '\000' '\n' <"$1" 2>/dev/null; }
 # that a \ there cannot hide the next line); lines are split at ; && || and &, so that a
 # name and a tool count together only in the same command. A comment that names the
 # malware or its server is the owner's note (review of 2.53).
-# Quotes (review of 2.54): a ; & | or # inside a quoted string on one line splits nothing
-# and starts no comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh, unless the
-# string is a command itself (after sh -c, eval, watch, xargs and the like). Such a line
-# is given both ways, read with its quotes and plainly, so that nothing the plain reading
-# finds is lost where the quotes are read otherwise than sh reads them. The plain reading
-# alone is used for a quote that does not close on its line, for $( or ` inside double
-# quotes, for $'...', for the text of a here-document (sh reads no quotes there; a \ at
-# the end goes on there too) and for a line of more than 4096 characters, which is also
-# given whole. A # right after ; & | ( or ) is cut as a comment and kept in the plain
+# Quotes (review of 2.54): a ; & | or # inside a quoted string splits nothing and starts
+# no comment, as in wget -qO- "http://.../ni.sh?a=1&b=2" | sh, unless the string is a
+# command itself (after sh -c, eval, watch, xargs and the like); a quoted string inside
+# that is data again. A quote that does not close on its line goes on over the next ones.
+# The plain reading is used for $( or ` inside double quotes, for $'...', for the text
+# of a here-document that a shell or crontab reads or that is written somewhere (sh reads
+# no quotes there; a \ at the end goes on there too) and for a line of more than 4096
+# characters, which is also given whole. The text of a here-document that only goes to
+# the screen or to logger is a note (review of 2.55). A # right after ; & | ( or ) is cut as a comment and kept in the plain
 # reading, since sh may read it as part of a word (\;# or ${x%)#*}). << inside $(( ))
 # is a shift and starts no here-document. $2 is 1 for the
 # command line of a process: it has no comments.
@@ -561,19 +602,27 @@ active_in() {
 		gsub(/\001/, ";", l); gsub(/\002/, "\\&", l); gsub(/\003/, "|", l); gsub(/\004/, "#", l)
 		print l
 	}
-	# the reading of 2.53: a comment from # on, then split
-	function plain(l) { if (!pc) sub(/(^|[[:space:]])#.*$/, "", l); out(l) }
+	# the reading of 2.53: a comment from # on, then split; line by line where lines were
+	# read together for a quote that went on over them
+	function plain(l,   k, m, a) { m = split(l, a, "\n"); for (k = 1; k <= m; k++) { if (!pc) sub(/(^|[[:space:]])#.*$/, "", a[k]); out(a[k]) } }
 	# the line with ; & | # inside a quoted string of data replaced and a comment cut off;
-	# sets pr (something was replaced), bail (read plainly) and hd, hdash (a here-document
-	# follows, and whether its end may be indented with tabs)
-	function scan(l,   i, n, c, o, r, sg, q, code, ar) {
-		o = ""; n = length(l); q = ""; pr = 0; bail = 0
+	# sets ph (a # was cut that sh may not read as a comment), bail (1: read plainly, 2: a
+	# quote goes on in the next line), hd, hdash (a here-document follows, and whether its
+	# end may be indented with tabs) and hdcode (its text is read as commands)
+	function scan(l,   i, n, c, o, r, sg, q, q2, code, ar, d) {
+		o = ""; n = length(l); q = ""; q2 = ""; ph = 0; bail = 0; oq = ""
 		for (i = 1; i <= n; i++) {
 			c = substr(l, i, 1)
 			if (q == "") {
 				if (c == "\\") { o = o substr(l, i, 2); i++; continue }
-				# a # right after ; & | ( or ) may be no comment for sh (\;# or ${x%)#*}): plain too
-				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:];&|()]/)) { if (i > 1 && substr(l, i - 1, 1) !~ /[[:space:]]/) pr = 1; break }
+				# ${...}: a # or ; in it is part of the word, no comment and no end of a command,
+				# as in ${x%% #*} (review of 2.55)
+				if (c == "$" && substr(l, i + 1, 1) == "{") {
+					for (d = 0; i <= n; i++) { c = substr(l, i, 1); o = o c; if (c == "{") d++; else if (c == "}" && --d == 0) break }
+					continue
+				}
+				# a # right after ; & | ( or ) may be no comment for sh (\;#): plain too
+				if (c == "#" && !pc && (i == 1 || substr(l, i - 1, 1) ~ /[[:space:];&|()]/)) { if (i > 1 && substr(l, i - 1, 1) !~ /[[:space:]]/) ph = 1; break }
 				if (c == "\047" && substr(l, i - 1, 1) == "$") { bail = 1; return l }
 				if (c == "\"" || c == "\047") {
 					sg = o; sub(/.*[;&|(]/, "", sg)
@@ -585,23 +634,38 @@ active_in() {
 					# the word as sh takes it, its quotes removed: <<"E"OF ends at EOF
 					r = substr(l, i + 2); hdash = (r ~ /^-/); sub(/^-/, "", r); sub(/^[[:space:]]*/, "", r)
 					if (match(r, /^[^[:space:];&|<>()]+/)) { hd = substr(r, 1, RLENGTH); gsub(/["\047\\]/, "", hd) }
+					# its text is commands when a shell or crontab reads it, or when it is written
+					# somewhere (a file that starts programs, perhaps); text that goes to the screen
+					# or to logger is a note (review of 2.55)
+					hdcode = (l ~ />|(^|[[:space:];&|(\/])(sh|ash|bash|dash|busybox|eval|crontab|tee|ssh|su|xargs|source|\.)([[:space:]]|$)/)
 				}
 				o = o c; continue
 			}
-			if (c == q) { q = ""; o = o c; continue }
+			if (c == q) { q = ""; q2 = ""; o = o c; continue }
 			if (q == "\"" && c == "\\") { o = o substr(l, i, 2); i++; continue }
 			if (q == "\"" && (c == "`" || substr(l, i, 2) == "$(")) { bail = 1; return l }
-			if (!code && c ~ /[;&|#]/) { c = (c == ";") ? "\001" : (c == "&") ? "\002" : (c == "|") ? "\003" : "\004"; pr = 1 }
+			# in a string that is a command, a quoted string is data again, as the text
+			# that echo writes inside sh -c (review of 2.55)
+			if (code) {
+				if (q2 == "" && (c == "\"" || c == "\047")) { q2 = c; o = o c; continue }
+				if (q2 != "" && c == q2) { q2 = ""; o = o c; continue }
+				if (q2 == "") { o = o c; continue }
+			}
+			# data: ; & | # split nothing; a line break in it stays one for writes() (as \005),
+			# echo "# note<NL>*/3 * * * * ..." >> a crontab writes two lines
+			if (c == "\n") c = "\005"
+			else if (c ~ /[;&|#]/) c = (c == ";") ? "\001" : (c == "&") ? "\002" : (c == "|") ? "\003" : "\004"
 			o = o c
 		}
-		if (q != "") bail = 1
+		if (q != "") { bail = 2; if (q == "\047" && !code) oq = q }
 		return o
 	}
 	# the text of a here-document, up to its end word (after tabs with <<-), plainly
 	# (a \ at its end goes on in the next line there too)
 	body != "" {
 		t = $0; if (bdash) sub(/^\t*/, "", t)
-		if (t == body) { if (hb != "") plain(hb); hb = ""; body = ""; next }
+		if (t == body) { if (hb != "" && bcode) plain(hb); hb = ""; body = ""; next }
+		if (!bcode) next
 		t = hb $0; hb = ""; c = t; if (!pc) sub(/(^|[[:space:]])#.*$/, "", c)
 		if (!nj && c ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", t); hb = t " " } else plain(t)
 		next
@@ -609,14 +673,28 @@ active_in() {
 	length($0) > 4096 { if (b != "") { plain(b); b = "" } plain($0); if (/["\047]/) print; next }
 	b == "" && !pc && /^[[:space:]]*#/ { next }
 	{
+		# Text in single quotes that is data (an awk program of 200 lines) ends only at the
+		# next single quote: a line without one is added as it is, the lines are not read
+		# again for it
+		if (oq != "" && index($0, "\047") == 0 && ++nq < 4000 && length(b) < 262144) { b = b $0 "\n"; next }
 		l = b $0; b = ""
 		hd = ""; s = scan(l)
+		# a quote that does not close on its line goes on in the next ones, as in sh: the
+		# lines are read together, up to 64 of them (data in single quotes: 4000). Read one
+		# by one, a list of paths in quotes was taken for commands (review of 2.55). Not in
+		# a crontab or keep list.
+		if (bail == 2) { if (!nj && ++nq < (oq != "" ? 4000 : 64) && length(l) < (oq != "" ? 262144 : 8192)) { b = l "\n"; next } bail = 1 }
+		nq = 0; oq = ""
 		# a \ at the end goes on in the next line, not when it ends a comment
 		c = bail ? l : s; if (bail && !pc) sub(/(^|[[:space:]])#.*$/, "", c)
 		if (!nj && c ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", l); b = l " "; next }
+		# Read with its quotes only: a ; or # inside quoted text splits nothing, as for sh.
+		# 2.54 gave such a line plainly as well, and logger "none found; gl-helper not
+		# running" became a start of gl-helper (review of 2.55). A # that sh may not read
+		# as a comment still gives the plain reading.
 		if (bail) plain(l)
-		else { out(s); if (pr) plain(l) }
-		if (hd != "") { body = hd; bdash = hdash }
+		else { out(s); if (ph) plain(l) }
+		if (hd != "") { body = hd; bdash = hdash; bcode = hdcode }
 	}
 	END { if (b != "") plain(b); if (hb != "") plain(hb) }'
 }
@@ -628,19 +706,44 @@ active() { if linewise "$1"; then strs "$1" | active_in 1; else strs "$1" | acti
 # nohup, exec, env, timeout, flock, watch and their kin the word that follows; the command
 # of sh -c and of procd's "command"; the script that sh -s reads with <; what
 # start-stop-daemon starts; a cron line's command behind its time fields; what $( ) or
-# ` ` runs, and not its arguments; ./name after cd. A command that is piped into a shell
-# runs everything it names. A path that only stands as an argument, as with rm, grep,
-# pgrep, pidof, kill, [ -e ] or command -v, is not run (review of 2.53). Words are taken
-# as they stand: a program in a variable is not known.
+# ` ` runs anywhere on the line, and not its arguments; ./name after cd; what flock, trap,
+# su -c, find -exec and xargs run. A command that is piped into a shell runs everything
+# it names. A path that only stands as an argument, as with rm, grep, pgrep, pidof, kill,
+# [ -e ] or command -v, is not run (review of 2.53). A program in a variable is known
+# when the same file gave the variable a value of one word; any other is not.
 ran() {
 	awk 'function unq(s) { gsub(/["\047`]/, "", s); sub(/^[({!]+/, "", s); sub(/[)};]+$/, "", s); return s }
 	function base(s) { sub(/.*\//, "", s); return s }
 	{
+		# a line break in quoted data (see active_in) is a space here
+		gsub(/\005/, " ")
 		i = 1
 		if ($1 ~ /^@[a-z]+$/) i = 2
 		else if (NF > 5 && ($1 $2 $3) ~ /^[0-9*\/,-]+$/ && ($4 $5) ~ /^[0-9A-Za-z*\/,-]+$/) i = 6
-		if ($0 ~ /[|][[:space:]]*([^[:space:]|]*\/)?(ba|a)?sh([[:space:]]|$)/) { for (; i <= NF; i++) print unq($i); next }
-		pre = 0; sh = 0; skip = 0; arg = 0
+		# quoted text is data: a | in it is no pipe (review of 2.55)
+		t0 = $0; gsub(/"[^"]*"|\047[^\047]*\047/, "\"\"", t0)
+		if (t0 ~ /[|][[:space:]]*([^[:space:]|]*\/)?(ba|a)?sh([[:space:]]|$)/) { for (; i <= NF; i++) print unq($i); next }
+		# what $( ) and ` ` run anywhere on the line, in an argument or a value too, as in
+		# : $(/path/prog) or [ -n "$(/path/prog)" ] (review of 2.55)
+		t = $0
+		while (match(t, /\$\(|`/)) {
+			bq = (substr(t, RSTART, 1) == "`"); t = substr(t, RSTART + RLENGTH)
+			u = t; sub(/^[[:space:]]+/, "", u); sub(/[[:space:]].*/, "", u); u = unq(u)
+			if (u != "") print u
+			if (bq) { k = index(t, "`"); t = k ? substr(t, k + 1) : "" }
+		}
+		# the program behind each | runs too, as in ... | xargs /path/prog (review of 2.55);
+		# in the patterns of case, a | is no pipe
+		t = t0; cp = (t ~ /^[[:space:]]*([^[:space:]()|\\]|\\.)+([[:space:]]*[|][[:space:]]*([^[:space:]()|\\]|\\.)+)+[[:space:]]*\)/)
+		if (cp) t = ""
+		while ((k = index(t, "|"))) {
+			t = substr(t, k + 1); m = split(t, a, " ")
+			for (j = 1; j <= m && (a[j] ~ /^-|^[0-9]+$/ || base(unq(a[j])) ~ /^(xargs|nohup|env|exec|nice|timeout|setsid|busybox)$/); j++);
+			if (j <= m) { u = unq(a[j]); if (u != "") print u }
+		}
+		pre = 0; sh = 0; skip = 0; arg = 0; cs = 0
+		# the patterns of case, a | b), up to the word that ends them
+		if (cp) { for (; i <= NF && !($i ~ /\)$/ && $i !~ /\(/); i++); i++ }
 		for (; i <= NF; i++) {
 			r = $i
 			# the words of a $( ) or ` ` that is still open: its arguments
@@ -654,27 +757,66 @@ ran() {
 			if (r ~ /^[0-9]*>/) { if (r ~ /^[0-9]*>>?$/) i++; continue }
 			if (r ~ /^[0-9]*</) { s = r; sub(/^[0-9]*</, "", s); if (s == "") s = $(++i); if (sh) { print unq(s); next } continue }
 			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)/) { r = substr(r, index(r, "()") + 2); if (r == "" || r == "{") continue }
-			if (r ~ /\)$/ && r !~ /\(/ && i < NF) continue
+			# a pattern of case: a word that ends in ) at the start of a command, followed by
+			# more, or a pattern with * ? [ or | in it on a line of its own (review of 2.55)
+			if (r ~ /\)$/ && r !~ /\(/ && (i < NF || r ~ /[*?|]/ || index(r, "["))) continue
 			if (r ~ /^command=/) { print unq(substr(r, 9)); continue }
 			# a variable given a quoted value with spaces, as DIRS="/etc/config/.gl /tmp/.gl":
 			# the words up to the closing quote are that value, no command (issue 25)
-			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*=["\047]/) {
-				q = substr(r, index(r, "=") + 1, 1)
-				if (index(substr(r, index(r, "=") + 2), q) == 0) for (i++; i <= NF && index($i, q) == 0; i++);
+			# One with $( ) or ` ` in it runs that, read above (review of 2.55). A value of one
+			# word is kept, so that "$NAME" in a command is known.
+			# A value of more words is kept as well, for sh -c "$CMD" and eval "$CMD", which
+			# run it (review of 2.55).
+			if (r ~ /^[A-Za-z_][A-Za-z0-9_]*=["\047]/ && $0 !~ /\$\(|`/) {
+				q = substr(r, index(r, "=") + 1, 1); nm = substr(r, 1, index(r, "=") - 1)
+				if (index(substr(r, index(r, "=") + 2), q) == 0) {
+					s = substr(r, index(r, "=") + 2)
+					for (i++; i <= NF; i++) { s = s " " $i; if (index($i, q)) break }
+					sub(q ".*$", "", s); qv[nm] = s
+				} else var[nm] = unq(substr(r, index(r, "=") + 1))
 				continue
 			}
 			w = unq(r)
-			if (w == "" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+			if (w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { var[substr(w, 1, index(w, "=") - 1)] = substr(w, index(w, "=") + 1); continue }
+			# a program in a variable that this file set: PROG=/path/prog ... "$PROG" (review of 2.55)
+			if (w ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) {
+				v = w; gsub(/[${}]/, "", v)
+				if (v in var) w = var[v]
+				else if (cs && (v in qv)) {
+					# the first word of each command in it, behind assignments and nohup or exec
+					s = qv[v]; gsub(/&&|[|][|]|[;&|]/, "\n", s); m = split(s, a, "\n")
+					for (k = 1; k <= m; k++) {
+						nb = split(a[k], b, " ")
+						for (j = 1; j <= nb && (b[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || b[j] ~ /^(nohup|exec|env|setsid)$/); j++);
+						if (j <= nb) print unq(b[j])
+					}
+					next
+				}
+			}
+			if (w == "") continue
 			if (w == "case") { while (i < NF && $i != "in") i++; continue }
 			if (w == "cd") { cwd = unq($(i + 1)); next }
 			if (w == "procd_set_param") { if ($(i + 1) != "command") next; i++; pre = 1; continue }
 			# command -v and -V only look a name up, they start nothing
 			if (base(w) == "command" && $(i + 1) ~ /^-[A-Za-z]*[vV]/) next
-			if (w ~ /^(do|then|else|elif|if|while|until|time|eval|\.|source)$/ || base(w) ~ /^(nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|watch|chrt|taskset)$/) { pre = 1; sh = 0; continue }
-			if (base(w) == "flock") { pre = 1; sh = 0; arg = 1; continue }
+			if (w == "eval") cs = 1
+			if (w ~ /^(do|then|else|elif|if|while|until|time|eval|\.|source)$/ || base(w) ~ /^(nohup|exec|setsid|command|builtin|env|nice|ionice|timeout|watch|chrt|taskset|xargs)$/) { pre = 1; sh = 0; continue }
+			# flock: its options, then the lock (a file or a number), then the command; with -c
+			# the command is the word after it (review of 2.55)
+			if (base(w) == "flock") {
+				for (i++; i <= NF && $i ~ /^-/; i++) {
+					if ($i ~ /^-c$|^--command$/) { print unq($(i + 1)); next }
+					if ($i ~ /^-[wE]$|^--(timeout|conflict-exit-code)$/) i++
+				}
+				for (k = i + 1; k <= NF; k++) if ($k ~ /^-c$|^--command$/) { print unq($(k + 1)); next }
+				pre = 1; sh = 0; continue
+			}
+			# what trap, su -c and find -exec run (review of 2.55)
+			if (w == "trap") { u = unq($(i + 1)); if (u != "" && u != "-") print u; next }
+			if (base(w) == "su") { for (i++; i <= NF; i++) if ($i ~ /^-c$|^--command$/) { print unq($(i + 1)); break }; next }
 			if (pre && w ~ /^-/) {
 				# sh -c: what follows is a command, not a script
-				if (sh && w ~ /^-[A-Za-z]*c[A-Za-z]*$/) { sh = 0; continue }
+				if (sh && w ~ /^-[A-Za-z]*c[A-Za-z]*$/) { sh = 0; cs = 1; continue }
 				if (sh && w ~ /^-[A-Za-z]*s/) {
 					for (i++; i <= NF; i++) if ($i ~ /^[0-9]*</) { s = $i; sub(/^[0-9]*</, "", s); if (s == "") s = $(i + 1); print unq(s); break }
 					next
@@ -687,32 +829,62 @@ ran() {
 			if (cwd != "" && (w ~ /^\.\// || (sh && w !~ /\//))) print cwd "/" w
 			if (base(w) ~ /^-?(sh|ash|bash|dash|busybox)$/) { sh = 1; pre = 1; continue }
 			if (base(w) == "start-stop-daemon") { for (i++; i <= NF; i++) { if ($i ~ /^(-K|--stop)$/) next; if ($i !~ /^-/) print unq($i) } }
+			if (base(w) == "find") { for (i++; i < NF; i++) if ($i ~ /^-(exec|execdir|ok|okdir)$/) print unq($(i + 1)) }
 			next
 		}
 	}'
 }
 # What echo or printf writes into a file that starts programs, or pipes into crontab, is a
 # command as well: echo "*/3 * * * * /etc/config/.gl/watch.sh" >>/etc/crontabs/root puts
-# the malware's cron entry back (review of 2.54). The lines on stdin, as active_in gives
-# them, and behind such a line what it writes, one line per line of it.
+# the malware's cron entry back (review of 2.54). So is what it writes into any other file
+# that the same lines then run, as echo '...' >/tmp/x.sh; sh /tmp/x.sh (review of 2.55).
+# The lines on stdin, as active_in gives them, and behind them what is written, one line
+# per line of it.
 writes() {
-	awk '{ print; l = $0 }
-	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
-	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*["\047]?([^[:space:]"\047]*crontabs?\/|([^[:space:]"\047]*\/etc\/|(\.\/)?)(rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|udhcpc\.user|firewall\.user|firewall\.d\/|kvmd\/user\/scripts\/|profile\.d\/|profile([[:space:]"\047;&|)]|$))|[^[:space:]"\047]*\/\.(ash_)?profile([[:space:]"\047;&|)]|$))/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ { next }
-	{
+	awk 'function body(l,   n, a, k, o) {
 		sub(/^[[:space:](!{]*(echo|printf)([[:space:]]+-[A-Za-z]+)*[[:space:]]+/, "", l)
 		sub(/[[:space:]]*[|][[:space:]]*(crontab|tee)([[:space:]].*)?$/, "", l)
 		sub(/[[:space:]]*[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/, "", l)
 		sub(/[)}[:space:]]+$/, "", l); gsub(/%s|\\n|\005|\|\||&&|;|&/, "\n", l); gsub(/["\047]/, "", l)
-		n = split(l, a, "\n")
+		n = split(l, a, "\n"); o = ""
 		# a line that starts with a directory or a word with a colon, as in a note like
 		# echo "/etc/config/.gl/ found" or echo "gl-helper: checked", runs nothing
-		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/ && a[k] !~ /^[[:space:]]*[^[:space:]]*[\/:]([[:space:]]|$)/) print a[k] }
+		for (k = 1; k <= n; k++) { sub(/^[[:space:]]*#.*$/, "", a[k]); if (a[k] ~ /[^[:space:]]/ && a[k] !~ /^[[:space:]]*[^[:space:]]*[\/:]([[:space:]]|$)/) o = o a[k] "\n" }
+		return o
+	}
+	# whether line x runs file t: t as a command, or behind sh, . or source
+	function runs(x, t,   m, w, k, u, p, f) {
+		gsub(/[;&|()]/, " ; ", x); m = split(x, w, " "); f = 1; p = ""
+		for (k = 1; k <= m; k++) {
+			if (w[k] == ";") { f = 1; p = ""; continue }
+			u = w[k]; gsub(/["\047]/, "", u)
+			if (u ~ /^-/ && p ~ /^(.*\/)?(ba|a|da)?sh$/) continue
+			if (u == t && (f || p ~ /^((.*\/)?(ba|a|da)?sh|\.|source)$/)) return 1
+			p = u; f = 0
+		}
+		return 0
+	}
+	{ print; L[++nl] = $0; l = $0 }
+	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
+	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*["\047]?([^[:space:]"\047]*crontabs?\/|([^[:space:]"\047]*\/etc\/|(\.\/)?)(rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|udhcpc\.user|firewall\.user|firewall\.d\/|kvmd\/user\/scripts\/|profile\.d\/|profile([[:space:]"\047;&|)]|$))|[^[:space:]"\047]*\/\.(ash_)?profile([[:space:]"\047;&|)]|$))/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ {
+		# another file: kept, in case these lines run it
+		if (match(l, /[0-9]*>>?[[:space:]]*[^[:space:]]+[[:space:]]*$/)) {
+			t = substr(l, RSTART, RLENGTH); sub(/^[0-9]*>>?[[:space:]]*/, "", t); gsub(/["\047[:space:]]/, "", t)
+			if (t ~ /^\//) { W[t] = W[t] body(l); at[t] = nl }
+		}
+		next
+	}
+	{ printf "%s", body(l) }
+	END {
+		for (t in W) for (k = 1; k <= nl; k++) if (k != at[t] && runs(L[k], t)) { printf "%s", W[t]; break }
 	}'
 }
 # Does a file of commands (as active_in gives them) run a path of the malware, and which?
-runs_ioc() { writes <"$1" | ran | grep -qE "$IOC_RE"; }
-ran_ioc() { writes <"$1" | ran | grep -E "$IOC_RE" | sort -u | head -n 3 | tr '\n' ' ' | sed 's/ $//'; }
+# Paths as the system reads them: /etc/glinet/.cache//gb and /etc/glinet/.cache/./watch.sh
+# are the malware's files as well (review of 2.55)
+normp() { sed -e 's#//*#/#g' -e ':a' -e 's#/\./#/#' -e 'ta'; }
+runs_ioc() { writes <"$1" | ran | normp | grep -qE "$IOC_RE"; }
+ran_ioc() { writes <"$1" | ran | normp | grep -E "$IOC_RE" | sort -u | head -n 3 | tr '\n' ' ' | sed 's/ $//'; }
 # The lines of a file that a base file does not have. busybox grep -f with an empty file
 # matches every line, GNU grep none; an empty base file has no line, so all lines are new.
 not_in() { if [ -s "$1" ]; then grep -vxFf "$1" "$2"; else cat "$2"; fi; }
@@ -791,16 +963,18 @@ check_markers() {
 	# The malware's own directories are read as well, up to 64 MiB a file: /overlay/.gl,
 	# /userdata/.gl and /tmp/.gl lie outside the overlay's upper layer (issue 25).
 	{
-		[ -n "$UPPER" ] && find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -lE '^(.ELF|NPK!)' {} + 2>/dev/null | sed "s#^${UPPER%/}/#U #"
+		[ -n "$UPPER" ] && find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -lE '^(.ELF|NPK!)' {} + 2>/dev/null | strip_dir "$UPPER" 'U '
 		for d in $MARKER_DIRS $MARKER_DIRS_ALT; do
 			[ -d "$(r "$d")" ] && [ ! -L "$(r "$d")" ] || continue
-			find "$(r "$d")" -xdev -type f -size +1k -size -65536k -exec grep -lE '^(.ELF|NPK!)' {} + 2>/dev/null | sed "s#^$(r "$d")/#R $d/#"
+			find "$(r "$d")" -xdev -type f -size +1k -size -65536k -exec grep -lE '^(.ELF|NPK!)' {} + 2>/dev/null | strip_dir "$(r "$d")" "R $d/"
 		done
-	} | while read -r k p; do
+	} | while IFS= read -r p; do
+		# U or R, a blank, then the path as it is, blanks at its end too (review of 2.55)
+		k=${p%% *} p=${p#* }
 		[ "$k" = U ] && f=$(u "$p") || f=$(r "$p")
 		case $(head -c 4 "$f" 2>/dev/null) in "$(printf '\177')ELF" | 'NPK!') ;; *) continue ;; esac
 		strs "$f" | grep -qF "$GLH_PACKER" || continue
-		grep -q "${TAB}/$p${TAB}" "$FIND" && continue
+		[ -n "$(kinds_at "/$p")" ] && continue
 		# a package explains only a file the base image does not have (issue 4)
 		if [ "$k" = U ]; then
 			same_as_lower "$p" && continue
@@ -813,7 +987,7 @@ check_markers() {
 	# A directory of the malware with none of its files that are known by name or by packer.
 	# Those outside the upper layer are looked at where they are (issue 25).
 	for d in $MARKER_DIRS $MARKER_DIRS_ALT; do
-		if { exists "$(src "$d")" || exists "$(r "$d")"; } && ! grep -q "${TAB}/$d/" "$FIND" && { [ -z "$LOWER" ] || ! exists "$(l "$d")"; }; then
+		if { exists "$(src "$d")" || exists "$(r "$d")"; } && ! P="/$d/" awk -F '\t' 'index($3, ENVIRON["P"]) == 1 { f = 1 } END { exit !f }' "$FIND" && { [ -z "$LOWER" ] || ! exists "$(l "$d")"; }; then
 			add REVIEW hidden-dir "/$d" "hidden directory not in base image, no known marker inside"
 		fi
 	done
@@ -857,7 +1031,8 @@ bd_started_elsewhere() {
 # entry of a block list such as adblock's), or name (review of 2.54)
 bd_answer() {
 	BDRE=$BD_HOST_RE awk '{ ip = ""; re = ENVIRON["BDRE"]
-		if ($0 ~ ("://[^/[:space:]]*(" re ")")) { print "url"; next }
+		# host names in any case: the resolver does not tell them apart (review of 2.55)
+		if (tolower($0) ~ ("://[^/[:space:]]*(" re ")")) { print "url"; next }
 		if ($0 ~ /^[[:space:]]*list[[:space:]]+[A-Za-z_]*(block|black|deny|bl_)[A-Za-z_]*[[:space:]]/) { print "block"; next }
 		if (match($0, /^[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]+:[0-9a-fA-F:.]*|::[0-9a-fA-F:.]*)[[:space:]]/)) { ip = substr($0, RSTART, RLENGTH); gsub(/[[:space:]]/, "", ip) }
 		else if (match($0, /(address|server|local)[= ][^\/]*\/[^[:space:]]*\/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F]+:[0-9a-fA-F:.]*|::[0-9a-fA-F:.]*)/)) { ip = substr($0, RSTART, RLENGTH); sub(/.*\//, "", ip) }
@@ -917,11 +1092,13 @@ check_backdoor() {
 		find "$UPPER" -xdev -type f -size +1k -size -8192k -exec grep -l 'LuaQ' {} + 2>/dev/null | while IFS= read -r f; do
 			[ "$(head -c 4 "$f" 2>/dev/null | tr -d '\033')" = Lua ] || continue
 			p=${f#"${UPPER%/}"/}
-			grep -q "${TAB}/$p${TAB}" "$FIND" && continue
-			[ -n "$(pkg_owner "/$p")" ] && continue
+			[ -n "$(kinds_at "/$p")" ] && continue
+			# the loader's names count whoever owns the file: the lists of packages lie in the
+			# overlay as well and can be written like any other file (review of 2.55). A
+			# package explains only a file the base image does not have (issue 4).
 			if strs "$f" | grep -qE "$BD_ULOGD_NAMES"; then
 				add IOC backdoor-file "/$p" "older backdoor: its loader under another name (compiled Lua with the loader's function names, sha256 $(sha256sum "$f" 2>/dev/null | cut -c1-64))"
-			else
+			elif [ -z "$(pkg_new "/$p")" ]; then
 				add REVIEW lua-bytecode "/$p" "compiled Lua in the overlay, not from a package; the older backdoor's loader is such a file"
 			fi
 		done
@@ -962,12 +1139,14 @@ check_backdoor() {
 	#    for a human to judge.
 	for p in $BD_HOST_PATHS; do
 		exists "$(r "$p")" || continue
-		find "$(r "$p")" -xdev -type f -exec grep -lE "$BD_HOST_RE" {} + 2>/dev/null | head -n 20 | while IFS= read -r f; do
+		# not only the first 20: a few files that merely name a server must not hide the
+		# one that fetches from it (review of 2.55)
+		find "$(r "$p")" -xdev -type f -exec grep -liE "$BD_HOST_RE" {} + 2>/dev/null | head -n 500 | while IFS= read -r f; do
 			p=${f#"${ROOT%/}"/}
-			grep -q "${TAB}/$p${TAB}" "$FIND" && continue
-			n=$(grep -oE "[a-z0-9.-]*($BD_HOST_RE)" "$f" | sort -u | head -n 4 | tr '\n' ' ' | sed 's/ $//')
+			[ -n "$(kinds_at "/$p")" ] && continue
+			n=$(grep -oiE "[a-z0-9.-]*($BD_HOST_RE)" "$f" | sort -u | head -n 4 | tr '\n' ' ' | sed 's/ $//')
 			# active lines only: not a comment, not the name of a firewall rule (review of 2.53)
-			active "$f" | grep -E "$BD_HOST_RE" | grep -vE "^[[:space:]]*option[[:space:]]+(name|label)[[:space:]]" >"$TMP/bdhost"
+			active "$f" | grep -iE "$BD_HOST_RE" | grep -vE "^[[:space:]]*option[[:space:]]+(name|label)[[:space:]]" >"$TMP/bdhost"
 			# A block is the advice, not the backdoor: a hosts or dnsmasq entry, a firewall
 			# command that drops or rejects, a route that leads nowhere, a line of a UCI
 			# firewall rule whose target is DROP or REJECT. A script that writes such an entry
@@ -982,13 +1161,15 @@ check_backdoor() {
 			# a command that takes such a block away (iptables -D before -I, as scripts that run
 			# at every ifup do) is not the backdoor either
 			grep -vE "$SRV_BLOCK_RE" "$TMP/bdrest" | while IFS= read -r c; do
-				if [ "$(srv_kind "$c")" = fetch ]; then echo fetch; continue; fi
+				# an owner's check that the block holds (wget --spider, nc -z) fetches nothing,
+				# as on the side of gl-helper (review of 2.55)
+				case $(srv_kind "$c") in fetch) echo fetch; continue ;; probe) echo probe; continue ;; esac
 				printf '%s\n' "$c" | bd_answer
 			done >"$TMP/bdk"
 			if grep -qxE 'fetch|url|dns' "$TMP/bdk"; then
 				# a line that fetches from the server, a URL of it or an answer for it: a copy of
 				# this script has none of these, so this is not let off as one (issue 25)
-				printf 'IOC\tbackdoor-host\t/%s\t%s\n' "$p" "older backdoor: names its server ($n)" >>"$FIND"
+				put IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
 			elif grep -qx name "$TMP/bdk" && active "$f" | grep -E "$SRV_FETCH_RE" | while IFS= read -r c; do srv_kind "$c"; done | grep -qx fetch; then
 				# the name in a list or a variable, and a fetch elsewhere in the file
 				add IOC backdoor-host "/$p" "older backdoor: names its server ($n)"
@@ -1001,8 +1182,8 @@ check_backdoor() {
 	done
 	for p in $BD_LOG_PATHS; do
 		f=$(r "$p")
-		safe "$f" && grep -qE "$BD_HOST_RE" "$f" 2>/dev/null &&
-			add REVIEW backdoor-dns "/$p" "a device in this network asked for a server of the older backdoor ($(grep -oE "$BD_HOST_RE" "$f" | sort -u | head -n 4 | tr '\n' ' ' | sed 's/ $//'))"
+		safe "$f" && grep -qiE "$BD_HOST_RE" "$f" 2>/dev/null &&
+			add REVIEW backdoor-dns "/$p" "a device in this network asked for a server of the older backdoor ($(grep -oiE "$BD_HOST_RE" "$f" | sort -u | head -n 4 | tr '\n' ' ' | sed 's/ $//'))"
 	done
 	return 0
 }
@@ -1013,7 +1194,7 @@ applet_candidates() {
 	if [ -n "$UPPER" ]; then base=$UPPER; elif [ -n "$LOWER" ]; then base=${ROOT%/}; else return 0; fi
 	for d in $APPLET_DIRS; do
 		[ -d "$base/$d" ] || continue
-		find "$base/$d" -xdev ! -type d 2>/dev/null | sed "s#^${base%/}/##"
+		find "$base/$d" -xdev ! -type d 2>/dev/null | strip_dir "${base:-/}" ''
 	done
 }
 
@@ -1056,7 +1237,7 @@ check_applets() {
 		up=$(src "$p") lp=
 		[ -n "$LOWER" ] && lp=$(l "$p")
 		same_as_lower "$p" && continue
-		grep -q "${TAB}/$p${TAB}" "$FIND" && continue
+		done_at "/$p" && continue
 		# without an upper layer only files that differ from an existing base file count
 		if [ -z "$UPPER" ] && ! exists "$lp"; then continue; fi
 		case $p in usr/sbin/tailscale | usr/sbin/tailscaled | usr/bin/tailscale | usr/bin/tailscaled)
@@ -1090,8 +1271,35 @@ check_applets() {
 			continue
 		fi
 		[ -f "$up" ] || continue
+		# What the file does comes before who installed it: the lists of packages lie in the
+		# overlay too, and one line written there made a replaced netstat and an init script
+		# that starts the malware a package's files (review of 2.55).
+		if grep -q 'busybox netstat' "$up" 2>/dev/null; then
+			add IOC applet-hijack "/$p" "netstat replaced by a script that calls the real one and hides lines from its output"
+			continue
+		fi
+		if [ "$(head -c 2 "$up" 2>/dev/null)" = '#!' ]; then
+			active "$up" >"$TMP/cmds"
+			if runs_ioc "$TMP/cmds"; then
+				add IOC applet-hijack "/$p" "replaced by a script that starts the malware ($(ran_ioc "$TMP/cmds"))"
+				continue
+			fi
+			if [ "$(srv_use "$up")" = fetch ]; then
+				add IOC applet-hijack "/$p" "replaced by a script that fetches from a server of the malware ($(srv_names "$up"))"
+				continue
+			fi
+		fi
 		owner=$(pkg_new "/$p")
-		if [ -n "$owner" ]; then
+		# a package brings programs; a text file in a busybox applet's place is not one, so a
+		# package that claims it is not believed
+		if [ -n "$owner" ] && [ -n "$lp" ] && [ -L "$lp" ] && case $(readlink "$lp") in busybox | */busybox) true ;; *) false ;; esac &&
+			[ "$(head -c 4 "$up" 2>/dev/null)" != "$(printf '\177')ELF" ]; then
+			add IOC applet-hijack "/$p" "regular file shadows base symlink -> $(readlink "$lp"), and it is no program: the package $owner that the list of packages names for it did not bring it"
+		elif [ -n "$owner" ] && [ "$(head -c 4 "$up" 2>/dev/null)" != "$(printf '\177')ELF" ] && [ "$(head -c 2 "$up" 2>/dev/null)" != '#!' ]; then
+			# neither a program nor a script: no package brings that for a tool's name, and the
+			# list of packages lies in the overlay as well (review of 2.55)
+			add REVIEW applet-replaced "/$p" "replaced by a file that is no program, although the list of packages names $owner for it"
+		elif [ -n "$owner" ]; then
 			add INFO package-file "/$p" "installed by package $owner"
 		elif [ -n "$lp" ] && [ -L "$lp" ]; then
 			# a link to busybox is an applet; replacing that is what the malware does. Other
@@ -1205,8 +1413,16 @@ srv_kind() {
 #   name   anything else: a probe, a command that only names a server
 # Nothing when no command names one.
 srv_cmds() {
-	grep -E "$KVM_IP_RE" "$1" | while IFS= read -r c; do srv_kind "$c"; done >"$TMP/srvk"
+	local v
+	grep -iE "$KVM_IP_RE" "$1" | while IFS= read -r c; do srv_kind "$c"; done >"$TMP/srvk"
 	[ -s "$TMP/srvk" ] || return 0
+	# A server held in a variable, and a command elsewhere that fetches with it, as
+	# S=http://...:8000 and then wget -qO- "$S/ni.sh" | sh (review of 2.55)
+	# (also behind sh -c in a command line: sh -c S=...; wget "http://$S/...")
+	grep -iE "$KVM_IP_RE" "$1" | grep -oE "(^|[[:space:];&|(])[A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|]*" | grep -iE "$KVM_IP_RE" |
+		sed 's/^[[:space:];&|(]*//; s/=.*//' | sort -u | while IFS= read -r v; do
+		grep -E "$SRV_FETCH_RE" "$1" | grep -qE "[$][{]?$v([^A-Za-z0-9_]|$)" && echo fetch
+	done >>"$TMP/srvk"
 	if grep -qx fetch "$TMP/srvk"; then
 		echo fetch
 	elif grep -qx block "$TMP/srvk" && ! grep -qvxE 'block|unblock' "$TMP/srvk" && ! grep -qE "$SRV_FETCH_RE" "$1"; then
@@ -1222,10 +1438,10 @@ srv_use() {
 	local u
 	active "$1" >"$TMP/srv"
 	u=$(srv_cmds "$TMP/srv")
-	if [ -n "$u" ]; then echo "$u"; else strs "$1" | grep -qE "$KVM_IP_RE" && echo name; fi
+	if [ -n "$u" ]; then echo "$u"; else strs "$1" | grep -qiE "$KVM_IP_RE" && echo name; fi
 	return 0
 }
-srv_names() { strs "$1" | grep -oE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+srv_names() { strs "$1" | grep -oiE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
 # The commands of a crontab, keep list or the firewall's start script that start the
 # malware or fetch from its servers: the numbers of their first and last line in the file
 # (a command goes on over lines that end in \). What --fix takes out, and nothing else.
@@ -1235,7 +1451,7 @@ bad_lines() {
 	awk -v nj="$nj" '{ if (l == "") s = NR; l = l $0; c = l; sub(/(^|[[:space:]])#.*$/, "", c) }
 		!nj && c ~ /(^|[^\\])(\\\\)*\\$/ { sub(/\\$/, "", l); next }
 		{ print s " " NR "\t" l; l = "" }' "$1" 2>/dev/null |
-		grep -E "$IOC_RE|$KVM_IP_RE" | while IFS="$TAB" read -r s c; do
+		grep -iE "$IOC_RE|$KVM_IP_RE" | while IFS="$TAB" read -r s c; do
 			printf '%s\n' "$c" | active_in "$nj" >"$TMP/cronline"
 			if runs_ioc "$TMP/cronline" || [ "$(srv_cmds "$TMP/cronline")" = fetch ]; then
 				printf '%s\n' "$s"
@@ -1308,77 +1524,123 @@ known_service_link() {
 	{ [ -n "$LOWER" ] && exists "$(l "etc/init.d/$n")"; } || [ -n "$(pkg_owner "/etc/init.d/$n")" ]
 }
 
+# Files with a line break in their name below $1, in the tree at $2. Each is reached
+# through a link $TMP/odd/N; N goes to $TMP/odd-ioc when the file starts the malware, for --fix.
+odd_names() {
+	local n f u rel
+	mkdir -p "$TMP/odd"
+	find "$1" -xdev -name "*$NL*" -exec sh -c 'n=$(ls "$0" | wc -l); ln -s "$1" "$0/$((n + 1))"' "$TMP/odd" {} \; 2>/dev/null
+	for n in $(ls "$TMP/odd" | sort -n); do
+		grep -qxF "$n" "$TMP/odd-seen" 2>/dev/null && continue
+		echo "$n" >>"$TMP/odd-seen"
+		f=$(readlink "$TMP/odd/$n"); rel=${f#"${2%/}"/}
+		if [ -f "$TMP/odd/$n" ] && [ ! -L "$f" ]; then
+			active "$TMP/odd/$n" >"$TMP/cmds"
+			u=$(srv_use "$TMP/odd/$n")
+			if runs_ioc "$TMP/cmds" || [ "$u" = fetch ]; then
+				echo "$n" >>"$TMP/odd-ioc"
+				add IOC persist-ref "/$rel" "starts the malware or fetches from its server; the name has a line break in it (shown as ?). --fix removes the file"
+				continue
+			fi
+		fi
+		add REVIEW odd-name "/$rel" "a name with a line break in it (shown as ?), in a place that starts programs: no firmware or package does that. Look at it with ls -b"
+	done
+}
 check_review() {
-	local p e base u seen nobase=0
+	local p e base u seen pk nobase=0
 	# Without an overlay and a base image nothing tells the firmware's files from changed
 	# ones. The places that start programs are read all the same, on the running system,
-	# but only for what starts the malware or fetches from its servers (issue 25).
+	# but only for what starts the malware or fetches from its servers (issue 25). Without
+	# an overlay but with a base image the running system is read and compared with it; on
+	# a running device $base is empty then, and the places were skipped (review of 2.55).
 	if [ -n "$UPPER" ]; then base=$UPPER; elif [ -n "$LOWER" ]; then base=${ROOT%/}; else base=${ROOT%/}; nobase=1; fi
-	if [ -n "$base" ] || [ "$nobase" = 1 ]; then
-		for p in $REVIEW_PATHS; do
-			e="$base/$p"
-			exists "$e" || continue
-			find "$e" -xdev ! -type d 2>/dev/null | while IFS= read -r f; do
-				rel=${f#"${base%/}"/}
-				case $rel in
-				etc/crontabs/root) continue ;;
-				etc/dropbear/dropbear_*_host_key | etc/dropbear/dropbear_*_host_key.pub) continue ;;
-				esac
-				whiteout "$f" && continue
-				same_as_lower "$rel" && continue
-				# a finding of the older backdoor (a block of its names too) does not hide what
-				# else the file does: the gl-helper checks still run, only the REVIEW lines are
-				# left out (review of 2.54)
-				grep "^[A-Z]*${TAB}[a-z-]*${TAB}/$rel${TAB}" "$FIND" | cut -f2 | grep -qvE '^(backdoor-[a-z]+|server-ref)$' && continue
-				seen=; grep -v "^INFO${TAB}backdoor-block${TAB}" "$FIND" | grep -q "^[A-Z]*${TAB}[a-z-]*${TAB}/$rel${TAB}" && seen=1
-				# without a base image a package owns the firmware's own files too, also one the
-				# malware changed: there what a file does decides, not who installed it
-				[ "$nobase" = 0 ] && [ -n "$(pkg_new "/$rel")" ] && continue
-				case $rel in etc/rc.d/*) known_service_link "$f" && continue ;; esac
-				u=
-				if [ -f "$f" ] && [ ! -L "$f" ]; then
-					# any autostart/config file that starts the implant is persistence too; a
-					# keep list starts nothing, but the path it keeps stands first on its line
-					active "$f" >"$TMP/cmds"
-					if runs_ioc "$TMP/cmds"; then
-						case $rel in
-						etc/sysupgrade.conf | lib/upgrade/keep.d/*)
-							add IOC keep-ref "/$rel" "keeps files of the malware across firmware updates ($(ran_ioc "$TMP/cmds"))" ;;
-						*) add IOC persist-ref "/$rel" "starts the malware ($(ran_ioc "$TMP/cmds"))" ;;
-						esac
-						continue
-					fi
-					u=$(srv_use "$f")
-				fi
-				# a server of the malware: only what fetches from it starts the malware, and
-				# only that is removed. A block is the owner's, and the file is listed for
-				# review like any other; a name alone is for review.
-				case $u in fetch) add IOC persist-ref "/$rel" "fetches from a server of the malware ($(srv_names "$f"))"; continue ;; esac
-				[ -n "$seen" ] && continue
-				# without a base image every file here would be "new": only a server's name is
-				# listed, the firmware's own scripts name the malware's paths to clean them up
-				if [ "$nobase" = 1 ]; then
-					[ "$u" = name ] && add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"
-					continue
-				fi
-				case $u in
-				block) add INFO server-block "/$rel" "blocks a server of the malware ($(srv_names "$f")): a block, not the malware" ;;
-				name) add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"; continue ;;
-				esac
-				# a path of the malware that a command only names (rm, pgrep, [ -e ]): the owner's
-				# guard or a note, not the malware (review of 2.53)
-				if [ -f "$f" ] && [ ! -L "$f" ] && grep -qE "$IOC_RE" "$TMP/cmds"; then
-					add REVIEW path-ref "/$rel" "names a path of the malware, but does not run it"
-					continue
-				fi
-				if [ -n "$LOWER" ] && exists "$(l "$rel")"; then
-					add REVIEW changed "/$rel" "differs from base image"
-				elif [ -n "$UPPER" ]; then
-					add REVIEW new "/$rel" "not in base image"
-				fi
-			done
-		done
+	# The root file system is an overlay whose layer of changes cannot be seen: something is
+	# mounted over it. One "mount -t tmpfs tmpfs /overlay" does that, and the overlay goes on
+	# working (review of 2.55).
+	if [ "$LIVE" = 1 ] && [ -z "$UPPER" ]; then
+		p=$(awk '$2 == "/" && $3 == "overlay" { n = split($4, o, ","); for (i = 1; i <= n; i++) if (o[i] ~ /^upperdir=/) u = substr(o[i], 10) } END { print u }' /proc/mounts 2>/dev/null)
+		[ -n "$p" ] && [ ! -d "$p" ] &&
+			add REVIEW overlay-hidden "$p" "the root file system keeps its changes here, but this directory cannot be seen: something is mounted over it. What was changed cannot be listed; the check reads the running system instead"
 	fi
+	for p in $REVIEW_PATHS; do
+		e="$base/$p"
+		exists "$e" || continue
+		# A name with a line break in it cannot be read line by line: it came in pieces that
+		# do not exist, each listed as new, and what the file starts went unseen; a profile
+		# script /etc/profile.d/a<NL>b.sh runs all the same. Such a file is read through a
+		# link with a plain name; no firmware or package names a file like that in a place
+		# that starts programs (review of 2.55).
+		[ -n "$(find "$e" -xdev -name "*$NL*" 2>/dev/null | head -c 1)" ] && odd_names "$e" "$base"
+		find "$e" -xdev ! -type d ! -name "*$NL*" 2>/dev/null | while IFS= read -r f; do
+			exists "$f" || continue
+			rel=${f#"${base%/}"/}
+			case $rel in
+			etc/crontabs/root) continue ;;
+			etc/dropbear/dropbear_*_host_key | etc/dropbear/dropbear_*_host_key.pub) continue ;;
+			esac
+			whiteout "$f" && continue
+			same_as_lower "$rel" && continue
+			# a finding of the older backdoor (a block of its names too) does not hide what
+			# else the file does: the gl-helper checks still run, only the REVIEW lines are
+			# left out (review of 2.54). Nor does the shape of a copy of this script or of
+			# compiled Lua (review of 2.55).
+			kinds_at "/$rel" | grep -qvE '^(backdoor-[a-z]+|server-ref|script-copy|lua-bytecode)$' && continue
+			seen=; kinds_at "/$rel" | grep -qvx backdoor-block && seen=1
+			# a link that leads to a file of the malware starts it as the file would, as
+			# /etc/rc.d/S98x -> /etc/config/.gl/boot.sh (review of 2.55)
+			if [ -L "$f" ] && readlink "$f" 2>/dev/null | grep -qE "$IOC_RE"; then
+				add IOC persist-ref "/$rel" "a link to a file of the malware: -> $(readlink "$f" 2>/dev/null)"
+				continue
+			fi
+			# What a file does decides first, then who installed it: the lists of packages lie
+			# in the overlay as well and can be written like any other file (review of 2.55).
+			# A package then only keeps the file off the review list.
+			pk=; [ "$nobase" = 0 ] && [ -n "$(pkg_new "/$rel")" ] && pk=1
+			case $rel in etc/rc.d/*) [ -n "$pk" ] && continue; known_service_link "$f" && continue ;; esac
+			u=
+			if [ -f "$f" ] && [ ! -L "$f" ]; then
+				# any autostart/config file that starts the implant is persistence too; a
+				# keep list starts nothing, but the path it keeps stands first on its line
+				active "$f" >"$TMP/cmds"
+				if runs_ioc "$TMP/cmds"; then
+					case $rel in
+					etc/sysupgrade.conf | lib/upgrade/keep.d/*)
+						add IOC keep-ref "/$rel" "keeps files of the malware across firmware updates ($(ran_ioc "$TMP/cmds"))" ;;
+					*) add IOC persist-ref "/$rel" "starts the malware ($(ran_ioc "$TMP/cmds"))" ;;
+					esac
+					continue
+				fi
+				u=$(srv_use "$f")
+			fi
+			# a server of the malware: only what fetches from it starts the malware, and
+			# only that is removed. A block is the owner's, and the file is listed for
+			# review like any other; a name alone is for review.
+			case $u in fetch) add IOC persist-ref "/$rel" "fetches from a server of the malware ($(srv_names "$f"))"; continue ;; esac
+			[ -n "$seen" ] && continue
+			[ -n "$pk" ] && continue
+			# without a base image every file here would be "new": only a server's name is
+			# listed, the firmware's own scripts name the malware's paths to clean them up
+			if [ "$nobase" = 1 ]; then
+				[ "$u" = name ] && add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"
+				continue
+			fi
+			case $u in
+			block) add INFO server-block "/$rel" "blocks a server of the malware ($(srv_names "$f")): a block, not the malware" ;;
+			name) add REVIEW server-ref "/$rel" "names a server of the malware ($(srv_names "$f")), but does not fetch from it"; continue ;;
+			esac
+			# a path of the malware that a command only names (rm, pgrep, [ -e ]): the owner's
+			# guard or a note, not the malware (review of 2.53)
+			if [ -f "$f" ] && [ ! -L "$f" ] && grep -qE "$IOC_RE" "$TMP/cmds"; then
+				add REVIEW path-ref "/$rel" "names a path of the malware, but does not run it"
+				continue
+			fi
+			if [ -n "$LOWER" ] && exists "$(l "$rel")"; then
+				add REVIEW changed "/$rel" "differs from base image"
+			elif [ -n "$UPPER" ]; then
+				add REVIEW new "/$rel" "not in base image"
+			fi
+		done
+	done
 	# accounts
 	rd "$(r etc/passwd)" | awk -F: '$3 == 0 && $1 != "root" {print "name=" $1 " uid=" $3 " shell=" $7 " pw=" ($2 == "" ? "empty" : "set")}' | while IFS= read -r a; do
 		add REVIEW uid0-account "/etc/passwd" "second uid 0 account: $a"
@@ -1391,7 +1653,7 @@ check_review() {
 	fi
 	# other hidden files and dirs in the overlay
 	if [ -n "$UPPER" ]; then
-		find "$UPPER" -xdev -name '.*' 2>/dev/null | sed "s#^${UPPER%/}/##" | while IFS= read -r rel; do
+		find "$UPPER" -xdev -name '.*' 2>/dev/null | strip_dir "$UPPER" '' | while IFS= read -r rel; do
 			case $rel in
 			etc/glinet/.cache* | etc/config/.gl* | etc/gl_nas/.cache*) continue ;;
 			root/.ash_history | root/.bash_history | root/.ssh | root/.ssh/*) continue ;;
@@ -1410,7 +1672,7 @@ check_review() {
 # SSH key the fingerprint of its public half. This goes to its own file, not to the
 # findings, so none of it is in the anonymous report. Other passwords and tokens in the
 # configuration are not looked for.
-cred() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"$TMP/creds"; }
+cred() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" | tr '\001-\010\013-\037\177' '?' >>"$TMP/creds"; }
 
 # Number of lines "option <name> <value>" with a value that is not empty. $1 file, $2 name
 uci_count() {
@@ -1507,7 +1769,9 @@ file_time() { date -u -r "$1" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null; }
 # a file brought its time along. Empty where neither stat nor ls can tell.
 file_ctime() {
 	local t
-	t=$(stat -c %Z "$1" 2>/dev/null)
+	# stat is no applet of the busybox on stock OpenWrt: then it comes from $PATH, and is
+	# run only when it is the base image's file (review of 2.55)
+	t=; tool_ok stat && t=$(stat -c %Z "$1" 2>/dev/null)
 	case $t in
 	'' | *[!0-9]*) ;;
 	*) date -u -d "@$t" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null && return 0 ;;
@@ -1533,7 +1797,7 @@ file_atime() {
 	local t
 	awk -v p="$1" '$2 == "/" || index(p, $2 "/") == 1 { if (length($2) >= l) { l = length($2); o = "," $4 "," } }
 		END { exit !(o ~ /,noatime,/) }' /proc/mounts 2>/dev/null || return 0
-	t=$(stat -c %X "$1" 2>/dev/null)
+	t=; tool_ok stat && t=$(stat -c %X "$1" 2>/dev/null)
 	case $t in
 	'' | *[!0-9]*) ;;
 	*) date -u -d "@$t" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null && return 0 ;;
@@ -1556,10 +1820,15 @@ check_procs() {
 		# A process can end between the listing and these reads (this script's own helpers
 		# do all the time). Read through cat, whose error can be silenced; with "<file" the
 		# shell itself reports a missing file. A process that is gone is skipped.
-		comm=$(cat "$d/comm" 2>/dev/null)
+		# a name, a path and a command line can hold any byte: a tab or a line break would
+		# break the lists below, an escape sequence would reach the screen. A line break in a
+		# command line ends a command, as ; does (review of 2.55).
+		# The kernel ends comm and readlink ends the path with a line break: that one goes
+		# before the rest becomes "?" (an exe ending in " (deleted)" was not seen as such).
+		comm=$(cat "$d/comm" 2>/dev/null); comm=$(printf '%s' "$comm" | tr '\001-\037\177' '?')
 		[ -n "$comm" ] || continue
-		exe=$(readlink "$d/exe" 2>/dev/null)
-		cmd=$(cat "$d/cmdline" 2>/dev/null | tr '\0' ' ')
+		exe=$(readlink "$d/exe" 2>/dev/null); exe=$(printf '%s' "$exe" | tr '\001-\037\177' '?')
+		cmd=$(cat "$d/cmdline" 2>/dev/null | tr '\000\011\012' '  ;' | tr '\001-\037\177' '?')
 		printf '%s\t%s\t%s\t%s\n' "$pid" "$comm" "$exe" "$cmd" >>"$TMP/procs"
 		# shellcheck disable=SC2012 # fd names are numbers
 		ls -l "$d/fd" 2>/dev/null | awk -v p="$pid" -v c="$comm" \
@@ -1579,18 +1848,22 @@ check_procs() {
 		# (issue 20).
 		: >"$TMP/pran"
 		named=0
-		if printf '%s\n' "$cmd" | grep -qE "$IOC_RE"; then
+		if printf '%s\n' "$cmd" | normp | grep -qE "$IOC_RE"; then
 			named=1
 			printf '%s\n' "$cmd" | active_in 0 1 | ran >"$TMP/pran"
 		fi
-		if printf '%s\n%s\n' "$exe" "$comm" | cat - "$TMP/pran" | grep -qE "$IOC_RE"; then
+		if printf '%s\n%s\n' "$exe" "$comm" | cat - "$TMP/pran" | normp | grep -qE "$IOC_RE"; then
 			ioc_proc "$pid" "comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
 		[ "$named" = 1 ] &&
 			add REVIEW process "$pid" "names a path of the malware, but does not run it: started $(proc_start "$pid") comm=$comm cmd=$cmd"
-		case "$comm $exe $cmd" in
-		monitord\ * | ujaild\ * | */monitord\ * | */ujaild\ * | *'/ujaild (deleted)'* | *monitord.pid*)
+		# The older backdoor's process: by its name, its program or the program its command
+		# line starts, or lua or monitord handed the loader (/var/run/monitord.pid). Not a
+		# command that only names them, as vi or tail on a log (review of 2.55).
+		k=${cmd%% *}
+		case "$comm|$exe|${k##*/}|${k##*/} $cmd" in
+		monitord\|* | ujaild\|* | *\|*/monitord\|* | *\|*/ujaild\|* | *\|*/monitord' (deleted)|'* | *\|*/ujaild' (deleted)|'* | *\|monitord\|* | *\|ujaild\|* | *'|lua'*' '*monitord.pid* | *'|monitord '*monitord.pid*)
 			# the program the kernel runs, up to 64 MiB as for other deleted programs
 			sha=
 			[ "$(cat "$d/exe" 2>/dev/null | wc -c)" -le 67108864 ] && sha=$(sha256sum "$d/exe" 2>/dev/null | cut -c1-64)
@@ -1630,7 +1903,7 @@ check_procs() {
 			fi
 			add REVIEW process "$pid" "names the address or the pipe of the reported remote shell, but is not made like it: started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		fi
-		if printf '%s\n' "$cmd" | grep -qE "$KVM_IP_RE"; then
+		if printf '%s\n' "$cmd" | grep -qiE "$KVM_IP_RE"; then
 			printf '%s\n' "$cmd" >"$TMP/srvcmd"
 			u=$(SRV_PROC=1; srv_use "$TMP/srvcmd")
 			# a program from a RAM disk that is given a server: the payload (review of 2.53)
@@ -1646,7 +1919,7 @@ check_procs() {
 		if printf '%s\n' "$cmd" | grep -qE "$TOOL_RE"; then
 			add REVIEW process "$pid" "tool that remote shells use (GL.iNet staff's process check): started $(proc_start "$pid") comm=$comm cmd=$cmd"
 		fi
-		if [ -n "$exe" ] && grep -q "^IOC${TAB}applet-hijack${TAB}${exe}${TAB}" "$FIND"; then
+		if [ -n "$exe" ] && has_at applet-hijack "$exe"; then
 			ioc_proc "$pid" "runs replaced applet: comm=$comm exe=$exe cmd=$cmd"
 			continue
 		fi
@@ -1667,8 +1940,8 @@ check_exes() {
 	local exe rel pids owner
 	cut -f1 "$TMP/exes" | sort -u | while IFS= read -r exe; do
 		pids=$(awk -F '\t' -v e="$exe" '$1==e {printf "%s%s", sep, $2; sep=","}' "$TMP/exes")
-		grep -q "^IOC${TAB}applet-hijack${TAB}${exe}${TAB}" "$FIND" && continue
-		grep -q "^INFO${TAB}updater-file${TAB}${exe}${TAB}" "$FIND" && continue
+		has_at applet-hijack "$exe" && continue
+		has_at updater-file "$exe" && continue
 		case $exe in
 		/tmp/* | /var/* | /run/* | /dev/shm/*)
 			add REVIEW running "$exe" "started from a RAM disk, in neither the base image nor the overlay (pid $pids)"
@@ -1754,8 +2027,8 @@ check_tmp() {
 	vendor_cleanup && add INFO vendor-cleanup gl-sdk4-system-check "this firmware removes known traces of the malware at its first start (GL.iNet's cleanup)"
 	# the remote terminal service pointed at the attacker's server
 	f=$(r etc/rtty_conf)
-	if safe "$f" && grep -qE "$KVM_IP_RE" "$f" 2>/dev/null; then
-		add IOC rtty-server /etc/rtty_conf "the remote terminal service (rtty) is set to a server of the malware ($(grep -oE "$KVM_IP_RE" "$f" | sort -u | tr '\n' ' ' | sed 's/ $//'))"
+	if safe "$f" && grep -qiE "$KVM_IP_RE" "$f" 2>/dev/null; then
+		add IOC rtty-server /etc/rtty_conf "the remote terminal service (rtty) is set to a server of the malware ($(grep -oiE "$KVM_IP_RE" "$f" | sort -u | tr '\n' ' ' | sed 's/ $//'))"
 	elif safe "$f" && [ -n "$LOWER" ] && ! base_same etc/rtty_conf; then
 		# The installer can be given another server than its own (issue 25). Where the file
 		# is not the firmware image's, the servers it names are listed for a human to judge.
@@ -1812,38 +2085,37 @@ check_firewall() {
 	: >"$TMP/fw-ioc"
 	# without an overlay and a base image only the start scripts are read (see check_review)
 	if [ -n "$UPPER" ]; then base=$UPPER; elif [ -n "$LOWER" ]; then base=${ROOT%/}; else base=${ROOT%/}; nobase=1; fi
-	if [ -n "$base" ] || [ "$nobase" = 1 ]; then
-		for p in $FW_PATHS; do
-			e="$base/$p"
-			exists "$e" || continue
-			find "$e" -xdev -type f 2>/dev/null | while IFS= read -r f; do
-				rel=${f#"${base%/}"/}
-				same_as_lower "$rel" && continue
-				[ "$nobase" = 0 ] && [ -n "$(pkg_new "/$rel")" ] && continue
-				# The firewall runs /etc/firewall.user (fw3) and what lies in /etc/firewall.d as
-				# shell scripts at every start: there the malware's commands count as in an
-				# autostart file. --fix drops only those lines (review of 2.53).
-				case $rel in etc/firewall.user | etc/firewall.d/*)
-					[ ! -L "$f" ] && active "$f" >"$TMP/cmds"
-					if [ ! -L "$f" ] && runs_ioc "$TMP/cmds"; then
-						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it starts the malware ($(ran_ioc "$TMP/cmds"))"
-					elif [ ! -L "$f" ] && [ "$(srv_use "$f")" = fetch ]; then
-						add IOC persist-ref "/$rel" "the firewall runs this at every start, and it fetches from a server of the malware ($(srv_names "$f"))"
-					fi ;;
-				esac
-				[ "$nobase" = 1 ] && continue
-				if [ -n "$LOWER" ] && [ -f "$(l "$rel")" ]; then
-					not_in "$(l "$rel")" "$f" 2>/dev/null | grep -v '^[[:space:]]*\(#.*\)\{0,1\}$' >"$TMP/fw-lines"
-					n=$(wc -l <"$TMP/fw-lines" | tr -d ' ')
-					add REVIEW fw-config "/$rel" "differs from the firmware image: $n lines that are not in it (listed under Firewall)"
-				else
-					grep -v '^[[:space:]]*\(#.*\)\{0,1\}$' "$f" >"$TMP/fw-lines" 2>/dev/null
-					add REVIEW fw-config "/$rel" "not in the firmware image (content listed under Firewall)"
-				fi
-				{ echo "/$rel"; sed 's/^/    /' "$TMP/fw-lines"; } >>"$TMP/fw-added"
-			done
+	for p in $FW_PATHS; do
+		e="$base/$p"
+		exists "$e" || continue
+		find "$e" -xdev -type f 2>/dev/null | while IFS= read -r f; do
+			rel=${f#"${base%/}"/}
+			same_as_lower "$rel" && continue
+			# The firewall runs /etc/firewall.user (fw3) and what lies in /etc/firewall.d as
+			# shell scripts at every start: there the malware's commands count as in an
+			# autostart file. --fix drops only those lines (review of 2.53).
+			case $rel in etc/firewall.user | etc/firewall.d/*)
+				[ ! -L "$f" ] && active "$f" >"$TMP/cmds"
+				if [ ! -L "$f" ] && runs_ioc "$TMP/cmds"; then
+					add IOC persist-ref "/$rel" "the firewall runs this at every start, and it starts the malware ($(ran_ioc "$TMP/cmds"))"
+				elif [ ! -L "$f" ] && [ "$(srv_use "$f")" = fetch ]; then
+					add IOC persist-ref "/$rel" "the firewall runs this at every start, and it fetches from a server of the malware ($(srv_names "$f"))"
+				fi ;;
+			esac
+			[ "$nobase" = 1 ] && continue
+			# a package keeps a file only off the review list, after what it does was read
+			[ -n "$(pkg_new "/$rel")" ] && continue
+			if [ -n "$LOWER" ] && [ -f "$(l "$rel")" ]; then
+				not_in "$(l "$rel")" "$f" 2>/dev/null | grep -v '^[[:space:]]*\(#.*\)\{0,1\}$' >"$TMP/fw-lines"
+				n=$(wc -l <"$TMP/fw-lines" | tr -d ' ')
+				add REVIEW fw-config "/$rel" "differs from the firmware image: $n lines that are not in it (listed under Firewall)"
+			else
+				grep -v '^[[:space:]]*\(#.*\)\{0,1\}$' "$f" >"$TMP/fw-lines" 2>/dev/null
+				add REVIEW fw-config "/$rel" "not in the firmware image (content listed under Firewall)"
+			fi
+			{ echo "/$rel"; sed 's/^/    /' "$TMP/fw-lines"; } | tr '\001-\010\013-\037\177' '?' >>"$TMP/fw-added"
 		done
-	fi
+	done
 	[ "$LIVE" = 1 ] || return 0
 	: >"$TMP/fw-redirect"
 	if tool_ok iptables-save && iptables-save >"$TMP/iptables-save.txt" 2>/dev/null; then
@@ -1891,8 +2163,9 @@ decode_tcp() {
 			o = ""; for (i = 0; i < 8; i++) { g = substr(w, i*4+1, 4); sub(/^0+/, "", g); if (g == "") g = "0"; if (i) o = o ":"; o = o g }
 			return "[" o "]"
 		}
-		FNR==1 {nfile++}
-		nfile==1 {own[$1]=$2 "/" $3; next}
+		# the first file is the list of socket owners; FNR==1 missed an empty one, and then
+		# the connections were taken for that list (review of 2.55)
+		FILENAME == ARGV[1] {own[$1]=$2 "/" $3; next}
 		FNR>1 && $4==st {split($2,a,":"); split($3,b,":");
 			printf "%s:%d -> %s:%d  %s\n", ip(a[1]), h(a[2]), ip(b[1]), h(b[2]), ($10 in own ? own[$10] : "?")}' \
 		"$TMP/sockets" $files 2>/dev/null
@@ -2249,6 +2522,7 @@ scrub() {
 		root/.ssh/* | etc/dropbear/dropbear_*_host_key | etc/ssh/ssh_host_*_key | \
 			etc/openvpn/* | etc/tailscale/* | var/lib/tailscale/* | */identity.secret | \
 			etc/wireguard/* | *.pem | *.key | *.p12 | *.pfx | etc/ppp/*-secrets | \
+			etc/ipsec.secrets | etc/ipsec.d/private/* | etc/samba/smbpasswd | etc/samba/*.tdb | \
 			etc/kvmd/user/*passwd* | etc/kvmd/user/*totp* | etc/kvmd/user/*.secret)
 			rm -f "$f" && printf 'removed\t/%s\tprivate key or VPN profile\n' "$rel" >>"$TMP/redacted"
 			continue ;;
@@ -2288,7 +2562,7 @@ scrub() {
 
 ARCHIVE=
 collect() {
-	local E list f pid size avail base_shadow
+	local E list f pid size avail base_shadow i
 	E=$TMP/evidence
 	working "details of the device and the report"
 	mkdir -p "$E/meta" "$E/overlay" "$E/files" "$E/proc" "$E/net" "$E/logs" "$E/etc"
@@ -2311,7 +2585,7 @@ collect() {
 		fi
 	} >"$E/meta/info.txt"
 	for f in etc/version etc/glversion etc/version.type etc/version.build etc/version.date etc/os-release etc/openwrt_release etc/openwrt_version etc/manifest; do
-		[ -f "$(r "$f")" ] && cp "$(r "$f")" "$E/meta/$(echo "$f" | tr / _)"
+		safe "$(r "$f")" && cp "$(r "$f")" "$E/meta/$(echo "$f" | tr / _)"
 	done
 	if [ "$LIVE" = 1 ]; then
 		cp /proc/mounts "$E/meta/mounts.txt" 2>/dev/null
@@ -2322,7 +2596,7 @@ collect() {
 	working "fingerprints of every changed file (this can take a while)"
 	# Overlay upper: listing with hashes always, complete copy if small and /tmp has room.
 	if [ -n "$UPPER" ]; then
-		find "$UPPER" -xdev -exec stat -c '%A %U:%G %s %y %N' {} + >"$E/overlay/upper-listing.txt" 2>/dev/null ||
+		{ tool_ok stat && find "$UPPER" -xdev -exec stat -c '%A %U:%G %s %y %N' {} + >"$E/overlay/upper-listing.txt" 2>/dev/null; } ||
 			find "$UPPER" -xdev -exec ls -lad {} + >"$E/overlay/upper-listing.txt" 2>/dev/null
 		find "$UPPER" -xdev -type f -size -51200k -exec sha256sum {} + >"$E/overlay/upper-sha256.txt" 2>/dev/null
 		size=$(du -sk "$UPPER" 2>/dev/null | awk '{print $1}')
@@ -2338,13 +2612,21 @@ collect() {
 	working "copies of the files that were found"
 	# Always copy the finding paths (merged view) and key files.
 	list=$TMP/copylist
-	awk -F '\t' '$3 ~ /^\// {print substr($3,2)}' "$FIND" >"$list"
+	awk -F '\t' '$3 ~ /^\/[^\/?]/ {print substr($3,2)}' "$FIND" >"$list"
 	for f in etc/mp_ip_mapping_info etc/rtty_conf tmp/gl_crontabs etc/gl_crontabs var/spool/cron/crontabs $FW_PATHS $MARKER_DIRS $MARKER_DIRS_ALT $PERSIST etc/crontabs root/.ssh etc/dropbear/authorized_keys \
 		etc/passwd etc/group etc/sysupgrade.conf lib/upgrade/keep.d; do echo "$f"; done >>"$list"
 	mkdir -p "$E/files/merged"
+	# /tmp is RAM: a path of 64 MiB or more is not copied, and one that could not be copied
+	# is named, so that a gap in the archive does not go unseen (review of 2.55)
 	sort -u "$list" | while IFS= read -r f; do
 		exists "$(r "$f")" || continue
-		tar -C "${ROOT%/}/" -cf - "./$f" 2>/dev/null | tar -C "$E/files/merged" -xf - 2>/dev/null
+		size=$(du -sk "$(r "$f")" 2>/dev/null | awk '{ print $1 }')
+		if [ "${size:-0}" -ge 65536 ]; then
+			printf '/%s\t%s KiB, not copied: too large for /tmp\n' "$f" "$size" >>"$E/files/NOT-COPIED.txt"
+			continue
+		fi
+		tar -C "${ROOT%/}/" -cf - "./$f" 2>/dev/null | tar -C "$E/files/merged" -xf - 2>/dev/null ||
+			printf '/%s\tcould not be copied completely\n' "$f" >>"$E/files/NOT-COPIED.txt"
 	done
 	working "processes, network and logs"
 	# shadow: whether a hash changed, never the hash itself
@@ -2396,7 +2678,14 @@ collect() {
 	# Without an archive the run still ends with its result (and --fix changes nothing):
 	# the findings are what the owner needs most, also on a router whose /tmp is full.
 	mkdir -p "$OUTDIR" || { archive_failed "cannot create $OUTDIR"; return 1; }
-	ARCHIVE=$OUTDIR/gl-triage-$HOST-$STAMP.tar.gz
+	# the name can be guessed: something already there, a link above all, is not written
+	# through. A run in the same second (--archive, then --fix) gets a number instead
+	# (review of 2.55).
+	ARCHIVE=$OUTDIR/gl-triage-$HOST-$STAMP.tar.gz; i=1
+	while exists "$ARCHIVE" || exists "$ARCHIVE.sha256"; do
+		i=$((i + 1)); [ "$i" -gt 9 ] && { archive_failed "$ARCHIVE is there already; not written"; return 1; }
+		ARCHIVE=$OUTDIR/gl-triage-$HOST-$STAMP-$i.tar.gz
+	done
 	tar -C "$TMP" -czf "$ARCHIVE" evidence || { rm -f "$ARCHIVE"; archive_failed "writing $ARCHIVE failed"; return 1; }
 	tar -tzf "$ARCHIVE" >/dev/null 2>&1 || { archive_failed "archive verification failed: $ARCHIVE"; return 1; }
 	(cd "$OUTDIR" && sha256sum "${ARCHIVE##*/}" >"${ARCHIVE##*/}.sha256")
@@ -2509,12 +2798,12 @@ fix() {
 	done
 	# the other directories only when one of the malware's files was found in them
 	for p in $MARKER_DIRS_ALT; do
-		exists "$(r "$p")" && grep -q "^IOC${TAB}marker${TAB}/$p/" "$FIND" || continue
+		exists "$(r "$p")" && P="/$p/" awk -F '\t' '$1 == "IOC" && $2 == "marker" && index($3, ENVIRON["P"]) == 1 { f = 1 } END { exit !f }' "$FIND" || continue
 		if rm -rf "$(r "$p")"; then act "removed /$p"; else failed=1; fi
 	done
 	# a program of the malware elsewhere, known by its packer: that file only, and where
 	# the base image has a file of that name, the base image's file is put back
-	awk -F '\t' '$1=="IOC" && $2=="marker" {print substr($3,2)}' "$FIND" | sort -u | while IFS= read -r p; do
+	awk -F '\t' '$3 ~ /^\/[^\/?]/ && $1=="IOC" && $2=="marker" {print substr($3,2)}' "$FIND" | sort -u | while IFS= read -r p; do
 		f=$(r "$p")
 		[ -f "$f" ] && [ ! -L "$f" ] || continue
 		restore_from_lower "$p" || echo fail >>"$TMP/fixfail"
@@ -2539,6 +2828,13 @@ fix() {
 				fi
 				continue
 			fi
+			# rc.local that differs only by the lines the firmware writes into it: nothing of
+			# the owner's or the malware's to take out, and putting the base image's back
+			# would take the firmware's lines away (review of 2.55)
+			if has_at firmware-lines "/$p"; then
+				say "   left /$p: it differs from the base image only by lines the firmware writes itself."
+				continue
+			fi
 			restore_from_lower "$p" || failed=1
 			say "     ${D}(previous version: files/merged/$p in the archive)${N}"
 		done
@@ -2553,7 +2849,7 @@ fix() {
 	fi
 	# 4. other files that start the implant (init scripts, hotplug, profile, ...)
 	#    and replaced applets: put the base image version back or remove them
-	awk -F '\t' '$1=="IOC" && ($2=="persist-ref" || $2=="applet-hijack") {print $2 "\t" substr($3,2)}' "$FIND" |
+	awk -F '\t' '$3 ~ /^\/[^\/?]/ && $1=="IOC" && ($2=="persist-ref" || $2=="applet-hijack") {print $2 "\t" substr($3,2)}' "$FIND" |
 		while IFS="$TAB" read -r t p; do
 			case " $PERSIST " in *" $p "*) continue ;; esac
 			exists "$(r "$p")" || continue
@@ -2568,8 +2864,29 @@ fix() {
 				continue
 			fi
 			restore_from_lower "$p" || echo fail >>"$TMP/fixfail"
+			# A replaced applet with no base image to put back (a KVM): the overlay now hides
+			# the firmware's own link as well, so the link to busybox is made again where
+			# busybox has that applet. With a base image that lacks the path, nothing was
+			# there before (review of 2.55).
+			if [ "$t" = applet-hijack ] && [ -z "$LOWER" ] && ! exists "$(r "$p")"; then
+				if [ -f "$(r bin/busybox)" ] && busybox --list 2>/dev/null | grep -qxF "${p##*/}"; then
+					ln -s /bin/busybox "$(r "$p")" && act "put /$p back as a link to busybox"
+				else
+					say "   ${YEL}/$p is gone now: put the firmware's own one back (a link to busybox on most firmware)${N}"
+				fi
+			fi
 			case $p in etc/init.d/*) exists "$(r "$p")" || echo "${p##*/}" >>"$TMP/removed-init" ;; esac
 		done
+	# files with a line break in their name that start the malware, reached through the
+	# links the check made; nothing else of that kind is touched (review of 2.55)
+	if [ -s "$TMP/odd-ioc" ]; then
+		for n in $(sort -un "$TMP/odd-ioc"); do
+			[ -L "$TMP/odd/$n" ] || continue
+			f=$(readlink "$TMP/odd/$n")
+			[ -f "$f" ] && rm -f -- "$f" &&
+				act "removed $(printf '%s' "$f" | tr '\001-\037\177' '?')" || echo fail >>"$TMP/fixfail"
+		done
+	fi
 	[ -f "$TMP/fixfail" ] && failed=1
 	# 5. OpenWrt: service links to init scripts removed in step 4
 	if [ -s "$TMP/removed-init" ] && [ -d "$(r etc/rc.d)" ]; then
@@ -2581,7 +2898,7 @@ fix() {
 	fi
 	# 6. sysupgrade keep lists: drop only the lines that keep implant paths
 	# 6a. the running crontab and added SSH keys: drop only the malware's lines
-	awk -F '\t' '$1=="IOC" && ($2=="cron-ref" || $2=="ssh-key") {print $2 "\t" substr($3,2)}' "$FIND" | while IFS="$TAB" read -r pid p; do
+	awk -F '\t' '$3 ~ /^\/[^\/?]/ && $1=="IOC" && ($2=="cron-ref" || $2=="ssh-key") {print $2 "\t" substr($3,2)}' "$FIND" | while IFS="$TAB" read -r pid p; do
 		f=$(r "$p")
 		safe "$f" || continue
 		if [ "$pid" = ssh-key ]; then
@@ -2592,7 +2909,7 @@ fix() {
 		fi
 		cat "$TMP/keep.new" >"$f" && act "removed the malware's lines from /$p" || echo fail >>"$TMP/fixfail"
 	done
-	awk -F '\t' '$1=="IOC" && $2=="keep-ref" {print substr($3,2)}' "$FIND" | while IFS= read -r p; do
+	awk -F '\t' '$3 ~ /^\/[^\/?]/ && $1=="IOC" && $2=="keep-ref" {print substr($3,2)}' "$FIND" | while IFS= read -r p; do
 		f=$(r "$p")
 		safe "$f" || continue
 		bad_lines "$f" >"$TMP/keep.bad"
@@ -2621,10 +2938,14 @@ fix() {
 	#    restarted (KVM: S50crond, OpenWrt: cron)
 	if [ "$LIVE" = 1 ]; then
 		while read -r pid; do kill -CONT "$pid" 2>/dev/null; done <"$TMP/cron.stopped"
+		# only where a crond runs to read it and take it away again; otherwise the file stayed
+		# and was listed for review later (review of 2.55)
+		if [ -s "$TMP/cron.stopped" ]; then
+			for f in etc/crontabs tmp/gl_crontabs var/spool/cron/crontabs; do
+				[ -d "$(r "$f")" ] && [ ! -L "$(r "$f")" ] && echo root >>"$(r "$f")/cron.update" 2>/dev/null
+			done
+		fi
 		: >"$TMP/cron.stopped"
-		for f in etc/crontabs tmp/gl_crontabs var/spool/cron/crontabs; do
-			[ -d "$(r "$f")" ] && [ ! -L "$(r "$f")" ] && echo root >>"$(r "$f")/cron.update" 2>/dev/null
-		done
 		for s in /etc/init.d/S50crond /etc/init.d/cron; do
 			# an init script that is not the firmware's is not run
 			[ -x "$s" ] && { [ -z "$LOWER" ] || base_same "${s#/}" 2>/dev/null; } && "$s" restart >/dev/null 2>&1 && act "restarted cron ($s)" && break
@@ -2786,13 +3107,14 @@ build_report() {
 				else
 					cat "$(r "${f#/}")"
 				fi 2>/dev/null | grep -v '^[[:space:]]*$' | head -n "$n" >"$TMP/plines"
-				sed "s|^|$f:  |" "$TMP/plines" >>"$TMP/rlines"
+				# shown on the screen before sending: no control character of the file reaches it
+				awk -v f="$f" '{ print f ":  " $0 }' "$TMP/plines" | tr '\001-\010\013-\037\177' '?' >>"$TMP/rlines"
 				printf '{"path": %s, "lines": [%s]},' "$(jstr "$f" 120)" "$(jlines <"$TMP/plines")"
 			done | sed 's/,$//')
 		# the chain the reported attack writes to, as it is now
 		if [ -s "$TMP/fw-rules" ]; then
 			awk -F '\t' '$2 ~ /^-A SDWAN_IP_MAPPING / {print "firewall " $1 ": " $2}' "$TMP/fw-rules" | head -n 10 >"$TMP/rfw"
-			cat "$TMP/rfw" >>"$TMP/rlines"
+			tr '\001-\010\013-\037\177' '?' <"$TMP/rfw" >>"$TMP/rlines"
 			rules=$(sed 's/^firewall //' "$TMP/rfw" | jlines)
 		fi
 		cmds=$(grep "^IOC${TAB}process${TAB}" "$FIND" | sed -n 's/.* cmd=//p' | sort -u | head -n 5 | jlines 400)
@@ -3074,7 +3396,8 @@ cloud_advice() {
 # in the code tells this device from another of its kind, or names its owner. The code
 # stands after "#", a part of the address a browser does not send. The page holds the
 # same tables; the worker's tests compare them, and the tests here read every code back.
-RESULT_URL=${GL_TRIAGE_RESULT_URL:-https://csa.gl-i.net/}
+RESULT_URL=https://csa.gl-i.net/
+case ${GL_TRIAGE_RESULT_URL:-} in http://127.0.0.1[:/]*) RESULT_URL=$GL_TRIAGE_RESULT_URL ;; esac
 RESULT_CODES='marker=mk applet-hijack=ah persist-ref=pr keep-ref=kr cron-ref=cr ssh-key=sk rtty-server=rt pipe=pp fw-rule=fw cloud-command=cc installer-trace=it backdoor-init=bi backdoor-file=bf backdoor-keep=bk backdoor-host=bh backdoor-proc=bp persistence=pe process-quick=pq process-shell=ps process-implant=pi connection-shell=cs connection-malware=cm vendor-cleanup=vc'
 RESULT_KINDS='mk ah pr kr cr sk rt pq pi ps pp cs cm fw cc it bi bf bk bh bp pe vc'
 # the models as firmware.gl-i.net names them; new ones go at the end, the order never changes
@@ -3178,12 +3501,13 @@ finish() { cloud_advice; offer_report; exit "$1"; }
 # never passed over.
 # The keys: the base64 line of each public key file, separated by spaces. The second is a
 # spare whose other half is kept offline, to replace the first if it is lost.
-UPDATE_URL=${GL_TRIAGE_UPDATE_URL:-https://app.gl-i.net/csa-2026-01-fix}
+UPDATE_URL=https://app.gl-i.net/csa-2026-01-fix
+case ${GL_TRIAGE_UPDATE_URL:-} in http://127.0.0.1[:/]*) UPDATE_URL=$GL_TRIAGE_UPDATE_URL ;; esac
 UPDATE_KEYS='RWT3i36dVR3XndIzvtu600f1No34ytWkFYphv+5p49dLKtEUUy3IfIDx RWTjqtEa0VPVvTR3x0I/d2cCw3rN4ly+mVAnwgaEzL3j36CPwUTGhqn1'
 fetch() {
 	if tool_ok curl; then curl -fsSL -m 60 -o "$2" "$1" 2>/dev/null
 	elif tool_ok wget; then wget -q -T 60 -O "$2" "$1" 2>/dev/null
-	else return 2; fi
+	else return 99; fi
 }
 do_update() {
 	local self new sig k ok nv check answer
@@ -3215,7 +3539,8 @@ do_update() {
 		return 4
 	fi
 	fetch "$UPDATE_URL" "$new"
-	case $? in 0) ;; 2) no "neither curl nor wget of the firmware is here to download with."; return 4 ;; *) no "the download failed."; return 4 ;; esac
+	# 99: no tool. curl and wget have exit codes of their own, 2 among them (review of 2.55)
+	case $? in 0) ;; 99) no "neither curl nor wget of the firmware is here to download with."; return 4 ;; *) no "the download failed."; return 4 ;; esac
 	if [ "$check" = usign ]; then
 		fetch "$UPDATE_URL.sig" "$sig" || { no "no signature is served for the current version yet. Try again in a few minutes."; return 4; }
 		ok=0
@@ -3385,7 +3710,13 @@ fix)
 		finish 3
 	fi
 	if [ "$FIXRC" != 0 ]; then say "   ${YEL}Verdict: IOCs gone, but some steps reported errors${N}"; result_link 3; recommend; finish 3; fi
-	say "   ${GRN}${B}Verdict: no gl-helper indicators left${N}"
+	# traces that --fix leaves on purpose are still IOC lines: the verdict says so instead of
+	# "nothing left" (review of 2.55)
+	if has_ioc cloud-command || has_ioc installer-trace; then
+		say "   ${GRN}${B}Verdict: nothing left that starts the malware; traces of the attack remain${N}"
+	else
+		say "   ${GRN}${B}Verdict: no gl-helper indicators left${N}"
+	fi
 	has_ioc cloud-command && say "   ${D}The state file /etc/mp_ip_mapping_info was left in place: it only shows that the command ran.${N}"
 	has_ioc installer-trace && say "   ${D}The installer's link to busybox was left in place: it only shows that the installer was at work.${N}"
 	result_link 2

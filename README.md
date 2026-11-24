@@ -106,8 +106,9 @@ cd glinet-csa-2026-01
 | `--report`, `--no-report` | Send the anonymous report without asking, or never offer it |
 | `--with-secrets` | Keep private keys and passwords in the evidence archive |
 
-Exit codes: `0` clean, `1` indicators found, `2` fixed and clean, `3` fix incomplete,
-`4` error.
+Exit codes: `0` clean, `1` indicators found, `2` fixed (what `--fix` removes is gone; the
+traces it leaves on purpose, `cloud-command` and `installer-trace`, may still be listed),
+`3` fix incomplete, `4` error.
 
 | Label | Meaning |
 |---|---|

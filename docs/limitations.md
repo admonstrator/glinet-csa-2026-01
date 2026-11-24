@@ -14,8 +14,15 @@ Part of the [gl-helper triage script](../README.md).
   Since 2.55 a copy is known by its whole shape, and a file that starts the malware, keeps
   its files, holds its crontab line or fetches from a server of the older backdoor counts
   as a trace whatever lines it carries ([#25](https://github.com/admonstrator/glinet-csa-2026-01/issues/25)).
+  The shape of a copy, or of compiled Lua, no longer keeps a file from being read for a
+  start of the malware.
+- The script reads shell the way `sh` would in the common cases, not in every case. A
+  command that is put together while it runs (from pieces, from another file, from text
+  that `eval` builds) is not seen. A variable counts only where the same file sets it.
 - The script only reads regular files. A named pipe or a link into `/proc` in a place it
   scans is not opened, because reading one could block the run for good; where such a
   thing stands in for `rc.local` or the root crontab it is listed as `REVIEW`.
+- `--changes` compares file by file. Where the overlay replaced a whole directory, the
+  base image's files in it are not listed as removed.
 - The script cannot see anything outside the device, such as changes on an attached
   computer or on the cloud account.
