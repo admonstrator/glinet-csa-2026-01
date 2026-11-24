@@ -82,12 +82,14 @@ This script also detects:
   crontab reads, what `$( )` runs anywhere on a line, the program behind `xargs`,
   `flock`, `trap`, `su -c` and `find -exec`, a program or server held in a variable that
   the same file sets, a command string run by `sh -c "$CMD"` or `eval`, and a file that
-  the same lines write and then run, `( ...; prog ) &`, `sh<<EOF` without a blank,
+  the same lines write and then run, `( ...; prog ) &` and `( ...; prog ) > /dev/null`,
+  `sh<<EOF` without a blank,
   here-documents with a quoted end word (`<< "E O F"`) and `{ crontab -l; echo ...; } |
   crontab -`. Host names count in any case (`GL-INET.TOP`), and `//` or `/./` in a path
   changes nothing. Quoted text that is only data does not make a command: the comment of
   a firewall rule and what `logger` writes to the log, so `--comment "block nc shell"`
-  next to the attacker's address is a block, not a download. What `echo` or `printf`
+  next to the attacker's address is a block, not a download, unless the same file makes
+  `logger` or `comment` a function or an alias of its own. What `echo` or `printf`
   write still counts, because a group or a loop around them can send it to `sh` or into
   a file. The patterns of a `case` on one line are no commands either. The exact rules
   are in the script and its tests.

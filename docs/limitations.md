@@ -24,7 +24,7 @@ Part of the [gl-helper triage script](../README.md).
   command that is put together while it runs (from pieces, from another file, from text
   that `eval` builds) is not seen. A variable counts only where the same file sets it.
   Text in single quotes that runs over more than 2,000 lines or 64 KB, and a file that
-  is still over 1 MB without its comments and empty lines, are read line by line: there
+  is still over 1 MB without its comments and repeated empty lines, are read line by line: there
   a start that only the lines around it make one can go unseen, and a line that only
   looks like a start can count as one (since 2.55, so that such a file does not hold the
   check up for minutes).

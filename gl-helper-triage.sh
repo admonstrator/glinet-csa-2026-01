@@ -753,13 +753,19 @@ active_in() {
 # Files that are read line by line: crontabs and the lists of files a firmware update keeps
 linewise() { case $1 in *crontabs/* | *crontabs.d/* | *sysupgrade.conf | */keep.d/*) return 0 ;; esac; return 1; }
 # A file over 1 MB took minutes on a router (second review of 2.55). Its comment lines
-# are read as empty lines and runs of empty lines as one, which changes nothing sh would
-# do (an empty line ends a line continued with \ as a comment does), and padding with NUL
-# bytes or comments is gone. What is still over 1 MB is not read command by command: only
+# are read as empty lines and runs of empty lines as one empty line, which changes nothing
+# sh would do (an empty line ends a line continued with \ as a comment does), and padding
+# with NUL bytes or comments is gone. Where a here-document's end word starts with #, the
+# comment lines stay (final review of 2.55). What is still over 1 MB is not read command by command: only
 # the lines that name the malware, its servers or the older backdoor, set a variable or
 # use one, or open or close a case, one by one (third review: without the variables a
 # start through "$PROG" went unseen). Such a file is read less exactly; see limitations.
-squeeze() { tr -s '\n' | sed 's/^[[:space:]]*#.*$//' | tr -s '\n'; }
+squeeze() { # file
+	local cb=1
+	grep -qE "<<-?[[:space:]]*[\"'\\\\]*#" "$1" 2>/dev/null && cb=0
+	tr -s '\000' <"$1" 2>/dev/null | tr '\000' '\n' |
+		awk -v cb="$cb" 'cb && /^[[:space:]]*#/ { $0 = "" } /[^[:space:]]/ { print; e = 0; next } !e++ { print "" }'
+}
 active() {
 	local n
 	n=$(wc -c <"$1" 2>/dev/null | tr -d ' ')
@@ -768,12 +774,12 @@ active() {
 		if linewise "$1"; then strs "$1" | active_in 1; else strs "$1" | active_in; fi
 		return 0
 	fi
-	n=$(strs "$1" | squeeze | wc -c | tr -d ' ')
+	n=$(squeeze "$1" | wc -c | tr -d ' ')
 	case $n in '' | *[!0-9]*) n=0 ;; esac
 	if [ "$n" -gt 1048576 ]; then
-		strs "$1" | squeeze | grep -iE "$IOC_RE|$KVM_IP_RE|$BD_RE|$BD_HOST_RE|^[[:space:]]*((export|local|readonly)[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=|[$][{]?[A-Za-z_]|(^|[[:space:];])(case|esac)([[:space:];]|$)" | active_in 1
-	elif linewise "$1"; then strs "$1" | squeeze | active_in 1
-	else strs "$1" | squeeze | active_in; fi
+		squeeze "$1" | grep -iE "$IOC_RE|$KVM_IP_RE|$BD_RE|$BD_HOST_RE|^[[:space:]]*((export|local|readonly)[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=|[$][{]?[A-Za-z_]|(^|[[:space:];])(case|esac)([[:space:];]|$)" | active_in 1
+	elif linewise "$1"; then squeeze "$1" | active_in 1
+	else squeeze "$1" | active_in; fi
 }
 # The programs that the commands on stdin run, one command per line as active_in gives
 # them; one program per line. That is a command's first word, and behind sh, ., source,
@@ -788,8 +794,16 @@ active() {
 ran() {
 	awk 'function unq(s) { gsub(/["\047`]/, "", s); sub(/^[({!]+/, "", s); sub(/[)};]+$/, "", s); return s }
 	function base(s) { sub(/.*\//, "", s); return s }
-	# whether the words from k on are only redirections and &
-	function redir(k) { for (; k <= NF; k++) if ($k !~ /^([0-9]*[<>]|&$|&>)/) return 0; return 1 }
+	# whether the words from k on are only redirections (> file as well as >file) and &, or
+	# a pipe: what follows the ) that ends a subshell (final review of 2.55)
+	function redir(k) {
+		for (; k <= NF; k++) {
+			if ($k ~ /^[|]/) return 1
+			if ($k ~ /^[0-9]*(>>?|<)$/) { k++; continue }
+			if ($k !~ /^([0-9]*[<>]|&$|&>)/) return 0
+		}
+		return 1
+	}
 	{
 		# a line break in quoted data (see active_in) is a space here
 		gsub(/\005/, " ")
@@ -947,10 +961,17 @@ writes() {
 	# { crontab -l; echo "..."; } | crontab -: what echo writes inside the group goes into
 	# the crontab that the group is piped into, also through sort or with 2>/dev/null
 	# (second and third review of 2.55). lq: the line without its quoted text.
-	{ lq = l; gsub(/"[^"]*"|\047[^\047]*\047/, "", lq) }
-	lq ~ /^[[:space:]]*[})]/ && lq ~ /[|]([^|]*[|])*[[:space:]]*([^[:space:]|]*\/)?crontab([[:space:]]|$)/ { if (og) printf "%s", G; G = ""; og = 0; next }
-	lq ~ /^[[:space:]]*[})]/ { G = ""; og = 0 }
-	lq ~ /(^|[[:space:];&|])[{(]/ { G = ""; og = 1 }
+	# og: how many groups are open; a group inside, as in (true) or && { ...; }, the {} of
+	# find and the patterns of a case (ic: how many are open) leave what was gathered (final
+	# review of 2.55)
+	{
+		lq = l; gsub(/"[^"]*"|\047[^\047]*\047/, "", lq); gsub(/\{\}/, "", lq); gsub(/\$\(+[^)]*\)+/, "", lq)
+		u = lq; ic += gsub(/(^|[[:space:];&|({])case[[:space:]]/, "", u) - gsub(/(^|[[:space:];&|])esac([[:space:];&|)}]|$)/, "", u); if (ic < 0) ic = 0
+		if (ic) gsub(/(^|;;|[[:space:]]in[[:space:]])[[:space:]]*[(]?[^[:space:]()|;&]+([[:space:]]*[|][[:space:]]*[^[:space:]()|;&]+)*[)]/, "", lq)
+		u = lq; op = gsub(/(^|[[:space:];&|])\{|\(/, "", u); u = lq; cl = gsub(/(^|[[:space:];&|])\}|\)/, "", u)
+	}
+	lq ~ /^[[:space:]]*[})]/ && lq ~ /[|]([^|]*[|])*[[:space:]]*([^[:space:]|]*\/)?crontab([[:space:]]|$)/ && og + op - cl <= 0 { if (og) printf "%s", G; G = ""; og = 0; next }
+	{ if (!og && op > cl) G = ""; og += op - cl; if (og <= 0) { og = 0; G = "" } }
 	og && l ~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ && lq !~ />/ { G = G body(l) }
 	l !~ /^[[:space:](!{]*(echo|printf)[[:space:]]/ { next }
 	l !~ /(>>?|[|][[:space:]]*tee([[:space:]]+-a)?)[[:space:]]*["\047]?([^[:space:]"\047]*crontabs?\/|([^[:space:]"\047]*\/etc\/|(\.\/)?)(rc\.local|init\.d\/|rc\.d\/|uci-defaults\/|hotplug\.d\/|udhcpc\.user|firewall\.user|firewall\.d\/|kvmd\/user\/scripts\/|profile\.d\/|profile([[:space:]"\047;&|)]|$))|[^[:space:]"\047]*\/\.(ash_)?profile([[:space:]"\047;&|)]|$))/ && l !~ /[|][[:space:]]*crontab([[:space:]]|$)/ {
@@ -1516,7 +1537,7 @@ data_blank() {
 			cmd = ""; red = 0
 			for (j = st; j < en; j++) {
 				if (cmd == "") { w = P[j]; if (K[j] == "Q") w = substr(w, 2, length(w) - 2); sub(/^[[:space:]({!]+/, "", w); sub(/[[:space:]].*/, "", w); sub(/.*\//, "", w); cmd = w }
-				if (K[j] == "T" && (index(P[j], ">") || P[j] ~ /(^|[[:space:]])-[A-Za-z]*s([[:space:]]|$)/)) red = 1
+				if (K[j] == "T" && (index(P[j], ">") || P[j] ~ /(^|[[:space:]])-[A-Za-z]*s[A-Za-z]*([[:space:]]|$)/)) red = 1
 			}
 			pipe = (en <= n && P[en] == "|" && !(en < n && P[en + 1] == "|") && !(en > 1 && P[en - 1] == "|"))
 			say = (cmd == "logger" && !red && !pipe)
@@ -1531,9 +1552,9 @@ data_blank() {
 		print out
 	}'
 }
-# Whether a file makes logger a command of its own (a function or an alias): its text is
-# not data then
-logger_own() { grep -qE '(^|[[:space:];&|{(])(function[[:space:]]+)?logger[[:space:]]*\(\)|(^|[[:space:];&|])(function[[:space:]]+logger|alias[[:space:]]+logger=)' "$1" 2>/dev/null; }
+# Whether a file makes logger or comment a command of its own (a function or an alias,
+# also in quoted text that eval runs): their text is not data then
+logger_own() { grep -qE '(^|[[:space:];&|{("\047])(function[[:space:]]+)?(logger|comment)[[:space:]]*\(\)|(^|[[:space:];&|"\047])(function[[:space:]]+(logger|comment)|alias[[:space:]]+(logger|comment)=)' "$1" 2>/dev/null; }
 # What one command does with a server of the malware: fetch, probe, block, unblock (it
 # takes a block away) or name (SRV_FETCH_RE and what follows it).
 srv_kind() {
@@ -1557,7 +1578,7 @@ srv_kind() {
 #   name   anything else: a probe, a command that only names a server
 # Nothing when no command names one.
 srv_cmds() {
-	local v DB_OFF=0
+	local v DB_OFF=${DB_OFF:-0}
 	logger_own "$1" && DB_OFF=1
 	grep -iE "$KVM_IP_RE" "$1" | while IFS= read -r c; do srv_kind "$c"; done >"$TMP/srvk"
 	[ -s "$TMP/srvk" ] || return 0
@@ -1580,7 +1601,8 @@ srv_cmds() {
 # The same for a file, or a command line saved to one (issue 20). A server named only in a
 # comment or in a binary is a name.
 srv_use() {
-	local u
+	local u DB_OFF=${DB_OFF:-0}
+	logger_own "$1" && DB_OFF=1
 	active "$1" >"$TMP/srv"
 	u=$(srv_cmds "$TMP/srv")
 	if [ -n "$u" ]; then echo "$u"; else strs "$1" | grep -qiE "$KVM_IP_RE" && echo name; fi
@@ -1591,8 +1613,11 @@ srv_names() { strs "$1" | grep -oiE "$KVM_IP_RE" | sort -u | tr '\n' ' ' | sed '
 # malware or fetch from its servers: the numbers of their first and last line in the file
 # (a command goes on over lines that end in \). What --fix takes out, and nothing else.
 bad_lines() {
-	local s c nj=0
+	local s c nj=0 DB_OFF=${DB_OFF:-0}
 	linewise "$1" && nj=1
+	# it reads one command at a time: whether logger is the file's own is known only here
+	# (final review of 2.55)
+	logger_own "$1" && DB_OFF=1
 	awk -v nj="$nj" '{ if (l == "") s = NR; l = l $0; c = l; sub(/(^|[[:space:]])#.*$/, "", c) }
 		!nj && c ~ /(^|[^\\])(\\\\)*\\$/ { sub(/\\$/, "", l); next }
 		{ print s " " NR "\t" l; l = "" }' "$1" 2>/dev/null |
