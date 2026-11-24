@@ -214,7 +214,9 @@ This is community work, not one person's.
   ([#19](https://github.com/admonstrator/glinet-csa-2026-01/issues/19))
 - [infinisec](https://github.com/infinisec) – Found that busybox's grep does not look behind a NUL byte, so that the check of
   the libraries the script's tools load found nothing on a real device
-  ([#24](https://github.com/admonstrator/glinet-csa-2026-01/issues/24))
+  ([#24](https://github.com/admonstrator/glinet-csa-2026-01/issues/24)), and read the script against version 63 of the
+  installer: names it missed, a way to pass a start of the malware off as a copy of the script, and false alarms
+  ([#25](https://github.com/admonstrator/glinet-csa-2026-01/issues/25))
 - Everyone who sent an anonymous report or posted their output in the forum
 
 ---

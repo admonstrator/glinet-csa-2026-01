@@ -7,8 +7,8 @@
 #   1. check     read-only detection, report printed here
 #   2. archive   evidence tar.gz streamed to this machine, verified, sha256 written
 #   3. fix       only with --fix, only if IOCs were found, only after step 2 succeeded;
-#                the device keeps its own copy of the archive in /tmp as well
-#   4. re-check  after the fix
+#                the device keeps its own copy of the archive in /tmp as well, and the
+#                fix ends with a check of its own (its verdict is the device's result)
 #
 # Exit code: highest of the device results (0 clean, 1 infected, 2 fixed,
 # 3 fix incomplete, 4 error).
@@ -24,9 +24,10 @@ usage() { sed -n '2,15s/^# \{0,1\}//p' "$0"; }
 while [[ $# -gt 0 ]]; do
 	case $1 in
 	--fix) fix=1 ;;
-	-p) ssh_opts+=(-p "$2"); shift ;;
-	-i) ssh_opts+=(-i "$2"); shift ;;
-	-o) outdir=$2; shift ;;
+	-p | -i | -o)
+		[[ $# -ge 2 && -n $2 ]] || { echo "$1 needs a value" >&2; exit 4; }
+		case $1 in -p) ssh_opts+=(-p "$2") ;; -i) ssh_opts+=(-i "$2") ;; -o) outdir=$2 ;; esac
+		shift ;;
 	-h | --help) usage; exit 0 ;;
 	-*) echo "unknown option: $1" >&2; exit 4 ;;
 	*) break ;;

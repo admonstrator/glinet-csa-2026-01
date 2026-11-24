@@ -24,9 +24,17 @@ This script also detects:
   - the directories it falls back to when it cannot write to the first one:
     `/etc/gl_nas/.cache`, `/userdata/.gl`, `/overlay/.gl`, `/tmp/.gl`,
   - its other files in any of these directories: `watch.sh`, `run.sh`, `wake.sh`,
-    `boot.sh`, `rtty_keep.sh`, `eco`, `node`, `.u`, `.wc`, `install.log`,
-  - its watchdog line in the running crontab `/tmp/gl_crontabs/root` (`cron-ref`),
-  - `/etc/rtty_conf` set to the attacker's server (`rtty-server`),
+    `boot.sh`, `rtty_keep.sh`, `eco`, `eco.tmp`, `node`, `.u`, `.wc`, `install.log`, and
+    since 2.55 `.rk1` (a loop that watches `/etc/rtty_conf`), `gl-helper.dl` (a download
+    in progress) and `rn`, `wv` (older builds), as a reader of version 63 of the installer
+    describes them ([#25](https://github.com/admonstrator/glinet-csa-2026-01/issues/25)).
+    A command that starts one of them counts like a start of `gl-helper`, and a keep list
+    entry for one of the directories counts with or without a trailing slash,
+  - its watchdog line in the running crontab `/tmp/gl_crontabs/root` and, since 2.55, in
+    busybox crond's own `/var/spool/cron/crontabs/root` (`cron-ref`),
+  - `/etc/rtty_conf` set to the attacker's server (`rtty-server`). Set to another server,
+    where the file is not the firmware image's, it is `REVIEW` (`rtty-conf`, since 2.55):
+    the installer can be told to use any server,
   - a key named `gl-agent` in `authorized_keys` (`ssh-key`),
   - a fetch from its servers `65.20.71.131`, `66.245.219.252` or `gl-inet.top`: a command
     in an autostart file, in `rc.local`, in a crontab or in a running process that names
@@ -42,7 +50,11 @@ This script also detects:
     that names itself in clear text, "Node hardened executable packer"
     ([post 94](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/94)).
     A file in the overlay that holds this text and starts like a program is a `marker`,
-    unless a package installed it; `--fix` removes that file,
+    unless a package installed it; `--fix` removes that file. Since 2.55 the malware's
+    own directories are searched the same way, also those outside the overlay's upper
+    layer (`/overlay/.gl`, `/userdata/.gl`, `/tmp/.gl`), and a running program counts
+    as well: one that runs from such a file, or from a deleted file or a RAM disk and
+    holds this text or a posted hash, is an `IOC` process that `--fix` stops,
   - a marker file whose sha256 is one that forum users posted for `gl-helper`, `gb`, the
     downloader or `ni.sh` ([post 101](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/101),
     [post 153](https://forum.gl-inet.com/t/2026-11-20-gl-inet-security-notice-goodcloud-kvm-routers/73056/153))
@@ -70,16 +82,20 @@ This script also detects:
 
   `crond -i /tmp/.log`, the process GL.iNet's check looks for, is the name the malware
   gives its own process.
-- a `netstat` link to busybox that was made on or after November 20 (`installer-trace`).
+- a `netstat` link to busybox that was made on November 20 or 21 (`installer-trace`).
   The anonymous reports show it on KVMs, always made on the evening of the attack, on
   some next to the malware's files and on others with nothing else left. With only this,
-  the verdict is `ATTACKED`: the installer was at work, its files are gone.
+  the verdict is `ATTACKED`: the installer was at work, its files are gone. A link made
+  later is an owner's repair as often as not and is listed as `REVIEW` (since 2.55),
 - a link in a tool directory that the firmware does not have, for example a new
   `/usr/bin/netstat` (`REVIEW`),
 - scripts in `/etc/udhcpc.user.d`, which the router runs on every DHCP event (`REVIEW`),
 - a file `/tmp/.lp` (`REVIEW`): a command the attacker sent on November 20 tried to end a
   program of that name along with the remote shell. None has been seen on a device so far
   ([RemoteToHome](https://github.com/RemoteToHome-io/gl-security-incident-2026)),
+- files `/tmp/rc.local.bak`, `/tmp/.bt`, `/tmp/.wl`, `/tmp/.p` and `/tmp/.r` (`REVIEW`,
+  since 2.55): names the installer and its scripts use in `/tmp`, by the same reader of
+  the installer. They are short enough to be something else, and gone after a restart,
 - the name `gl-inet.top` in `/etc/rtty_conf`, and a fetch from it as above. It is in the
   malware's helper as a fallback server (`gl-inet.top:8899`), so it counts like the two
   addresses,
@@ -136,6 +152,10 @@ AstroWarp is switched off. In every other case the file is `REVIEW` with its tim
 size, because it is normal on a router that uses AstroWarp. Firmware with GL.iNet's fix
 writes the file empty at its own start, together with its other state files; the script
 recognizes that and reports `REVIEW` too ([#19](https://github.com/admonstrator/glinet-csa-2026-01/issues/19), since 2.54).
+Since 2.55 this holds on firmware without the fix as well: there the module writes the
+file when AstroWarp is switched on, and switched off again before the check, such a file
+looked like the attack ([#25](https://github.com/admonstrator/glinet-csa-2026-01/issues/25)).
+A command from the cloud within the same two minutes would look the same.
 
 Where the file's filesystem is mounted `noatime`, as the overlay is on the routers
 surveyed, the report also gives the handler's first and last call (since 2.35, in the

