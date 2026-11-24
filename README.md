@@ -50,7 +50,9 @@ and users of GL.iNet's forum. See [Credits](#-credits).
 
 ## 🚀 Quick Start
 
-You need root SSH access to the device. Nothing has to be installed.
+On a router you need root SSH access
+([GL.iNet's guide to logging in over SSH](https://docs.gl-inet.com/router/en/4/tutorials/ssh_log_in_to_the_router/)).
+On a KVM, run it in the web interface under Toolbox, Terminal. Nothing has to be installed.
 
 ```bash
 curl -fsSL https://app.gl-i.net/csa-2026-01-fix -o gl-helper-triage.sh ; sh gl-helper-triage.sh
@@ -123,6 +125,10 @@ Exit codes: `0` clean, `1` indicators found, `2` fixed and clean, `3` fix incomp
 - Change the device password, the GL.iNet cloud account password and the SSH keys.
 - If the device was hit, replace every VPN profile and SSH key it held.
 - Check the computer attached to a KVM, and the clients behind a router.
+- If you switched SSH on for the check, switch it off again under Security, Admin Access,
+  before firmware 4.9 under System, Security
+  ([GL.iNet](https://docs.gl-inet.com/router/en/4/interface_guide/admin_access/#ssh)).
+  A reinstall without settings switches it back on.
 
 The reasons and the details per device: [After triage](docs/after-triage.md).
 
