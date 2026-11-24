@@ -104,6 +104,7 @@ cd glinet-csa-2026-01
 | `--update` | Replace the script with the current signed version |
 | `--changes` | List every file that differs from the base image, with the time it was last written. Judges nothing, sends nothing |
 | `--report`, `--no-report` | Send the anonymous report without asking, or never offer it |
+| `--lookup`, `--no-lookup` | Ask the community list about the files listed for review without asking you first, or never ask. Only fingerprints are sent. See [Fingerprint check](docs/lookup.md) |
 | `--with-secrets` | Keep private keys and passwords in the evidence archive |
 
 Exit codes: `0` clean, `1` indicators found, `2` fixed (what `--fix` removes is gone; the
@@ -145,6 +146,7 @@ The reasons and the details per device: [After triage](docs/after-triage.md).
 | [What `--fix` does](docs/fix.md) | The cleanup, step by step |
 | [Evidence archive](docs/evidence-archive.md) | What is in it and which secrets are taken out |
 | [Anonymous report](docs/anonymous-report.md) | What is sent, what is not, and the device ID |
+| [Fingerprint check](docs/lookup.md) | Asking the community list about the files listed for review: what is sent, and what the answer can change |
 | [The result in plain words](docs/result-code.md) | How the short address under the verdict works |
 | [Updating the script](docs/update.md) | `--update` and its signature check |
 | [After triage](docs/after-triage.md) | What to do with a device that was hit |
