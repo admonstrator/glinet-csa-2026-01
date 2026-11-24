@@ -315,6 +315,11 @@ It also lists other overlay changes as `REVIEW` for a human to judge: new or mod
 binaries, new init scripts, `authorized_keys`, extra uid 0 accounts, hidden files and
 processes running from deleted binaries.
 
+Since 2.60 the [fingerprint check](lookup.md) can ask the community list about the files
+listed for review. A file it knows as malware becomes `IOC lookup-bad`: the verdict is
+`INFECTED`, and `--fix` does not remove it. The finding comes from the list, not from the
+device, so it is shown with its own line and verdict, never as a gl-helper indicator.
+
 > ⚠️ **Do not run `netstat` on a device you suspect.** It may be the implant's replacement,
 > and GL.iNet staff [says](https://forum.gl-inet.com/t/quickly-check-if-your-router-is-under-attack/73070/41)
 > that running the replacement starts the malware. The script never calls it and uses the

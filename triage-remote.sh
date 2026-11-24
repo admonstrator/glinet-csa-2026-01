@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # triage-remote.sh - run gl-helper-triage.sh on a GL.iNet KVM or OpenWrt router over SSH
 #
-#   ./triage-remote.sh [--fix] [-p PORT] [-i KEY] [-o DIR] root@DEVICE [root@DEVICE2 ...]
+#   ./triage-remote.sh [--fix] [--lookup | --no-lookup] [-p PORT] [-i KEY] [-o DIR] root@DEVICE [root@DEVICE2 ...]
+#
+# The device has no terminal here, so it never asks. --lookup lets steps 1 and 2 ask the
+# community list about the files listed for review (fingerprints only, docs/lookup.md);
+# --no-lookup leaves even the hint about it out.
 #
 # Per device:
 #   1. check     read-only detection, report printed here
@@ -19,13 +23,14 @@ umask 077
 
 here=$(cd "$(dirname "$0")" && pwd)
 script=$here/gl-helper-triage.sh
-fix=0 outdir=./evidence ssh_opts=()
+fix=0 outdir=./evidence ssh_opts=() lookup=()
 
-usage() { sed -n '2,15s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,19s/^# \{0,1\}//p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
 	case $1 in
 	--fix) fix=1 ;;
+	--lookup | --no-lookup) lookup=("$1") ;;
 	-p | -i | -o)
 		[[ $# -ge 2 && -n $2 ]] || { echo "$1 needs a value" >&2; exit 4; }
 		case $1 in -p) ssh_opts+=(-p "$2") ;; -i) ssh_opts+=(-i "$2") ;; -o) outdir=$2 ;; esac
@@ -65,7 +70,7 @@ for target in "$@"; do
 	# shellcheck disable=SC2029 # the options are meant to reach the remote sh
 	run() { ssh ${ssh_opts[@]+"${ssh_opts[@]}"} "${cm[@]}" "$target" "sh -s --$(printf ' %q' "$@")" <"$script"; }
 
-	run --check $color
+	run --check $color ${lookup[@]+"${lookup[@]}"}
 	rc=$?
 	if (( rc >= 4 || rc == 255 )); then
 		echo "!! $target: check failed (exit $rc)"; note 4; continue
@@ -75,7 +80,7 @@ for target in "$@"; do
 	name=$outdir/gl-triage-${target#*@}-$ts.tar.gz
 	echo
 	echo "-- pulling evidence to $name"
-	run --archive --stdout >"$name" 2>"$name.log"
+	run --archive --stdout ${lookup[@]+"${lookup[@]}"} >"$name" 2>"$name.log"
 	arc=$?
 	if (( arc >= 4 )) || ! gzip -t "$name" 2>/dev/null || ! tar -tzf "$name" >/dev/null 2>&1; then
 		echo "!! $target: evidence archive missing or corrupt (exit $arc, see $name.log)"

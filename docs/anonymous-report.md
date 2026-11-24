@@ -62,10 +62,12 @@ holds; `v` prints them word for word, with the rest of the report. Read them, an
 full, which on some devices ran over several screens and pushed the result out of sight.)
 
 The [fingerprint check](lookup.md) of 2.60 (`--lookup`) is separate from the report. It
-sends no part of the report: for each file listed for review only the SHA-256 of its kind
-and path and the SHA-256 of the file, plus the script version and a random number, and
-nothing that identifies the device. The report is built before the check runs, and it
-neither carries nor mentions the check's answer.
+sends for each file listed for review the SHA-256 of its kind and path and the SHA-256 of
+the file, plus the script version and a random number: no path, no account, no device ID.
+The file fingerprints are the same values the report carries for those files, and for a
+file that differs on every device, such as `/etc/config/firewall`, such a fingerprint tells
+that device's file from others; the server stores none of it. The report is built before
+the check runs, and it neither carries nor mentions the check's answer.
 
 The report carries a **device ID**, so that several reports from one device count once.
 It is a hash of the hardware address of the first network interface; the address itself

@@ -631,7 +631,7 @@ expect "another new link that the firmware does not have = REVIEW" 'grep -A1 "RE
 expect "a script in udhcpc.user.d = REVIEW" 'grep -q "REVIEW  *new  */etc/udhcpc.user.d/10-mine" "$D/check.txt"'
 expect "an init script that starts watch.sh = IOC persist-ref" 'grep -q "IOC  *persist-ref  */etc/init.d/S99w" "$D/check.txt"'
 expect "an autostart file that fetches from a server of the malware = IOC persist-ref" 'grep -A1 "IOC  *persist-ref  */etc/hotplug.d/iface/99-x" "$D/check.txt" | grep -q "66.245.219.252"'
-expect "the loader is recognised by its function names" 'grep -A1 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | grep -q "compiled Lua.*function names of the analysed loader"'
+expect "the loader is recognised by its function names" 'grep -A1 "IOC  *backdoor-file  */bin/ulogd" "$D/check.txt" | grep -q "compiled Lua.*function names of the analyzed loader"'
 expect "GoodCloud state, client version, binding and remote access are printed" 'grep -q "GoodCloud now  *on (gl-sdk4-cloud 1.2.3-4), bound to an account: on" "$D/check.txt" && grep -q "Remote access  *SSH: on, web: off (through GoodCloud)" "$D/check.txt"'
 umount "$D/m"
 sed -i "s/option enable '1'/option enable '0'/" "$U/etc/config/gl-cloud"
@@ -1752,7 +1752,7 @@ if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked' && command -v pyt
 	mount --bind /dev/null "$KL/dev/null"; chroot "$KL" /bin/busybox --install -s /bin
 	head -c 4096 /dev/urandom >"$KL/dev/urandom"
 	cat >"$K/srv.py" <<'EOF'
-import hashlib, http.server, os, sys
+import hashlib, http.server, os, sys, time
 port, d = int(sys.argv[1]), sys.argv[2]
 def rd(name, default=''):
     try:
@@ -1808,15 +1808,34 @@ class H(http.server.BaseHTTPRequestHandler):
             text = text.replace('\n', '\r\n')
         if mode == 'empty':
             text = ''
+        if mode == 'slow':
+            # a byte every two seconds, for a minute: no timeout of a tool ends it
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', '30')
+            self.end_headers()
+            try:
+                for i in range(30):
+                    self.wfile.write(b'E')
+                    self.wfile.flush()
+                    time.sleep(2)
+            except OSError:
+                pass
+            return
         data = text.encode('latin-1')
+        if mode == 'huge':
+            data = data + b'EVIL\n' * 2000000
         if mode == 'high':
             data = data.replace(b'known_bad', b'known_bad\xe2\x80\xaeEVIL', 1)
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
-srv = http.server.HTTPServer(('127.0.0.1', port), H)
+        try:
+            self.wfile.write(data)
+        except OSError:
+            pass
+srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), H)
 open(os.path.join(d, 'ready'), 'w').close()
 srv.serve_forever()
 EOF
@@ -1842,7 +1861,7 @@ EOF
 	lk --lookup >"$K/none.txt"; rc=$?
 	expect "nothing listed for review has a fingerprint: no section, nothing sent" '[ $rc = 0 ] && grep -q "REVIEW  *tmp-file  */tmp/.dg" "$K/none.txt" && ! grep -q "Fingerprint check\|community list" "$K/none.txt" && [ "$(nreq)" = 0 ]'
 	rmdir "$KL/tmp/.dg"
-	# two files and an account whose name holds characters the report leaves out
+	# two files, and an account: the report carries it, the check never asks for it
 	echo payload >"$KL/tmp/.dg"; echo other >"$KL/tmp/.lp"
 	printf 'root:x:0:0:root:/root:/bin/ash\nop$er#\303\251:x:0:0::/root:/bin/ash\n' >"$KL/etc/passwd"
 	lk --lookup --show-report >"$K/ok.txt"; rc=$?
@@ -1857,20 +1876,20 @@ rep = json.loads('\n'.join(lines[a:b + 1]))
 req = open(sys.argv[2], 'rb').read()
 want = []
 for it in rep['review_items']:
-    if it['sha256']:
+    if it['sha256'] and it['kind'] not in ('new-account', 'uid0-account'):
         l = hashlib.sha256((it['kind'] + ' ' + it['path']).encode()).hexdigest() + ' ' + it['sha256']
         if l not in want:
             want.append(l)
 nonce = req.split(b'\n')[2][6:].decode('latin-1')
 exp = ('csa-2026-01-lookup 1\nversion %s\nnonce %s\n' % (sys.argv[3], nonce) + ''.join(l + '\n' for l in want)).encode()
-ok = req == exp and len(want) == 3 and len(nonce) == 32 and all(c in '0123456789abcdef' for c in nonce)
+ok = req == exp and len(want) == 2 and len(nonce) == 32 and all(c in '0123456789abcdef' for c in nonce)
 print('same' if ok else 'differs')
 EOF
 )
 	expect "the request is the contract's, byte for byte, made from kind and path as the report carries them" '[ "$same" = same ]'
-	expect "a path with characters the report leaves out is asked as the report carries it" 'grep -q "\"path\": \"/etc/passwd name=oper uid=0 shell=/bin/ash pw=set\"" "$K/ok.txt" && grep -q "^$(printf "%s" "uid0-account /etc/passwd name=oper uid=0 shell=/bin/ash pw=set" | sha256sum | cut -c1-64) $(sha256sum <"$KL/etc/passwd" | cut -c1-64)$" "$KS/req.1"'
+	expect "an account is in the report but never asked: its name could be guessed back from a hash" 'grep -q "\"path\": \"/etc/passwd name=oper uid=0 shell=/bin/ash pw=set\"" "$K/ok.txt" && ! grep -q "$(printf "%s" "uid0-account /etc/passwd name=oper uid=0 shell=/bin/ash pw=set" | sha256sum | cut -c1-64)" "$KS/req.1" && ! grep -q " $(sha256sum <"$KL/etc/passwd" | cut -c1-64)$" "$KS/req.1"'
 	expect "no path and no name in clear in the request" '! grep -qE "tmp|passwd|oper|dg|lp|/" "$KS/req.1"'
-	expect "all not known: nothing changes, the section says so" '[ $rc = 0 ] && grep -q "Answer received and checked (2026-11-24 16:40 UTC)." "$K/ok.txt" && grep -q "not known    all 3, as listed above: still yours to look at" "$K/ok.txt" && grep -q "Verdict: no gl-helper indicators found" "$K/ok.txt"'
+	expect "all not known: nothing changes, the section says so" '[ $rc = 0 ] && grep -q "Answer received and checked (2026-11-24 16:40 UTC)." "$K/ok.txt" && grep -q "not known      all 2, as listed above: still yours to look at" "$K/ok.txt" && grep -q "Verdict: no gl-helper indicators found" "$K/ok.txt"'
 	n0=$(nreq)
 	lk --no-lookup >"$K/nolookup.txt"; rc0=$?
 	expect "--no-lookup: no question, no section, nothing sent" '[ $rc0 = 0 ] && ! grep -q "Fingerprint check\|community list" "$K/nolookup.txt" && [ "$(nreq)" = "$n0" ]'
@@ -1879,7 +1898,7 @@ EOF
 	ktable tmp/.dg known_bad
 	lk --lookup >"$K/bad.txt"; rc=$?
 	sed -n '/^== Fingerprint check/,/^== GoodCloud/p;/^== Result/,/^== Next/p' "$K/bad.txt"
-	expect "known_bad: a clean device is INFECTED, exit 1, by IOC lookup-bad, with a verdict of its own" '[ $rc = 1 ] && grep -q "KNOWN BAD    tmp-file        /tmp/.dg" "$K/bad.txt" && grep -q "Summary: IOC=1 " "$K/bad.txt" && grep -q "IOC      lookup-bad: a file listed for review that the community list knows as malware. --fix does NOT remove it." "$K/bad.txt" && grep -q "Verdict: INFECTED - a file listed for review is known malware (community list)" "$K/bad.txt"'
+	expect "known_bad: a clean device is INFECTED, exit 1, by IOC lookup-bad, with a verdict of its own" '[ $rc = 1 ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/bad.txt" && grep -q "Summary: IOC=1 " "$K/bad.txt" && grep -q "IOC      lookup-bad: a file listed for review that the community list knows as malware. --fix does NOT remove it." "$K/bad.txt" && grep -q "Verdict: INFECTED - a file listed for review is known malware (community list)" "$K/bad.txt"'
 	expect "known_bad: nothing says --fix removes it or that gl-helper was found; the REVIEW lines stay" '! grep -q "fix removes it" "$K/bad.txt" && ! grep -q "gl-helper indicators found" "$K/bad.txt" && [ "$(grep -o "REVIEW=[0-9]*" "$K/bad.txt" | tail -n 1)" = "$(grep -o "REVIEW=[0-9]*" "$K/nolookup.txt" | tail -n 1)" ]'
 	expect "known_bad: the next steps still say to reinstall" 'grep -q "known malware on the community list. --fix does not remove it" "$K/bad.txt" && grep -q "Reinstall the firmware" "$K/bad.txt"'
 	expect "known_bad: the offer of the report does not say that nothing was found" '! grep -q "Nothing known was found" "$K/bad.txt" && grep -q "The script itself found no known traces, and the report says so." "$K/bad.txt"'
@@ -1887,7 +1906,7 @@ EOF
 	expect "known_bad: the field for review in the result code is 2, the rest as without the check" '[ "$(codebits "$K/bad.txt")" = "$(codebits "$K/nolookup.txt" | awk "{ print \$1, \$2, 2, \$4 }")" ] && codebits "$K/nolookup.txt" | grep -q " 1 1$"'
 	ktable tmp/.dg known_safe
 	lk --lookup >"$K/safe.txt"; rc=$?
-	expect "known_safe: verdict, exit code, REVIEW count and result code stay; the list knowing it is said" '[ $rc = 0 ] && grep -q "Verdict: no gl-helper indicators found" "$K/safe.txt" && [ "$(grep -o "Summary: .*" "$K/safe.txt")" = "$(grep -o "Summary: .*" "$K/nolookup.txt")" ] && [ "$(codebits "$K/safe.txt")" = "$(codebits "$K/nolookup.txt")" ] && grep -q "known        tmp-file        /tmp/.dg" "$K/safe.txt" && grep -q "not known    2 more" "$K/safe.txt" && grep -q "The community list knows 1 of these files as all right" "$K/safe.txt" && ! grep -q "lookup-bad" "$K/safe.txt"'
+	expect "known_safe: verdict, exit code, REVIEW count and result code stay; the list knowing it is said" '[ $rc = 0 ] && grep -q "Verdict: no gl-helper indicators found" "$K/safe.txt" && [ "$(grep -o "Summary: .*" "$K/safe.txt")" = "$(grep -o "Summary: .*" "$K/nolookup.txt")" ] && [ "$(codebits "$K/safe.txt")" = "$(codebits "$K/nolookup.txt")" ] && grep -q "probably safe  tmp-file        /tmp/.dg" "$K/safe.txt" && grep -q "not known      1 more" "$K/safe.txt" && grep -q "The community list has 1 of them as probably safe" "$K/safe.txt" && grep -q "probably safe: marked so by the maintainers, or part of a known release. Not a proof:" "$K/safe.txt" && ! grep -q "lookup-bad" "$K/safe.txt"'
 	# a trace the script found itself: the remote shell's pipe
 	mkfifo "$KL/tmp/f"
 	ktable tmp/.dg known_safe tmp/.lp known_safe
@@ -1897,9 +1916,25 @@ EOF
 	lk --lookup >"$K/ioc2.txt"; rc=$?
 	expect "with a trace of its own, the verdict stays and known_bad adds a line to it" '[ $rc = 1 ] && grep -q "Summary: IOC=2 " "$K/ioc2.txt" && grep -q "Verdict: INFECTED - gl-helper indicators found" "$K/ioc2.txt" && grep -q "Also: a file listed for review is known malware (community list)." "$K/ioc2.txt" && ! grep -q "Verdict: INFECTED - a file listed" "$K/ioc2.txt"'
 	rm "$KL/tmp/f"
+	# the attack reached the device (an empty mp_ip_mapping_info, AstroWarp off) and a file is
+	# known malware: the verdict must not say that no malware files were found (review of 2.60)
+	: >"$KL/etc/mp_ip_mapping_info"
+	lk --lookup >"$K/att.txt"; rc=$?
+	expect "ATTACKED and known malware: INFECTED by the community list, the attack added, as the page reads the code" '[ $rc = 1 ] && grep -q "Verdict: INFECTED - a file listed for review is known malware (community list)" "$K/att.txt" && grep -q "Also: the attack reached this device" "$K/att.txt" && ! grep -q "Verdict: ATTACKED\|No malware files" "$K/att.txt" && ! grep -q "Also: a file listed for review" "$K/att.txt" && [ "$(codebits "$K/att.txt" | cut -d " " -f 3)" = 2 ]'
+	rm "$KL/etc/mp_ip_mapping_info"
+	# more than 40 listed for review: the check says how many it left out (review of 2.60)
+	cp "$KL/etc/passwd" "$K/passwd"
+	i=1; while [ $i -le 45 ]; do echo "u$i:x:0:0::/root:/bin/ash" >>"$KL/etc/passwd"; i=$((i + 1)); done
+	lk --lookup >"$K/many.txt"; rc=$?
+	expect "more than 40 listed for review: programs first and asked, and a line for the rest" '[ $rc = 1 ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/many.txt" && grep -q "Not asked: 8 more findings listed for review. The report and this check take 40, programs first." "$K/many.txt"'
+	cp "$K/passwd" "$KL/etc/passwd"
+	# over HTTPS busybox's own wget is never used: it takes any certificate (review of 2.60)
+	n0=$(nreq)
+	TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ chroot "$KL" /bin/sh /t.sh --no-device-id --lookup </dev/null >"$K/https.txt" 2>&1; rc=$?
+	expect "over HTTPS with only busybox's wget: one line, nothing sent" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && grep -q "Not checked: no curl or wget here that checks the server.s certificate. Nothing was sent." "$K/https.txt" && ! grep -q "No answer from" "$K/https.txt"'
 	# answers that do not fit, each with known_bad in the table: used, they would change the result
 	ESC=$(printf '\033')
-	for m in nonce unasked word missing extra order esc ctrl high big nolf crlf empty; do
+	for m in nonce unasked word missing extra order esc ctrl high big huge nolf crlf empty; do
 		kmode $m; n0=$(nreq)
 		lk --lookup >"$K/broken-$m.txt"; rc=$?
 		expect "an answer that does not fit ($m) is set aside: one line, nothing changed, none of it printed" '[ $rc = 0 ] && [ "$(nreq)" -gt "$n0" ] && [ "$(grep -c "The answer did not check out and was not used. Nothing changed." "$K/broken-$m.txt")" = 1 ] && ! grep -qE "EVIL|lookup-bad|KNOWN BAD|known_|Answer received" "$K/broken-$m.txt" && ! grep -q "$ESC" "$K/broken-$m.txt" && grep -q "Verdict: no gl-helper indicators found" "$K/broken-$m.txt"'
@@ -1907,13 +1942,19 @@ EOF
 	kmode 500
 	lk --lookup >"$K/500.txt"; rc=$?
 	expect "an error of the server: one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/500.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/500.txt"'
+	kmode slow; t0=$(date +%s)
+	lk --lookup >"$K/slow.txt"; rc=$?; t1=$(date +%s)
+	expect "an answer that trickles in: given up after 25 seconds, one line, nothing changed" '[ $rc = 0 ] && [ $((t1 - t0)) -lt 45 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/slow.txt")" = 1 ] && ! grep -q EEE "$K/slow.txt"'
 	kmode ok
 	KURL=http://127.0.0.1:9/lookup lk --lookup >"$K/down.txt"; rc=$?
 	expect "no server: one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/down.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/down.txt"'
 	n0=$(nreq)
 	lk --fix --lookup >"$K/fix.txt"; rc=$?
-	expect "--fix never sends" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && ! grep -q "Fingerprint check\|community list" "$K/fix.txt"'
-	mv "$KL/dev/urandom" "$K/urandom"
+	expect "--fix never sends, and says that --lookup does nothing there" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && ! grep -q "Fingerprint check\|community list" "$K/fix.txt" && grep -q "lookup does nothing with --fix: the fingerprint check runs with --check and --archive." "$K/fix.txt"'
+	mv "$KL/dev/urandom" "$K/urandom"; : >"$KL/dev/urandom"
+	lk --lookup >"$K/emptyrand.txt"; rc=$?
+	expect "an empty /dev/urandom: no fixed number goes out, one line, nothing sent" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && [ "$(grep -c "no random number could be made here (from /dev/urandom)" "$K/emptyrand.txt")" = 1 ]'
+	rm "$KL/dev/urandom"
 	lk --lookup >"$K/norand.txt"; rc=$?
 	expect "without /dev/urandom: one line, nothing sent" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && [ "$(grep -c "no random number could be made here (from /dev/urandom)" "$K/norand.txt")" = 1 ]'
 	mv "$K/urandom" "$KL/dev/urandom"
@@ -1937,11 +1978,38 @@ EOF
 	printf 'v\nn\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=$KURL chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty.txt"
 	if grep -q "Check them? \[y/N, v = show what would be sent\]" "$K/tty.txt"; then
 		sed -n '/^== Fingerprint check/,/^== GoodCloud/p' "$K/tty.txt"
-		expect "on a terminal it asks; v shows the request line by line with the file under each, n sends nothing" '[ "$(nreq)" = "$n0" ] && grep -q "Not checked. Nothing was sent." "$K/tty.txt" && [ "$(sed -n "/^   What would be sent to/,/^   Under each line/p" "$K/tty.txt" | grep "^      [^ ]" | sed "s/^      //" | sed 1,3d)" = "$(sed 1,3d "$KS/req.$n0")" ] && grep -qx "      csa-2026-01-lookup 1" "$K/tty.txt" && grep -qx "         = tmp-file  /tmp/.dg" "$K/tty.txt" && grep -qx "         = uid0-account  /etc/passwd name=op\$er#é uid=0 shell=/bin/ash pw=set" "$K/tty.txt"'
+		expect "on a terminal it asks; v shows the request line by line with the file under each, n sends nothing" '[ "$(nreq)" = "$n0" ] && grep -q "Not checked. Nothing was sent." "$K/tty.txt" && [ "$(sed -n "/^   What would be sent to/,/^   Under each line/p" "$K/tty.txt" | grep "^      [^ ]" | sed "s/^      //" | sed 1,3d)" = "$(sed 1,3d "$KS/req.$n0")" ] && grep -qx "      csa-2026-01-lookup 1" "$K/tty.txt" && grep -qx "         = tmp-file  /tmp/.dg" "$K/tty.txt" && ! grep -q "= uid0-account" "$K/tty.txt"'
 		printf 'y\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=$KURL chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty2.txt"
-		expect "y sends, and the answer is used" '[ "$(nreq)" = "$((n0 + 1))" ] && grep -q "KNOWN BAD    tmp-file        /tmp/.dg" "$K/tty2.txt"'
+		expect "y sends, and the answer is used" '[ "$(nreq)" = "$((n0 + 1))" ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/tty2.txt"'
 		printf 'v\nn\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=http://127.0.0.1:1@evil.example/ chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty3.txt"
 		expect "an address of this machine with a user part (127.0.0.1:1@host) is not taken for the check" 'grep -q "What would be sent to https://app.gl-i.net/csa-2026-01-report/lookup, line by line:" "$K/tty3.txt" && ! grep -q evil.example "$K/tty3.txt"'
+		# Ctrl-C at the question is a No, and the result still comes (review of 2.60)
+		n0=$(nreq)
+		python3 - "$KL" "$KURL" >"$K/intr.txt" 2>/dev/null <<'EOF'
+import os, pty, sys, time
+kl, url = sys.argv[1], sys.argv[2]
+env = dict(os.environ, TERM='dumb', TMPDIR='/tmp', GL_TRIAGE_REPORT_URL='http://127.0.0.1:9/', GL_TRIAGE_LOOKUP_URL=url)
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvpe('chroot', ['chroot', kl, '/bin/sh', '/t.sh', '--no-device-id', '--no-report'], env)
+out, sent, end = b'', False, time.time() + 120
+while time.time() < end:
+    try:
+        d = os.read(fd, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+    if not sent and b'Check them?' in out:
+        time.sleep(0.3)
+        os.write(fd, b'\x03')
+        sent = True
+st = os.waitpid(pid, 0)[1]
+sys.stdout.write(out.decode('utf-8', 'replace').replace('\r', ''))
+print('\nRC=%d' % (os.WEXITSTATUS(st) if os.WIFEXITED(st) else -1))
+EOF
+		expect "Ctrl-C at the question is a No: nothing sent, and the run goes on to its result" '[ "$(nreq)" = "$n0" ] && grep -q "Not checked. Nothing was sent." "$K/intr.txt" && grep -q "Verdict:" "$K/intr.txt" && grep -q "^RC=0$" "$K/intr.txt"'
 	else
 		echo "  SKIP: the question on a terminal (script(1) gives no terminal here)"
 	fi

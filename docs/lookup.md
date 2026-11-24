@@ -3,25 +3,32 @@
 Part of the [gl-helper triage script](../README.md).
 
 From 2.60 the script can ask the community's server whether the files it listed for
-review are known: known malware, known to be all right, or not known. It asks only when
-you agree, and only on the device itself (`--check` and `--archive`, not `--fix`). A file
-that the community list knows as malware makes the result `INFECTED`; a file it knows as
-all right keeps its `REVIEW` line and gets a note. The answer can only make the result
+review are known: known malware, probably safe, or not known. It asks only when you agree,
+and only on the device itself (`--check` and `--archive`, not `--fix`). A file that the
+community list knows as malware makes the result `INFECTED`; a file it has as probably
+safe keeps its `REVIEW` line and gets a note. The answer can only make the result
 worse, never better: a trace the script found itself stays a trace, whatever the server
 says.
 
 ## What is sent
 
-For each file listed for review that has a fingerprint (at most 40):
+For each file listed for review that has a fingerprint (the report and the check take at
+most 40 findings, programs first, and the script says how many it left out):
 
 - the SHA-256 of the line `<kind> <path>`, exactly as the anonymous report would carry kind
   and path (only the characters `A-Za-z0-9 ._:/+@=,()-`, the kind cut to 24 characters,
-  the path to 160): the server can recognise a path it already knows and nothing else,
+  the path to 160): the server can recognize a path it already knows and nothing else,
 - the SHA-256 of the file.
+
+Accounts listed for review (`new-account`, `uid0-account`) are never asked: their line holds
+the account's name, which could be guessed back from a hash, and `/etc/passwd` differs on
+every device anyway.
 
 And once: the version of the script and a random number for this run. Nothing else: no
 path in clear text, no content of a file, no device ID, no model, no firmware, no host
-name. The server stores none of it.
+name. The server stores none of it. A file's fingerprint is the same each time it is asked,
+and the same as in the anonymous report: for a file that differs on every device, such as
+`/etc/config/firewall`, it tells that device's file from others.
 
 ## The exchange
 
@@ -69,6 +76,9 @@ Other answers, each a fixed text and never a part of the request:
 | `404` | `not found` | the check is switched off on the server |
 | `405` | `method not allowed` | anything but `POST` |
 | `413` | `too large` | more than 8192 bytes, by `content-length` or while reading |
+| `503` | `not available` | the server's database failed while reading: no answer rather than one that misses an entry |
+
+Each of these bodies ends in a single `\n`, as the worker's other plain-text answers do.
 
 ## How the server decides
 
@@ -78,12 +88,17 @@ For each line, the first that applies:
 2. `known_safe`: a mark "probably safe" set on the dashboard (`labels`, verdict `safe`)
    whose key `<kind> <path>` has the SHA-256 asked and whose fingerprints include the
    file's; or the file's SHA-256 is in `known-hashes.json` (release files of the
-   community's Tailscale and AdGuard Home builds, at any path).
+   community's Tailscale and AdGuard Home builds, at any path). A mark holds every
+   fingerprint that reports sent for its key, made-up reports included: so `known_safe` is
+   never more than "probably safe".
 3. `unknown`: everything else, including open or declined suggestions, a mark whose
    fingerprints do not include this file, and entries of `bad_hashes` with `answer = 0`.
 
-Every line whose file is in `bad_hashes`, released or not, adds one to that entry's
-`asked` and sets `asked_last` to the day. A file that is not in the table leaves no trace.
+Each request adds one to the `asked` of every entry of `bad_hashes` it names, released or
+not, however many of its lines name it, and sets `asked_last` to the day. The server
+writes this after the answer, so an entry that waits does not answer more slowly than a
+file nobody listed. A file that is not in the table leaves no trace. Anyone can send
+requests: `asked` is a hint, not a count of devices.
 
 The check is on only when the worker has `LOOKUP = "on"` among its `[vars]`.
 
@@ -93,13 +108,21 @@ It takes an answer only when all of it fits: at most 8192 bytes, only the bytes 
 the first line, the nonce it sent, exactly the lines it asked in the same order, and only
 the three words. Anything else and the whole answer is set aside, with one line saying so;
 the result is what it would have been without the check. The same when there is no
-connection or the certificate does not check out: the script asks over HTTPS only and
-never falls back to plain HTTP or to an unchecked certificate.
+connection, the certificate does not check out, or no answer came within 25 seconds: the
+script cuts the answer at 8193 bytes while it arrives and gives up after 25 seconds,
+whatever the tool's own limits are.
+
+It asks over HTTPS only and never falls back to plain HTTP or to an unchecked certificate.
+It sends with `curl`, else OpenWrt's `uclient-fetch`, else a `wget` that is not busybox's
+own: that one takes any certificate. Without such a tool it sends nothing and says so. The
+request goes out once; `--post-data` takes the place of `--post-file` only where the tool
+does not know `--post-file`. The script does not depend on the `Content-Type` it can set,
+and neither does the server.
 
 | Answer | Effect |
 | --- | --- |
 | `known_bad` | a finding `IOC lookup-bad <path>`: verdict `INFECTED`, exit code 1, and the field for review in the result code is 2 |
-| `known_safe` | the `REVIEW` line stays and is counted as before, with a note that the community list knows the file |
+| `known_safe` | the `REVIEW` line stays and is counted as before, with a note that the community list has the file as probably safe |
 | `unknown` | nothing changes |
 
 `--fix` does not remove a file found this way: it only removes what it knows. With
@@ -110,4 +133,6 @@ never falls back to plain HTTP or to an unchecked certificate.
 - `--lookup`: check without asking (what is sent is still shown).
 - `--no-lookup`: never ask.
 - Without either, the script asks on a terminal, and only when there is something to
-  check. Without a terminal it sends nothing and says that `--lookup` would.
+  check. Ctrl-C at the question counts as no, and the run goes on to its result. Without
+  a terminal it sends nothing and says that `--lookup` would.
+- With `--fix` the check does not run; `--lookup` there only prints a line saying so.

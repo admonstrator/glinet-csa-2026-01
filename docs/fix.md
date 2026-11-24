@@ -53,3 +53,7 @@ firewall's start script, see step 6), and neither is the
 [older backdoor](indicators.md#the-older-backdoor-urandom_seed--ulogd): with only that on the device
 `--fix` changes nothing and exits 1, with both it removes the gl-helper indicators and
 exits 3.
+
+`--fix` does not run the [fingerprint check](lookup.md), and it does not remove a file that
+the check found as known malware (`IOC lookup-bad`, since 2.60): it removes only what it
+knows. A device with such a file needs its firmware reinstalled without keeping settings.

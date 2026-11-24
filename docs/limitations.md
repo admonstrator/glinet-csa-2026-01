@@ -38,6 +38,6 @@ Part of the [gl-helper triage script](../README.md).
 - The script cannot see anything outside the device, such as changes on an attached
   computer or on the cloud account.
 - The [fingerprint check](lookup.md) (since 2.60) knows only what the community list
-  knows. A file it does not know, or knows as all right, is still yours to judge, and a
+  knows. A file it does not know, or has as probably safe, is still yours to judge, and a
   file that differs in a single byte from a known one is not known. It asks only about
   files listed for review that the script could read in full, up to 64 MiB each.

@@ -56,7 +56,7 @@ configuration are not listed.
 ## Fingerprint check
 
 Since 2.60 the script can ask the community list whether the files it listed for `REVIEW`
-are known: as malware, as all right, or not at all. It does this only on the device
+are known: as malware, as probably safe, or not at all. It does this only on the device
 itself, with `--check` or `--archive`, never with `--fix`, and only when at least one file
 listed for review has a fingerprint (a regular file of up to 64 MiB, or the program of a
 process that runs from a deleted file).
@@ -67,21 +67,31 @@ answer. The script says how many files it would ask about, what is sent (for eac
 the SHA-256 of its kind and path and the SHA-256 of the file, the script version and a
 random number) and what is not (no path, no content of a file, no device ID, no model, no
 host name), then asks `Check them? [y/N, v = show what would be sent]`. `v` prints the
-request line by line, with the file each line stands for. Without a terminal, for example
-through `ssh ... 'sh -s'`, it sends nothing and says that `--lookup` would check.
-`--lookup` checks without the question, `--no-lookup` never asks.
+request line by line, with the file each line stands for. Ctrl-C at the question counts
+as no, and the run goes on to its result. Without a terminal, for example through
+`ssh ... 'sh -s'`, it sends nothing and says that `--lookup` would check. `--lookup` checks
+without the question, `--no-lookup` never asks. With `--fix` the check does not run.
+
+Accounts listed for review are never asked about. The report and the check take at most
+40 findings listed for review, programs first; where there are more, the section says how
+many were left out. The script sends only with a tool that checks the server's
+certificate (`curl`, OpenWrt's `uclient-fetch`, or a `wget` that is not busybox's own) and
+gives up after 25 seconds.
 
 ```
    Answer received and checked (2026-11-24 16:40 UTC).
-   KNOWN BAD    new-binary      /usr/bin/.cache/sd
-   known        new             /usr/sbin/tailscaled
-   not known    4 more, as listed above: still yours to look at
+   KNOWN BAD      new-binary      /usr/bin/.cache/sd
+   probably safe  new-binary      /usr/sbin/tailscaled
+   not known      4 more, as listed above: still yours to look at
 ```
 
 - A file the list knows as malware is added as `IOC lookup-bad`: the verdict is
   `INFECTED`, the exit code `1`, and the field for review in the address under the
-  verdict is 2. `--fix` does not remove such a file; reinstall the firmware.
-- A file the list knows as all right keeps its `REVIEW` line and is counted as before.
+  verdict is 2. This verdict comes before `ATTACKED`, which would say that no malware files
+  were found. `--fix` does not remove such a file; reinstall the firmware.
+- A file the list has as probably safe (marked so by the maintainers, or a file of a known
+  release) keeps its `REVIEW` line and is counted as before. A mark is not a proof: it
+  holds every fingerprint that reports sent for that path.
 - A file the list does not know is still yours to look at.
 
 The answer can only make the result worse, never better: a trace the script found itself
