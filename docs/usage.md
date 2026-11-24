@@ -11,6 +11,7 @@ Part of the [gl-helper triage script](../README.md).
 | `--changes` | List every file that differs from the base image, without checking anything. See [List of changes](#list-of-changes). |
 | `--report`, `--no-report`, `--show-report` | Send the anonymous report without asking, never offer it, or print it without sending. See [Anonymous report](anonymous-report.md). |
 | `--no-device-id` | Leave the device ID out of the report. |
+| `--lookup`, `--no-lookup` | Ask the community list about the files listed for review without asking you first (what is sent is still shown), or never ask. See [Fingerprint check](#fingerprint-check). |
 | `--note TEXT` | Add a note of your own to the report, for example where it comes from or whether the device was checked before or after a cleanup. At most 120 characters; only letters, digits, spaces and `._:/+@=,()-` are kept. |
 | `--with-secrets` | Keep the private keys and passwords that the script would otherwise take out of the evidence archive. |
 | `--color`, `--no-color` | Force or disable colored output. By default colors are used only on a terminal; `NO_COLOR=1` also turns them off. |
@@ -51,6 +52,44 @@ the ZeroTier identity and the Tailscale state. It shows names
 and counts, never the content. These are not findings: they are listed with or without
 indicators and are never part of the anonymous report. Other passwords and tokens in the
 configuration are not listed.
+
+## Fingerprint check
+
+Since 2.60 the script can ask the community list whether the files it listed for `REVIEW`
+are known: as malware, as all right, or not at all. It does this only on the device
+itself, with `--check` or `--archive`, never with `--fix`, and only when at least one file
+listed for review has a fingerprint (a regular file of up to 64 MiB, or the program of a
+process that runs from a deleted file).
+
+The question comes right after the findings, before the GoodCloud advice and the result,
+so that the verdict, the exit code and the address under the verdict already include the
+answer. The script says how many files it would ask about, what is sent (for each file
+the SHA-256 of its kind and path and the SHA-256 of the file, the script version and a
+random number) and what is not (no path, no content of a file, no device ID, no model, no
+host name), then asks `Check them? [y/N, v = show what would be sent]`. `v` prints the
+request line by line, with the file each line stands for. Without a terminal, for example
+through `ssh ... 'sh -s'`, it sends nothing and says that `--lookup` would check.
+`--lookup` checks without the question, `--no-lookup` never asks.
+
+```
+   Answer received and checked (2026-11-24 16:40 UTC).
+   KNOWN BAD    new-binary      /usr/bin/.cache/sd
+   known        new             /usr/sbin/tailscaled
+   not known    4 more, as listed above: still yours to look at
+```
+
+- A file the list knows as malware is added as `IOC lookup-bad`: the verdict is
+  `INFECTED`, the exit code `1`, and the field for review in the address under the
+  verdict is 2. `--fix` does not remove such a file; reinstall the firmware.
+- A file the list knows as all right keeps its `REVIEW` line and is counted as before.
+- A file the list does not know is still yours to look at.
+
+The answer can only make the result worse, never better: a trace the script found itself
+stays a trace. An answer that does not fit what was asked in every byte is set aside with
+one line, and so is a failed connection; the result is then what it would have been
+without the check. The anonymous report is built before the check and does not carry its
+answer. With `--archive` the request and the answer are in the archive as `lookup.txt`.
+The exchange is described in [Fingerprint check](lookup.md).
 
 ## List of changes
 

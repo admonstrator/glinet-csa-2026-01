@@ -1737,5 +1737,218 @@ else
 	echo "  SKIP: needs signify (signify-openbsd) and python3"
 fi
 
+echo "=== the fingerprint check (2.60): fingerprints only, and an answer can only make the result worse"
+# A running device, as for the report's note: a chroot that holds a static busybox and
+# nothing else, with a plain file of random bytes as /dev/urandom. The community list is a
+# small server on this machine. It keeps each request it gets (req.N, and its Content-Type
+# in type.N), repeats the request's number, and answers each line with the word its table
+# gives the file's SHA-256 (unknown when there is none). Its mode breaks the answer on
+# purpose; a broken answer carries EVIL, which must never reach the screen.
+BB=$(command -v busybox)
+if [ -n "$BB" ] && file -L "$BB" | grep -q 'statically linked' && command -v python3 >/dev/null 2>&1; then
+	K=$BASE/lookup; KS=$K/srv; KL=$K/live
+	mkdir -p "$KS" "$KL/bin" "$KL/tmp" "$KL/dev" "$KL/etc"
+	cp "$BB" "$KL/bin/busybox"; cp "$T" "$KL/t.sh"; : >"$KL/dev/null"
+	mount --bind /dev/null "$KL/dev/null"; chroot "$KL" /bin/busybox --install -s /bin
+	head -c 4096 /dev/urandom >"$KL/dev/urandom"
+	cat >"$K/srv.py" <<'EOF'
+import hashlib, http.server, os, sys
+port, d = int(sys.argv[1]), sys.argv[2]
+def rd(name, default=''):
+    try:
+        with open(os.path.join(d, name)) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        k = len([x for x in os.listdir(d) if x.startswith('req.')]) + 1
+        with open(os.path.join(d, 'req.%d' % k), 'wb') as f:
+            f.write(body)
+        with open(os.path.join(d, 'type.%d' % k), 'w') as f:
+            f.write(self.headers.get('Content-Type', ''))
+        mode = rd('mode', 'ok')
+        if mode == '500':
+            self.send_response(500)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'error\n')
+            return
+        lines = body.decode('latin-1').split('\n')
+        nonce = lines[2][6:] if len(lines) > 2 else ''
+        items = [l for l in lines[3:] if l]
+        table = dict(l.split() for l in rd('table').splitlines() if l.strip())
+        rows = [i + ' ' + table.get(i.split(' ')[-1], 'unknown') for i in items]
+        head = ['csa-2026-01-lookup-answer 1', 'nonce ' + nonce, 'at 2026-11-24 16:40 UTC']
+        if mode == 'nonce':
+            head[1] = 'nonce ' + ('0123456789abcdef' * 2 if nonce != '0123456789abcdef' * 2 else 'f' * 32)
+        if mode == 'unasked':
+            rows[0] = rows[0][:65] + hashlib.sha256(b'another file').hexdigest() + rows[0][129:]
+        if mode == 'word':
+            rows[0] = rows[0].rsplit(' ', 1)[0] + ' known_EVIL'
+        if mode == 'missing':
+            rows = rows[:-1]
+        if mode == 'extra':
+            rows.append('note EVIL')
+        if mode == 'order':
+            rows.reverse()
+        if mode == 'esc':
+            head[2] += '\x1b]0;EVIL\x07\x1b[2J'
+        if mode == 'ctrl':
+            rows[0] += '\x08\x08\x08\x08EVIL'
+        text = '\n'.join(head + rows) + '\n'
+        if mode == 'big':
+            text += ('EVIL' * 25 + '\n') * 90
+        if mode == 'nolf':
+            text = text[:-1]
+        if mode == 'crlf':
+            text = text.replace('\n', '\r\n')
+        if mode == 'empty':
+            text = ''
+        data = text.encode('latin-1')
+        if mode == 'high':
+            data = data.replace(b'known_bad', b'known_bad\xe2\x80\xaeEVIL', 1)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+srv = http.server.HTTPServer(('127.0.0.1', port), H)
+open(os.path.join(d, 'ready'), 'w').close()
+srv.serve_forever()
+EOF
+	(exec python3 "$K/srv.py" 18474 "$KS" >/dev/null 2>&1) & KSRV=$!
+	for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$KS/ready" ] && break; sleep 0.5; done
+	KURL=http://127.0.0.1:18474/lookup
+	lk() { TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=$KURL chroot "$KL" /bin/sh /t.sh --no-device-id "$@" </dev/null 2>&1; }
+	nreq() { ls "$KS" | grep -c '^req\.'; }
+	kmode() { echo "$1" >"$KS/mode"; }
+	# the answer for a file of the chroot: ktable tmp/.dg known_bad tmp/.lp known_safe ...
+	ktable() { : >"$KS/table"; while [ $# -gt 1 ]; do echo "$(sha256sum <"$KL/$1" | cut -c1-64) $2" >>"$KS/table"; shift 2; done; }
+	# the result code printed in a file: "<first 7 characters> <the 3 bits before rv> <rv> <check character fits>"
+	codebits() {
+		grep -o 'csa\.gl-i\.net/#[0-9A-Z]*' "$1" | head -n 1 | sed 's/.*#//' | awk '{ a = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; s = 0
+			for (i = 1; i <= 8; i++) s += i * (index(a, substr($0, i, 1)) - 1)
+			v = index(a, substr($0, 8, 1)) - 1
+			print substr($0, 1, 7), int(v / 4), v % 4, (substr(a, s % 31 + 1, 1) == substr($0, 9, 1)) }'
+	}
+	V=$(sed -n 's/^VERSION=//p' "$T")
+	kmode ok; ktable
+	# something listed for review, but no file with a fingerprint: a directory
+	mkdir "$KL/tmp/.dg"
+	lk --lookup >"$K/none.txt"; rc=$?
+	expect "nothing listed for review has a fingerprint: no section, nothing sent" '[ $rc = 0 ] && grep -q "REVIEW  *tmp-file  */tmp/.dg" "$K/none.txt" && ! grep -q "Fingerprint check\|community list" "$K/none.txt" && [ "$(nreq)" = 0 ]'
+	rmdir "$KL/tmp/.dg"
+	# two files and an account whose name holds characters the report leaves out
+	echo payload >"$KL/tmp/.dg"; echo other >"$KL/tmp/.lp"
+	printf 'root:x:0:0:root:/root:/bin/ash\nop$er#\303\251:x:0:0::/root:/bin/ash\n' >"$KL/etc/passwd"
+	lk --lookup --show-report >"$K/ok.txt"; rc=$?
+	sed -n '/^== Fingerprint check/,/^== GoodCloud/p' "$K/ok.txt"
+	expect "--lookup sends without asking: one request, as text/plain" '[ "$(nreq)" = 1 ] && [ "$(cat "$KS/type.1")" = text/plain ] && grep -q "^== Fingerprint check (optional)" "$K/ok.txt" && ! grep -q "Check them?" "$K/ok.txt"'
+	# the request rebuilt from the report's review_items of the same run (--show-report)
+	same=$(python3 - "$K/ok.txt" "$KS/req.1" "$V" <<'EOF'
+import hashlib, json, sys
+lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
+a = lines.index('   {'); b = lines.index('   }', a)
+rep = json.loads('\n'.join(lines[a:b + 1]))
+req = open(sys.argv[2], 'rb').read()
+want = []
+for it in rep['review_items']:
+    if it['sha256']:
+        l = hashlib.sha256((it['kind'] + ' ' + it['path']).encode()).hexdigest() + ' ' + it['sha256']
+        if l not in want:
+            want.append(l)
+nonce = req.split(b'\n')[2][6:].decode('latin-1')
+exp = ('csa-2026-01-lookup 1\nversion %s\nnonce %s\n' % (sys.argv[3], nonce) + ''.join(l + '\n' for l in want)).encode()
+ok = req == exp and len(want) == 3 and len(nonce) == 32 and all(c in '0123456789abcdef' for c in nonce)
+print('same' if ok else 'differs')
+EOF
+)
+	expect "the request is the contract's, byte for byte, made from kind and path as the report carries them" '[ "$same" = same ]'
+	expect "a path with characters the report leaves out is asked as the report carries it" 'grep -q "\"path\": \"/etc/passwd name=oper uid=0 shell=/bin/ash pw=set\"" "$K/ok.txt" && grep -q "^$(printf "%s" "uid0-account /etc/passwd name=oper uid=0 shell=/bin/ash pw=set" | sha256sum | cut -c1-64) $(sha256sum <"$KL/etc/passwd" | cut -c1-64)$" "$KS/req.1"'
+	expect "no path and no name in clear in the request" '! grep -qE "tmp|passwd|oper|dg|lp|/" "$KS/req.1"'
+	expect "all not known: nothing changes, the section says so" '[ $rc = 0 ] && grep -q "Answer received and checked (2026-11-24 16:40 UTC)." "$K/ok.txt" && grep -q "not known    all 3, as listed above: still yours to look at" "$K/ok.txt" && grep -q "Verdict: no gl-helper indicators found" "$K/ok.txt"'
+	n0=$(nreq)
+	lk --no-lookup >"$K/nolookup.txt"; rc0=$?
+	expect "--no-lookup: no question, no section, nothing sent" '[ $rc0 = 0 ] && ! grep -q "Fingerprint check\|community list" "$K/nolookup.txt" && [ "$(nreq)" = "$n0" ]'
+	lk >"$K/ask.txt"; rc=$?
+	expect "no terminal and no --lookup: what would be sent, one line that --lookup checks, nothing sent" '[ $rc = 0 ] && grep -q "^== Fingerprint check (optional)" "$K/ask.txt" && grep -q "Not sent: no path, no content of a file, no device ID" "$K/ask.txt" && grep -q "Not checked: nothing was sent. To check them, run the script again with --lookup." "$K/ask.txt" && [ "$(nreq)" = "$n0" ]'
+	ktable tmp/.dg known_bad
+	lk --lookup >"$K/bad.txt"; rc=$?
+	sed -n '/^== Fingerprint check/,/^== GoodCloud/p;/^== Result/,/^== Next/p' "$K/bad.txt"
+	expect "known_bad: a clean device is INFECTED, exit 1, by IOC lookup-bad, with a verdict of its own" '[ $rc = 1 ] && grep -q "KNOWN BAD    tmp-file        /tmp/.dg" "$K/bad.txt" && grep -q "Summary: IOC=1 " "$K/bad.txt" && grep -q "IOC      lookup-bad: a file listed for review that the community list knows as malware. --fix does NOT remove it." "$K/bad.txt" && grep -q "Verdict: INFECTED - a file listed for review is known malware (community list)" "$K/bad.txt"'
+	expect "known_bad: nothing says --fix removes it or that gl-helper was found; the REVIEW lines stay" '! grep -q "fix removes it" "$K/bad.txt" && ! grep -q "gl-helper indicators found" "$K/bad.txt" && [ "$(grep -o "REVIEW=[0-9]*" "$K/bad.txt" | tail -n 1)" = "$(grep -o "REVIEW=[0-9]*" "$K/nolookup.txt" | tail -n 1)" ]'
+	expect "known_bad: the next steps still say to reinstall" 'grep -q "known malware on the community list. --fix does not remove it" "$K/bad.txt" && grep -q "Reinstall the firmware" "$K/bad.txt"'
+	codebits "$K/nolookup.txt"; codebits "$K/bad.txt"
+	expect "known_bad: the field for review in the result code is 2, the rest as without the check" '[ "$(codebits "$K/bad.txt")" = "$(codebits "$K/nolookup.txt" | awk "{ print \$1, \$2, 2, \$4 }")" ] && codebits "$K/nolookup.txt" | grep -q " 1 1$"'
+	ktable tmp/.dg known_safe
+	lk --lookup >"$K/safe.txt"; rc=$?
+	expect "known_safe: verdict, exit code, REVIEW count and result code stay; the list knowing it is said" '[ $rc = 0 ] && grep -q "Verdict: no gl-helper indicators found" "$K/safe.txt" && [ "$(grep -o "Summary: .*" "$K/safe.txt")" = "$(grep -o "Summary: .*" "$K/nolookup.txt")" ] && [ "$(codebits "$K/safe.txt")" = "$(codebits "$K/nolookup.txt")" ] && grep -q "known        tmp-file        /tmp/.dg" "$K/safe.txt" && grep -q "not known    2 more" "$K/safe.txt" && grep -q "The community list knows 1 of these files as all right" "$K/safe.txt" && ! grep -q "lookup-bad" "$K/safe.txt"'
+	# a trace the script found itself: the remote shell's pipe
+	mkfifo "$KL/tmp/f"
+	ktable tmp/.dg known_safe tmp/.lp known_safe
+	lk --lookup >"$K/ioc.txt"; rc=$?
+	expect "a trace found on the device stays: known_safe for every file, still INFECTED, exit 1" '[ $rc = 1 ] && grep -q "Summary: IOC=1 " "$K/ioc.txt" && grep -q "Verdict: INFECTED - gl-helper indicators found" "$K/ioc.txt"'
+	ktable tmp/.dg known_bad
+	lk --lookup >"$K/ioc2.txt"; rc=$?
+	expect "with a trace of its own, the verdict stays and known_bad adds a line to it" '[ $rc = 1 ] && grep -q "Summary: IOC=2 " "$K/ioc2.txt" && grep -q "Verdict: INFECTED - gl-helper indicators found" "$K/ioc2.txt" && grep -q "Also: a file listed for review is known malware (community list)." "$K/ioc2.txt" && ! grep -q "Verdict: INFECTED - a file listed" "$K/ioc2.txt"'
+	rm "$KL/tmp/f"
+	# answers that do not fit, each with known_bad in the table: used, they would change the result
+	ESC=$(printf '\033')
+	for m in nonce unasked word missing extra order esc ctrl high big nolf crlf empty; do
+		kmode $m; n0=$(nreq)
+		lk --lookup >"$K/broken-$m.txt"; rc=$?
+		expect "an answer that does not fit ($m) is set aside: one line, nothing changed, none of it printed" '[ $rc = 0 ] && [ "$(nreq)" -gt "$n0" ] && [ "$(grep -c "The answer did not check out and was not used. Nothing changed." "$K/broken-$m.txt")" = 1 ] && ! grep -qE "EVIL|lookup-bad|KNOWN BAD|known_|Answer received" "$K/broken-$m.txt" && ! grep -q "$ESC" "$K/broken-$m.txt" && grep -q "Verdict: no gl-helper indicators found" "$K/broken-$m.txt"'
+	done
+	kmode 500
+	lk --lookup >"$K/500.txt"; rc=$?
+	expect "an error of the server: one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/500.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/500.txt"'
+	kmode ok
+	KURL=http://127.0.0.1:9/lookup lk --lookup >"$K/down.txt"; rc=$?
+	expect "no server: one line, nothing changed, exit code as before" '[ $rc = 0 ] && [ "$(grep -c "No answer from the community list. Nothing changed." "$K/down.txt")" = 1 ] && grep -q "Verdict: no gl-helper indicators found" "$K/down.txt"'
+	n0=$(nreq)
+	lk --fix --lookup >"$K/fix.txt"; rc=$?
+	expect "--fix never sends" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && ! grep -q "Fingerprint check\|community list" "$K/fix.txt"'
+	mv "$KL/dev/urandom" "$K/urandom"
+	lk --lookup >"$K/norand.txt"; rc=$?
+	expect "without /dev/urandom: one line, nothing sent" '[ $rc = 0 ] && [ "$(nreq)" = "$n0" ] && [ "$(grep -c "no random number could be made here (from /dev/urandom)" "$K/norand.txt")" = 1 ]'
+	mv "$K/urandom" "$KL/dev/urandom"
+	rm -f "$KL"/tmp/gl-triage-*
+	lk --archive --lookup >"$K/arch.txt"; rc=$?
+	A=$(ls "$KL"/tmp/gl-triage-*.tar.gz 2>/dev/null | head -n 1)
+	[ -n "$A" ] && tar -xzOf "$A" evidence/lookup.txt >"$K/lookup.txt" 2>/dev/null
+	sed 's/^/    | /' "$K/lookup.txt"
+	expect "--archive: lookup.txt holds the request as sent and the answer, the archive's report the finding" '[ $rc = 1 ] && cmp -s <(sed -n "/^Request, as sent to/,/^\$/p" "$K/lookup.txt" | sed "1d;\$d") "$KS/req.$(nreq)" && grep -qx "csa-2026-01-lookup-answer 1" "$K/lookup.txt" && grep -q " known_bad$" "$K/lookup.txt" && tar -xzOf "$A" evidence/report.txt | grep -q "IOC  *lookup-bad  */tmp/.dg"'
+	rm -f "$KL"/tmp/gl-triage-*
+	kmode esc
+	lk --archive --lookup >"$K/arch2.txt"; rc=$?
+	A=$(ls "$KL"/tmp/gl-triage-*.tar.gz 2>/dev/null | head -n 1)
+	expect "--archive with an answer set aside: lookup.txt says so and holds none of it" '[ $rc = 0 ] && tar -xzOf "$A" evidence/lookup.txt | grep -q "did not check out and was set aside" && ! tar -xzOf "$A" evidence/lookup.txt | grep -qE "EVIL|answer 1|$ESC"'
+	rm -f "$KL"/tmp/gl-triage-*
+	kmode ok
+	lk --lookup --show-report >"$K/rep.txt"
+	expect "the report knows nothing of the check" 'grep -q "Verdict: INFECTED - a file listed" "$K/rep.txt" && grep -q "^   \"ioc\": 0,$" "$K/rep.txt" && ! sed -n "/^== Anonymous report/,\$p" "$K/rep.txt" | grep -q lookup'
+	# On a terminal it asks. The terminal comes from script(1), where it works here.
+	n0=$(nreq)
+	printf 'v\nn\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=$KURL chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty.txt"
+	if grep -q "Check them? \[y/N, v = show what would be sent\]" "$K/tty.txt"; then
+		sed -n '/^== Fingerprint check/,/^== GoodCloud/p' "$K/tty.txt"
+		expect "on a terminal it asks; v shows the request line by line with the file under each, n sends nothing" '[ "$(nreq)" = "$n0" ] && grep -q "Not checked. Nothing was sent." "$K/tty.txt" && [ "$(sed -n "/^   What would be sent to/,/^   Under each line/p" "$K/tty.txt" | grep "^      [^ ]" | sed "s/^      //" | sed 1,3d)" = "$(sed 1,3d "$KS/req.$n0")" ] && grep -qx "      csa-2026-01-lookup 1" "$K/tty.txt" && grep -qx "         = tmp-file  /tmp/.dg" "$K/tty.txt" && grep -qx "         = uid0-account  /etc/passwd name=op\$er#é uid=0 shell=/bin/ash pw=set" "$K/tty.txt"'
+		printf 'y\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=$KURL chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty2.txt"
+		expect "y sends, and the answer is used" '[ "$(nreq)" = "$((n0 + 1))" ] && grep -q "KNOWN BAD    tmp-file        /tmp/.dg" "$K/tty2.txt"'
+		printf 'v\nn\n' | script -qec "env TERM=dumb TMPDIR=/tmp GL_TRIAGE_REPORT_URL=http://127.0.0.1:9/ GL_TRIAGE_LOOKUP_URL=http://127.0.0.1:1@evil.example/ chroot $KL /bin/sh /t.sh --no-device-id --no-report" /dev/null 2>/dev/null | tr -d '\r' >"$K/tty3.txt"
+		expect "an address of this machine with a user part (127.0.0.1:1@host) is not taken for the check" 'grep -q "What would be sent to https://app.gl-i.net/csa-2026-01-report/lookup, line by line:" "$K/tty3.txt" && ! grep -q evil.example "$K/tty3.txt"'
+	else
+		echo "  SKIP: the question on a terminal (script(1) gives no terminal here)"
+	fi
+	kill "$KSRV" 2>/dev/null
+	umount "$KL/dev/null"
+else
+	echo "  SKIP: needs a statically linked busybox and python3"
+fi
+
 echo; echo "RESULT: $pass passed, $fail failed"
 [ "$fail" = 0 ]

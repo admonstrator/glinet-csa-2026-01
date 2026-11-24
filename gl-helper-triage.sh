@@ -22,6 +22,12 @@
 # --no-device-id leaves it out. --note TEXT adds a short note of your own (where the
 # report comes from, before or after a clean-up, a repeat); it is shown before sending.
 #
+# Before the result, on the device itself (--check, --archive), the script offers to ask
+# the community's list whether the files it listed for review are known: as malware, as
+# all right, or not at all. Only fingerprints are sent, never a path or a file. --lookup
+# asks without the question, --no-lookup never asks. The answer can only make the result
+# worse, never better (docs/lookup.md).
+#
 # Output is coloured on a terminal. --color forces colours (e.g. through ssh without a
 # tty), --no-color or NO_COLOR=1 turns them off. The report in the archive is plain text.
 #
@@ -236,7 +242,7 @@ C1_RE=${C1_RE#|}
 clean() { tr '\001-\037\177' '?' | LC_ALL=C sed -E "s/$C1_RE/?/g"; }
 clean_lines() { tr '\001-\010\013-\037\177' '?' | LC_ALL=C sed -E "s/$C1_RE/?/g"; }
 
-SECRETS=0 MODE=check STDOUT=0 OUTDIR=/tmp ROOT=/ UPPER='' LOWER='' UPPER_SET=0 LOWER_SET=0 COLOR=auto REPORT=ask DEVICE_ID=1 NOTE='' UNSIGNED=0
+SECRETS=0 MODE=check STDOUT=0 OUTDIR=/tmp ROOT=/ UPPER='' LOWER='' UPPER_SET=0 LOWER_SET=0 COLOR=auto REPORT=ask DEVICE_ID=1 NOTE='' UNSIGNED=0 LOOKUP_MODE=ask
 # The tests send the report, fetch the update and show the result page on this machine.
 # Only such an address is taken from outside: a line in /etc/profile must not send the
 # report or point the result page elsewhere (review of 2.55). Only http://127.0.0.1/... or
@@ -276,6 +282,9 @@ gl-helper-triage.sh - check, archive and remediate the GL.iNet "gl-helper" impla
   --no-report          never offer to send a report
   --show-report        print the complete report and send nothing
   --no-device-id       leave the device ID out of the report
+  --lookup             ask the community list about the files listed for review without
+                       asking you first (what is sent is still shown; docs/lookup.md)
+  --no-lookup          never ask the community list about the files listed for review
   --note TEXT          a note of your own in the report, at most 120 characters of
                        letters, digits, spaces and ._:/+@=,()-
   --with-secrets       keep the private keys and passwords the script would otherwise take
@@ -321,6 +330,8 @@ while [ $# -gt 0 ]; do
 	--no-report) REPORT=no ;;
 	--show-report) REPORT=show ;;
 	--no-device-id) DEVICE_ID=0 ;;
+	--lookup) LOOKUP_MODE=yes ;;
+	--no-lookup) LOOKUP_MODE=no ;;
 	--with-secrets) SECRETS=1 ;;
 	-o | --out) [ $# -ge 2 ] || die "$1 needs a directory"; OUTDIR=$2; shift ;;
 	--root) [ $# -ge 2 ] || die "$1 needs a directory"; ROOT=$2; shift ;;
@@ -2390,18 +2401,20 @@ detect() {
 }
 
 count() { grep -c "^$1${TAB}" "$FIND"; }
-# IOC findings of the incident of 2026-11-20 (--fix handles these) and of the older backdoor
-count_gl() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "rtty-server" && $2 != "installer-trace"' "$FIND" | wc -l | tr -d ' '; }
+# IOC findings of the incident of 2026-11-20 (--fix handles these) and of the older backdoor.
+# A file the community list knows as malware (lookup-bad, see lookup) is none of them:
+# it counts for the verdict, but --fix knows nothing to remove for it.
+count_gl() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "rtty-server" && $2 != "installer-trace" && $2 != "lookup-bad"' "$FIND" | wc -l | tr -d ' '; }
 # Traces that only say "a crafted command from the cloud ran": the rule it leaves in the
 # firewall and the handler's empty state file. And everything else of this incident:
 # malware files, autostart entries, a remote shell.
 count_cmd() { awk -F '\t' '$1=="IOC" && ($2=="cloud-command" || $2=="fw-rule" || $2=="installer-trace")' "$FIND" | wc -l | tr -d ' '; }
-count_hard() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "fw-rule" && $2 != "installer-trace"' "$FIND" | wc -l | tr -d ' '; }
+count_hard() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "fw-rule" && $2 != "installer-trace" && $2 != "lookup-bad"' "$FIND" | wc -l | tr -d ' '; }
 # Findings that show the malware itself, not only the remote shell: its files, its
 # autostart entries, its processes. The shell's process, pipe, connection and the
 # firewall rule leave no autostart entry (RemoteToHome, R-7), so --fix leaves rc.local
 # and the root crontab alone when those are all there is (issue 5).
-count_implant() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "rtty-server" && $2 != "installer-trace" && $2 != "fw-rule" && $2 != "pipe" && !(($2=="process" || $2=="connection") && $4 ~ /reported remote shell|^remote shell reported/)' "$FIND" | wc -l | tr -d ' '; }
+count_implant() { awk -F '\t' '$1=="IOC" && $2 !~ /^backdoor-/ && $2 != "cloud-command" && $2 != "rtty-server" && $2 != "installer-trace" && $2 != "lookup-bad" && $2 != "fw-rule" && $2 != "pipe" && !(($2=="process" || $2=="connection") && $4 ~ /reported remote shell|^remote shell reported/)' "$FIND" | wc -l | tr -d ' '; }
 count_bd() { awk -F '\t' '$1=="IOC" && $2 ~ /^backdoor-/' "$FIND" | wc -l | tr -d ' '; }
 has_ioc() { grep -q "^IOC${TAB}$1${TAB}" "$FIND"; }
 # /etc/rtty_conf is counted for the verdict but --fix does not change it: the script cannot
@@ -2629,11 +2642,13 @@ result_block() {
 	has_ioc rtty-server && say "   ${RED}IOC${N}      rtty-server: --fix does NOT change /etc/rtty_conf. A factory reset or reflash does."
 	[ "$(count_cmd)" -gt 0 ] && say "   ${RED}IOC${N}      cloud-command, fw-rule, installer-trace: the attack reached this device."
 	[ "$(count_bd)" -gt 0 ] && say "   ${RED}IOC${N}      backdoor-*: a trace of the older backdoor. --fix does NOT remove it, see below."
+	has_ioc lookup-bad && say "   ${RED}IOC${N}      lookup-bad: a file listed for review that the community list knows as malware. --fix does NOT remove it."
 	[ "$(count PERSIST)" -gt 0 ] && say "   ${YEL}PERSIST${N}  a changed rc.local or root crontab. --fix resets it only when the malware itself was found."
 	if [ "$(count REVIEW)" -gt 0 ]; then
 		say "   ${CYA}REVIEW${N}   an unusual change, not proof of an infection. Check whether it is yours. Never modified."
 		grep -qE "^IOC${TAB}persist-ref${TAB}/etc/firewall\.(user|d/)" "$FIND" &&
 			say "            Except the malware's own lines in the firewall's start script (IOC above): --fix takes those out."
+		[ "$LOOKUP_SAFE" -gt 0 ] && say "            The community list knows $LOOKUP_SAFE of these files as all right (fingerprint check)."
 	fi
 	[ "$(count INFO)" -gt 0 ] && say "   ${D}INFO     context, for example files installed by a package.${N}"
 	say ""
@@ -2659,6 +2674,8 @@ result_block() {
 			say "   ${D}that was recovered only looked for the malware and reported back; others opened a${N}"
 			say "   ${D}remote shell.${N}"
 		fi
+	elif has_ioc lookup-bad; then
+		say "   ${RED}Verdict: INFECTED - a file listed for review is known malware (community list)${N}"
 	else
 		say "   ${GRN}${B}Verdict: no gl-helper indicators found${N}"
 		restart_note
@@ -2669,6 +2686,9 @@ result_block() {
 		say "   ${D}Not proof that nothing happened: not every step of the attack leaves a trace on the${N}"
 		say "   ${D}device.${N}"
 	fi
+	# the verdict of a trace the script found itself stays; the fingerprint check adds to it
+	has_ioc lookup-bad && [ "$(count IOC)" -gt "$(count "IOC${TAB}lookup-bad")" ] &&
+		say "   ${RED}Also: a file listed for review is known malware (community list).${N}"
 	# directly under the verdict, not at the end: whoever stops the run at the question
 	# about the report has seen it by then
 	result_link 0
@@ -2750,6 +2770,8 @@ collect() {
 	palette 0
 	report 3>"$E/report.txt"
 	palette "$COLOR"
+	# the fingerprint check of this run: what was asked and what came back (see lookup)
+	[ -s "$TMP/lookup.txt" ] && cp "$TMP/lookup.txt" "$E/lookup.txt"
 
 	{
 		echo "tool: gl-helper-triage $VERSION"
@@ -3185,6 +3207,10 @@ recommend() {
 		say "     variants may use others."
 		say "   - It may have been there for months: treat every password and key on it as copied."
 	fi
+	if has_ioc lookup-bad; then
+		say "   - A file listed for review is known malware on the community list. --fix does not remove it:"
+		say "     reinstall the firmware as described below."
+	fi
 	case $PLATFORM in
 	openwrt)
 		say "   - Reinstall the firmware WITHOUT keeping settings, from a file you downloaded yourself."
@@ -3220,7 +3246,10 @@ recommend() {
 jtxt() { printf '"%s"' "$(printf '%s' "$1" | tr '\t' ' ' | tr -cd '\40-\176' | cut -c1-"${2:-300}" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 jlines() { while IFS= read -r line; do printf '%s,' "$(jtxt "$line" "${1:-300}")"; done | sed 's/,$//'; }
 
-jstr() { printf '"%s"' "$(printf '%s' "$1" | tr -cd 'A-Za-z0-9 ._:/+@=,()-' | cut -c1-"${2:-64}")"; }
+# A value as the report carries it: only these characters, cut to a length. The fingerprint
+# check names a finding by the same kind and path, so both take it from here.
+jclean() { printf '%s' "$1" | tr -cd 'A-Za-z0-9 ._:/+@=,()-' | cut -c1-"${2:-64}"; }
+jstr() { printf '"%s"' "$(jclean "$1" "$2")"; }
 
 # Model and firmware of the device, for the report and for the code of the result page.
 # On a running device from the system; with --root from the files of that root.
@@ -3337,6 +3366,7 @@ build_report() {
 	# password field is empty: the same odd account on many devices is a pattern, and a
 	# forum user found one (glcloud, uid 2, empty password) that nobody can explain yet.
 	: >"$TMP/revlines"
+	: >"$TMP/lookup.items"
 	revs=$(awk -F '\t' '$1=="REVIEW" {
 			p = $3; pid = ""; x = ""
 			if ($2 == "process") p = ""
@@ -3376,6 +3406,8 @@ build_report() {
 					fi
 				fi ;;
 			esac
+			# the fingerprint check asks for this file by the kind and path below (see lookup)
+			[ -n "$sha" ] && lookup_item "$kind" "$f${x:+ $x}" "$sha" "$f"
 			f="$f${x:+ $x}"
 			printf '%s  %s\n' "$kind" "$f" >>"$TMP/revlines"
 			printf '{"kind": %s, "path": %s, "sha256": %s, "mtime": %s, "ctime": %s},' "$(jstr "$kind" 24)" "$(jstr "$f" 160)" "$(jstr "$sha")" "$(jstr "$mt")" "$(jstr "$ct")"
@@ -3542,6 +3574,195 @@ offer_report() {
 	if send_report; then act "Sent. Thank you."; else say "   ${YEL}Could not send the report (no connection, or no curl or wget). Nothing was sent.${N}"; fi
 }
 
+# ---------------------------------------------------------------- fingerprint check
+# Since 2.60 the script can ask the community's list whether the files it listed for review
+# are known: as malware, as all right, or not at all (docs/lookup.md fixes the exchange).
+# Only on the device itself and only in --check and --archive, before the result, so that
+# the verdict, the exit code and the result code already hold the answer and there is one
+# verdict. It asks first; --lookup goes on without the question, --no-lookup never asks.
+# For each file it sends two fingerprints: the SHA-256 of its kind and path exactly as the
+# report carries them, so that the server can recognize a path it already knows and
+# nothing else, and the SHA-256 of the file. Never a path, a file or anything about the
+# device. The report itself is built before and knows nothing of the check.
+# The answer is not trusted. It is used only when all of it is what was asked for, and then
+# it can only make the result worse: a file known as malware adds "IOC lookup-bad", a file
+# known to be all right stays listed for review, and a trace the script found itself stays a
+# trace. Nothing of the answer reaches the screen as it came: what is printed is made of the
+# script's own findings and fixed words. HTTPS with a checked certificate only, never plain
+# HTTP and never an unchecked certificate.
+LOOKUP_URL=https://app.gl-i.net/csa-2026-01-report/lookup
+loopback_url "${GL_TRIAGE_LOOKUP_URL:-}" && LOOKUP_URL=$GL_TRIAGE_LOOKUP_URL
+LOOKUP_SAFE=0 LOOKUP_NONCE=
+# One file, from the loop of build_report that makes the report's review_items: the line it
+# is asked with, its kind, the path a finding for it names and the path as the report has it.
+lookup_item() { # kind, path as in the report, sha256 of the file, path of the file
+	local k
+	k=$(printf '%s %s' "$(jclean "$1" 24)" "$(jclean "$2" 160)" | sha256sum 2>/dev/null | cut -c1-64)
+	printf '%s %s\t%s\t%s\t%s\n' "$k" "$3" "$1" "$4" "$2" >>"$TMP/lookup.items"
+}
+# The request as send_report sends the report. The answer goes to a file; whatever fails
+# (no tool of the firmware's own, no connection, a certificate that does not check out, an
+# error of the server), there is none.
+lookup_send() {
+	local body
+	rm -f "$TMP/lookup.answer"
+	if tool_ok curl; then
+		curl -fsS -m 20 -o "$TMP/lookup.answer" -H 'Content-Type: text/plain' --data-binary "@$TMP/lookup.req" "$LOOKUP_URL" 2>/dev/null
+	elif tool_ok wget; then
+		wget -q -T 20 -O "$TMP/lookup.answer" --header='Content-Type: text/plain' --post-file="$TMP/lookup.req" "$LOOKUP_URL" 2>/dev/null || {
+			# a wget without --post-file. The request ends in a line break, which $( ) drops.
+			body=$(cat "$TMP/lookup.req"; echo x); body=${body%x}
+			wget -q -T 20 -O "$TMP/lookup.answer" --header='Content-Type: text/plain' --post-data="$body" "$LOOKUP_URL" 2>/dev/null
+		}
+	else
+		return 1
+	fi || { rm -f "$TMP/lookup.answer"; return 1; }
+	[ -f "$TMP/lookup.answer" ]
+}
+# Is the answer exactly what was asked for? At most 8192 bytes of line breaks and printable
+# ASCII only; the first line; the random number of this run; the time in its shape; then one
+# line per line asked, in the same order, with the same two hashes and one of three words,
+# and a line break after the last line, nothing after it. Then lookup.words holds the time
+# and each line asked with its word; when anything does not fit, it holds nothing.
+lookup_read() {
+	local f=$TMP/lookup.answer size
+	: >"$TMP/lookup.words"
+	size=$(wc -c <"$f" 2>/dev/null | tr -d ' ')
+	case $size in '' | *[!0-9]*) return 1 ;; esac
+	[ "$size" -le 8192 ] || return 1
+	[ "$(LC_ALL=C tr -d '\n\040-\176' <"$f" | wc -c | tr -d ' ')" = 0 ] || return 1
+	# the sum of the lines and their breaks is the size only when the last line ends in one
+	awk -v nonce="$LOOKUP_NONCE" -v size="$size" '
+		NR == FNR { ask[++m] = $0; next }
+		{ a[++k] = $0; b += length($0) + 1 }
+		END {
+			if (m < 1 || k != m + 3 || b != size) exit 1
+			if (a[1] != "csa-2026-01-lookup-answer 1" || a[2] != "nonce " nonce) exit 1
+			if (a[3] !~ /^at [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9] UTC$/) exit 1
+			out = substr(a[3], 4) "\n"
+			for (i = 1; i <= m; i++) {
+				p = ask[i] " "; w = substr(a[i + 3], length(p) + 1)
+				if (substr(a[i + 3], 1, length(p)) != p) exit 1
+				if (w != "known_bad" && w != "known_safe" && w != "unknown") exit 1
+				out = out ask[i] "\t" w "\n"
+			}
+			printf "%s", out
+		}' "$TMP/lookup.lines" "$f" >"$TMP/lookup.words" 2>/dev/null || { : >"$TMP/lookup.words"; return 1; }
+	[ -s "$TMP/lookup.words" ]
+}
+# "v": the request as it would be sent, and under each line of fingerprints the finding it
+# stands for, as this script names it
+lookup_show() {
+	say ""
+	say "   What would be sent to $LOOKUP_URL, line by line:"
+	awk -F '\t' 'NR == FNR { s[$1] = s[$1] "\t" $2 "  " $4; next }
+		{ print "      " $0; n = split(substr(s[$0], 2), w, "\t"); for (i = 1; i <= n; i++) print "         = " w[i] }' \
+		"$TMP/lookup.items" "$TMP/lookup.req" | clean_lines >&3
+	say "   Under each line of two fingerprints stands the file it is for: first the SHA-256 of its"
+	say "   kind and path, then the SHA-256 of the file. The server gets the fingerprints only."
+}
+# lookup.txt for the evidence archive: what came of the check ($1), the request when it was
+# sent, and the answer when it was used ($2: sent, used)
+lookup_txt() {
+	{
+		echo "Fingerprint check of gl-helper-triage $VERSION, $WHEN (see docs/lookup.md)"
+		echo "$1"
+		if [ -n "$2" ]; then
+			echo; echo "Request, as sent to $LOOKUP_URL:"; cat "$TMP/lookup.req"
+			echo; echo "What each line of the request stands for:"
+			awk -F '\t' '{ print $1 "  " $2 "  " $4 }' "$TMP/lookup.items" | clean_lines
+		fi
+		if [ "$2" = used ]; then echo; echo "Answer, checked and used:"; cat "$TMP/lookup.answer"; fi
+	} >"$TMP/lookup.txt"
+}
+lookup() {
+	local n answer w k p s bad=0 safe=0 total nu
+	[ "$LIVE" = 1 ] && [ -s "$TMP/lookup.items" ] || return 0
+	# each line once, in the order of the report, and only in the shape the request takes
+	grep -E "^[0-9a-f]{64} [0-9a-f]{64}${TAB}" "$TMP/lookup.items" | cut -f1 | awk '!s[$0]++' >"$TMP/lookup.lines"
+	n=$(wc -l <"$TMP/lookup.lines" | tr -d ' ')
+	[ "$n" -gt 0 ] || return 0
+	if [ "$LOOKUP_MODE" = no ]; then lookup_txt "Not asked (--no-lookup). Nothing was sent."; return 0; fi
+	section "Fingerprint check (optional)"
+	# a random number for this run, which the answer has to repeat: an answer made for
+	# another request does not fit
+	LOOKUP_NONCE=
+	[ -r /dev/urandom ] && LOOKUP_NONCE=$(head -c 64 /dev/urandom 2>/dev/null | sha256sum 2>/dev/null | cut -c1-32)
+	case $LOOKUP_NONCE in *[!0-9a-f]*) LOOKUP_NONCE= ;; esac
+	if [ "${#LOOKUP_NONCE}" != 32 ]; then
+		say "   ${YEL}Not checked: no random number could be made here (from /dev/urandom). Nothing was sent.${N}"
+		lookup_txt "Not checked: no random number could be made (from /dev/urandom). Nothing was sent."
+		return 0
+	fi
+	{ printf 'csa-2026-01-lookup 1\nversion %s\nnonce %s\n' "$VERSION" "$LOOKUP_NONCE"; cat "$TMP/lookup.lines"; } >"$TMP/lookup.req"
+	if [ "$n" = 1 ]; then say "   The community list can say whether the file listed for review is known: as malware,"
+	else say "   The community list can say whether the $n files listed for review are known: as malware,"; fi
+	say "   as all right, or not at all. The answer can only make the result worse, never better."
+	say "   Sent: for each file the SHA-256 of its kind and path and the SHA-256 of the file, and"
+	say "   the script version and a random number for this run."
+	say "   Not sent: no path, no content of a file, no device ID, no model, no host name."
+	if [ "$LOOKUP_MODE" != yes ]; then
+		if [ -t 0 ] && [ -t 3 ]; then
+			while :; do
+				say ""
+				printf '   %sCheck %s? [y/N, v = show what would be sent]%s ' "$B" "$([ "$n" = 1 ] && echo it || echo them)" "$N" >&3
+				read -r answer || answer=
+				case $answer in
+				v | V) lookup_show ;;
+				y | Y | yes | Yes | YES) break ;;
+				*) say "   Not checked. Nothing was sent."; lookup_txt "Not checked: declined at the question. Nothing was sent."; return 0 ;;
+				esac
+			done
+		else
+			say "   Not checked: nothing was sent. To check them, run the script again with --lookup."
+			lookup_txt "Not checked: no terminal to ask on, and no --lookup. Nothing was sent."
+			return 0
+		fi
+	fi
+	if ! lookup_send; then
+		say "   ${YEL}No answer from the community list. Nothing changed.${N}"
+		lookup_txt "No answer came: no connection, no curl or wget of the firmware, a certificate that did not check out, or an error of the server. Nothing changed." sent
+		return 0
+	fi
+	if ! lookup_read; then
+		say "   ${YEL}The answer did not check out and was not used. Nothing changed.${N}"
+		lookup_txt "An answer came, but it did not check out and was set aside. Nothing changed." sent
+		return 0
+	fi
+	# the word for each finding, by the line it was asked with: word, kind, path, path as shown
+	awk -F '\t' 'NR == FNR { if (FNR > 1) w[$1] = $2; next } ($1 in w) { print w[$1] "\t" $2 "\t" $3 "\t" $4 }' \
+		"$TMP/lookup.words" "$TMP/lookup.items" | clean_lines >"$TMP/lookup.result"
+	# only ever worse: a finding is added, none is taken away or changed
+	while IFS="$TAB" read -r w k p s; do
+		case $w in
+		known_bad)
+			bad=$((bad + 1))
+			has_at lookup-bad "$p" || add IOC lookup-bad "$p" "known malware on the community list (fingerprint)" ;;
+		known_safe) safe=$((safe + 1)) ;;
+		esac
+	done <"$TMP/lookup.result"
+	LOOKUP_SAFE=$safe
+	total=$(wc -l <"$TMP/lookup.result" | tr -d ' ')
+	nu=$((total - bad - safe))
+	say ""
+	# the time in the shape lookup_read let through: digits, dashes, a colon, UTC
+	say "   Answer received and checked ($(head -n 1 "$TMP/lookup.words"))."
+	awk -F '\t' -v r="$RED" -v n="$N" '$1 == "known_bad" { printf "   %sKNOWN BAD%s    %-15s %s\n", r, n, $2, $4 }' "$TMP/lookup.result" >&3
+	awk -F '\t' '$1 == "known_safe" { printf "   known        %-15s %s\n", $2, $4 }' "$TMP/lookup.result" >&3
+	if [ "$nu" -gt 0 ] && [ "$nu" = "$total" ]; then
+		if [ "$nu" = 1 ]; then say "   not known    the file listed above: still yours to look at"
+		else say "   not known    all $nu, as listed above: still yours to look at"; fi
+	elif [ "$nu" -gt 0 ]; then
+		say "   not known    $nu more, as listed above: still yours to look at"
+	fi
+	if [ "$bad" -gt 0 ]; then
+		say "   ${RED}KNOWN BAD: the community list knows the file as malware. It counts as IOC lookup-bad,${N}"
+		say "   ${RED}and the result is INFECTED. --fix does not remove it.${N}"
+	fi
+	[ "$safe" -gt 0 ] && say "   ${D}known: the community list knows the file as all right. It stays listed for review.${N}"
+	lookup_txt "Answer received and checked: $bad known as malware, $safe known as all right, $nu not known." used
+}
+
 # Said at the end of every run, whatever was found: the attack came in through GoodCloud,
 # and by reports of 22 November devices are still being hit. The code that was used is on
 # the device and runs whenever the cloud client runs, with AstroWarp on or off.
@@ -3591,7 +3812,8 @@ cloud_advice() {
 #    2  GoodCloud: 0 not known, 1 on, 2 off
 #    1  restarted since the attacks began
 #    2  --fix: 0 not run, 1 done, 2 incomplete
-#    2  other changes listed for review: 0 none, 1 some
+#    2  other changes listed for review: 0 none, 1 some, 2 one of them is known malware on
+#       the community list (the fingerprint check's lookup-bad, since 2.60)
 # Where model and firmware are known, five more characters follow after a dash, so that
 # the page can say whether newer firmware exists for this device: AA006011D-K7Q2X.
 #    7  the model, as its place in RESULT_MODELS (0: not in the list)
@@ -3623,6 +3845,7 @@ result_link() {
 			out = out " " c[x]
 		} END { print out }' "$FIND" 2>/dev/null)
 	rv=0; [ "$(count REVIEW)" -gt 0 ] && rv=1
+	has_ioc lookup-bad && rv=2
 	FIND=$now
 	case $PLATFORM in openwrt) p=1 ;; glkvm-*) p=2 ;; *) p=0 ;; esac
 	g=$(goodcloud_state); case ${g%% *} in on) g=1 ;; off) g=2 ;; *) g=0 ;; esac
@@ -3860,6 +4083,7 @@ detect "$TMP/findings"
 case $MODE in
 check)
 	report_body
+	lookup
 	cloud_advice
 	result_block
 	[ "$(count IOC)" -gt 0 ] && { recommend; finish 1; }
@@ -3867,6 +4091,7 @@ check)
 	;;
 archive)
 	report_body
+	lookup
 	collect || { cloud_advice; result_block; finish 4; }
 	cloud_advice
 	result_block
