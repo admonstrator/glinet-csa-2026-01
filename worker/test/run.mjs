@@ -681,6 +681,29 @@ if (process.argv[2] === 'serve') {
     expect('known.js holds exactly the fingerprints of known-hashes.json (run "node build.mjs")', KNOWN_RELEASE_HASHES.size === json.length && json.every((x) => KNOWN_RELEASE_HASHES.has(x)));
     expect('result.js is result.html as it is (run "node build.mjs")', RESULT === readFileSync(new URL('../src/result.html', import.meta.url), 'utf8'));
   }
+  // ---- the result page: the field for review, 0 none, 1 some, 2 known malware among them
+  {
+    const { RESULT } = await import('../src/result.js');
+    const src = RESULT.slice(RESULT.indexOf('const B32 = '), RESULT.indexOf('function read() {'));
+    const { decode, encode, parse, B32 } = new Function(src + '; return { decode, encode, parse, B32 };')();
+    const consts = /^const MALWARE = .*$/m.exec(RESULT)[0];
+    const classify = new Function(consts + '\n' + RESULT.slice(RESULT.indexOf('function classify(c) {'), RESULT.indexOf('function render() {')) + '; return classify;')();
+    const typeOf = new Function('return ' + /const typeOf = (\(k\) => \(.*?\)), types =/.exec(RESULT)[1])();
+    const pick = (name) => { const i = RESULT.indexOf(`const ${name} = {`), j = RESULT.indexOf('\n};\n', i); return new Function('GC_OFF', 'return ' + RESULT.slice(i + `const ${name} = `.length, j + 2))('x'); };
+    const T = pick('T'), NAMES = pick('NAMES');
+    // a code with the two bits of the field set as given, whatever encode() does
+    const withRv = (code, rv) => { const v = [...code.slice(0, 8)].map((ch) => B32.indexOf(ch)); v[7] = (v[7] & ~3) | rv; let sum = 0; v.forEach((x, i) => { sum += (i + 1) * x; }); return v.map((x) => B32[x]).join('') + B32[sum % 31]; };
+    const base = encode({ minor: 60, p: 'r', k: [], g: '0', n: '0', f: '0', rv: 0 });
+    const c0 = decode(withRv(base, 0)), c1 = decode(withRv(base, 1)), c2 = decode(withRv(base, 2)), c3 = decode(withRv(base, 3));
+    expect('the field for review: 0 none, 1 some, 2 some with known malware, 3 read as 1', c0.rv === 0 && !c0.lb && c1.rv === -1 && !c1.lb && c2.rv === -1 && c2.lb === true && c3.rv === -1 && !c3.lb && withRv(base, 0) === base);
+    expect('encode writes 2 for known malware and 1 for some, so the hand form and its code keep working', encode({ minor: 60, p: 'r', k: [], g: '0', n: '0', f: '0', rv: -1, lb: true }) === withRv(base, 2) && encode({ minor: 60, p: 'r', k: [], g: '0', n: '0', f: '0', rv: 1 }) === withRv(base, 1) && decode(encode({ minor: 0, p: 'k', k: ['mk'], g: 'x', n: '0', f: '0', rv: 0 })).k.join() === 'mk');
+    expect('nothing else on the device: 2 means infected by the community list, 1 and 3 nothing found', classify(c2).main === 'l' && classify(c1).main === 'c' && classify(c3).main === 'c' && classify(c0).main === 'c' && classify({ ...c1, n: '1' }).main === 'cr' && classify({ ...c2, n: '1' }).main === 'l');
+    const kc = (k, lb) => classify({ ...decode(withRv(encode({ minor: 60, p: 'r', k, g: '0', n: '0', f: '0', rv: 0 }), lb ? 2 : 1)) });
+    expect('with other traces: the malware, a remote shell and the older backdoor alone keep their result; a command or the installer becomes infected', kc(['mk'], true).main === 'm' && kc(['ps'], true).main === 's' && kc(['bi'], true).main === 'b' && kc(['cc'], true).main === 'l' && kc(['it'], true).main === 'l' && kc(['cc'], false).main === 'a' && kc(['mk', 'bi'], true).also === true && kc(['pe'], true).main === 'l');
+    expect('a code with 1 reads exactly as before', JSON.stringify(classify(c1)) === JSON.stringify(classify({ ...c1, lb: undefined })) && parse('#' + withRv(base, 1), '/').rv === -1 && !parse('#' + withRv(base, 1), '/').lb && parse('#v=2.39&p=r&k=cc&rv=3', '/2026-01/').lb === undefined);
+    expect('known malware is a finding of type ioc, listed as such, and the other changes stay listed for review', typeOf('lb') === 'ioc' && typeOf('rv') === 'review' && NAMES.lb === 'IOC  lookup-bad');
+    expect('its texts are there in English, German and Chinese, and each says that --fix does not remove it', ['en', 'de', 'zh'].every((l) => T[l].kinds.lb && T[l].kinds.lb.every((x) => x.length > 8) && T[l].kinds.lb[1].includes('--fix') && T[l].results.l && T[l].results.l[3].length === 2 && T[l].results.l[3].some((x) => x.includes('--fix'))) && T.en.results.l[0] === 'INFECTED' && T.de.results.l[0] === 'INFIZIERT' && T.zh.results.l[0] === T.zh.results.m[0]);
+  }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');
   process.exit(failed ? 1 : 0);
