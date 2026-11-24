@@ -158,6 +158,27 @@ one KV entry when there is no database. They can be read at `<worker>/dashboard/
 with the dashboard's login. Over time they form a list of what is known to be harmless,
 which the script could one day ask for; nothing does that yet.
 
+### Suggestions
+
+A suggestion is a mark that waits for a yes: a finding that an analysis of the reports
+takes for probably safe, with its reason and the fingerprints it covers. It hides nothing.
+The "Review" page lists open suggestions above the marks. "Confirm safe" turns one into a
+mark in your name, for exactly its fingerprints and with its reason; "Decline" keeps it
+on the server with your name, so that the same suggestion loaded again does not come
+back. The finding then stays listed as before.
+
+Suggestions come in as SQL and need D1. The list itself stays outside the repository,
+because its paths and fingerprints come from the reports:
+
+```bash
+node tools/suggestions-sql.mjs suggestions.json > suggestions.sql
+npx wrangler d1 execute csa-2026-01 --remote --file=suggestions.sql
+```
+
+`suggestions.json` is `[{ "key": "kind path", "note": "why", "hashes": [...] }, ...]`, each
+entry checked as the dashboard checks a mark. A key that is already there, as a suggestion
+or as a declined one, is left as it is. They are kept in the D1 table `suggestions`.
+
 ## Telling devices apart
 
 From script 2.9 a report carries a device id, so that ten reports from one device are not

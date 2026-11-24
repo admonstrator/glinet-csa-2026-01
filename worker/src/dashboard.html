@@ -352,6 +352,7 @@ pre { margin: 6px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--
 .devreps button span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .devreps button:hover:not(:disabled) { background: var(--surface-2); }
 .devreps button:disabled { background: var(--accent-soft); color: inherit; cursor: default; }
+.tag.sug { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .tag i { width: 8px; height: 8px; border-radius: 2px; }
 .body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 28px; }
 .body h3 { margin: 12px 0 0; font-size: 12px; font-weight: 650; color: var(--text-2); }
@@ -635,7 +636,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     </section>
     <section class="card" data-card="safe">
       <div class="ch"><h2>Marked as probably safe</h2><span class="sub tnum" id="safeCount"></span></div>
-      <div class="about" hidden><p>Every finding someone on the team has marked, with who did it, when and why. These are hidden elsewhere unless asked for. Click a finding to see which devices sent it.</p></div>
+      <div class="about" hidden><p>Every finding someone on the team has marked, with who did it, when and why. These are hidden elsewhere unless asked for. Click a finding to see which devices sent it.</p><p>Above them, suggestions from an analysis of the reports, each with its reason. A suggestion hides nothing until someone confirms it.</p></div>
       <div class="cb" id="safeList"></div>
     </section>
     <section class="card" data-card="known">
@@ -1074,19 +1075,23 @@ function binning(from, to) {
 // Labels the team has set: "probably safe". A labelled finding is hidden unless asked for.
 // A label remembers the fingerprints it was given for: a new file at a path that was
 // called safe is shown again, because that is exactly what a replaced file looks like.
-let LABELS = {}, showSafe = false, labelErr = '', relabel = false;
+// Suggestions: what an analysis of the reports takes for probably safe, with its reason and
+// the fingerprints it covers. A suggestion hides nothing until someone confirms it; then it
+// becomes a label in that person's name. A declined one is kept on the server and not shown.
+let LABELS = {}, SUGG = {}, showSafe = false, labelErr = '', relabel = false;
+const suggOf = (key) => { const s = SUGG[key]; return s && !s.declined_by ? s : null; };
 // Fingerprints of known release files: the community's Tailscale and AdGuard Home builds,
 // from the checksums of their releases (tools/known-hashes.sh). A finding whose every
 // file is one of these needs no mark: it is "known" and hidden like a marked one.
 const KNOWN = /*KNOWN_HASHES*/{};
-const labelState = (g) => { const l = LABELS[g.kind + ' ' + g.path], hs = [...g.sha]; if (!l) return hs.length && hs.every((h) => KNOWN[h]) ? 'known' : ''; return hs.every((h) => l.hashes.includes(h) || KNOWN[h]) ? 'safe' : 'new'; };
+const labelState = (g) => { const k = g.kind + ' ' + g.path, l = LABELS[k], hs = [...g.sha]; if (!l) return hs.length && hs.every((h) => KNOWN[h]) ? 'known' : suggOf(k) ? 'suggested' : ''; return hs.every((h) => l.hashes.includes(h) || KNOWN[h]) ? 'safe' : 'new'; };
 const hiddenState = (st) => st === 'safe' || st === 'known';
 async function setLabel(g, verdict, note) {
   labelErr = '';
   try {
     const res = await fetch(BASE + '/labels', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: g.kind + ' ' + g.path, verdict, note, hashes: [...g.sha].slice(0, 60) }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    LABELS = (await res.json()).labels;
+    const j = await res.json(); LABELS = j.labels; SUGG = j.suggestions || {};
   } catch (e) { labelErr = 'The label was not saved (' + e.message + '). Reload the page to sign in again.'; }
   render();
 }
@@ -1121,6 +1126,14 @@ let REVALL = new Map(), showOnce = false;
 // the button that marks or unmarks a finding; used in the block and in each report
 function markButton(g, cell) {
   if (labelState(g) === 'known') return el('span', 'no mark needed', 'dim');
+  if (labelState(g) === 'suggested') {
+    // a yes marks exactly the fingerprints the suggestion was made for, with its reason
+    const s = suggOf(g.kind + ' ' + g.path), w = el('span', null, 'labelForm'), yes = el('button', 'Confirm safe', 'btn sm'), no = el('button', 'Decline', 'btn sm');
+    yes.type = no.type = 'button'; yes.title = 'Mark as probably safe in your name, with the reason of the suggestion. It is then hidden for everyone.'; no.title = 'Not safe, or not sure: the suggestion goes away and the finding stays listed.';
+    yes.addEventListener('click', (e) => { e.stopPropagation(); setLabel({ kind: g.kind, path: g.path, sha: new Set(s.hashes) }, 'safe', s.note); });
+    no.addEventListener('click', (e) => { e.stopPropagation(); setLabel({ kind: g.kind, path: g.path, sha: new Set() }, 'decline', ''); });
+    w.append(yes, no); return w;
+  }
   const st = labelState(g), lab = LABELS[g.kind + ' ' + g.path], b = el('button', st === 'safe' && lab ? 'Remove mark' : st === 'new' ? 'Mark this file too' : 'Probably safe', 'btn sm'); b.type = 'button';
   b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1137,6 +1150,7 @@ function markButton(g, cell) {
 }
 function markTag(g) {
   const st = labelState(g), lab = LABELS[g.kind + ' ' + g.path]; if (!st) return null;
+  if (st === 'suggested') { const s = suggOf(g.kind + ' ' + g.path), t = el('span', 'suggested as safe', 'tag sug'); t.style.marginLeft = '8px'; t.title = s.note + '\nSuggested (' + s.by + '). Not hidden until someone confirms it.' + ([...g.sha].some((h) => !s.hashes.includes(h) && !KNOWN[h]) ? '\nSome files at this path are not part of the suggestion; they stay listed after a yes.' : ''); return t; }
   if (st === 'known') { const t = el('span', 'known release file', 'tag ok'); t.style.marginLeft = '8px'; t.title = 'Every file reported here matches the checksums of a release:\n' + [...new Set([...g.sha].map((h) => KNOWN[h]))].slice(0, 8).join('\n'); return t; }
   const t = el('span', st === 'safe' ? 'probably safe' : 'new file at a path marked safe', 'tag ' + (st === 'safe' ? 'ok' : 'warn')); t.style.marginLeft = '8px';
   t.title = (lab.note ? lab.note + '\n' : '') + 'Marked by ' + lab.by + ' on ' + lab.at.slice(0, 16).replace('T', ' ') + ' UTC' + (st === 'new' ? '\nSince then a file with another fingerprint was reported at this path.' : '');
@@ -1911,7 +1925,8 @@ function itemView(body) {
   const hitOf = (r) => r.ioc > 0 || r.bd, hits = rows.filter((x) => hitOf(x.r)).length, allHits = devs.filter(hitOf).length;
   const g = REVALL.get(key) || { kind, path, sha: new Set(rows.map((x) => x.it.sha256).filter(Boolean)) }, lab = LABELS[key];
   $('dTitle').textContent = kind + '  ' + (path || '(no path sent)'); const mt = markTag(g); if (mt) $('dTitle').append(mt);
-  $('dSub').textContent = (lab ? `Marked as probably safe by ${lab.by} on ${lab.at.slice(0, 16).replace('T', ' ')} UTC` + (lab.note ? `: ${lab.note}` : '') + '. ' : '') + 'A finding the scripts listed for review, not a known trace.';
+  const sg = !lab && suggOf(key);
+  $('dSub').textContent = (lab ? `Marked as probably safe by ${lab.by} on ${lab.at.slice(0, 16).replace('T', ' ')} UTC` + (lab.note ? `: ${lab.note}` : '') + '. ' : sg ? `Suggested as probably safe (${sg.by}): ${sg.note} Not hidden until someone confirms it. ` : '') + 'A finding the scripts listed for review, not a known trace.';
   const search = (q) => goReports(() => { F.q = q.toLowerCase(); $('q').value = F.q; F.result = 'all'; });
   const act = el('div', null, 'dact'), cell = el('span'), show = el('button', 'Show these reports', 'btn sm'); show.type = 'button'; show.addEventListener('click', () => search(key));
   cell.append(markButton(g, cell)); act.append(cell, show); body.append(act);
@@ -1935,7 +1950,7 @@ function itemView(body) {
   sec('Fingerprints', 'One line per different file behind this path. The same fingerprint on many devices means the same file. A mark as probably safe covers the fingerprints known when it was set.', [['SHA-256', ''], ['Devices', 'n'], ['With traces', 'n'], ['Models', ''], ['Changed (UTC)', 'n'], ['Mark', '']], [...byHash].sort((a, b) => b[1].length - a[1].length).map(([h, xs]) => {
     const tr = el('tr'), c = xs.map((x) => ts(x.it.ctime)).filter((n) => !isNaN(n)).sort((a, b) => a - b), hc = el('td', h ? h.slice(0, 16) + '…' : '(no fingerprint)', 'mono');
     if (h) { hc.classList.add('linkish'); hc.title = h + '\nSearch all reports for this fingerprint'; hc.addEventListener('click', () => search(h)); }
-    const cov = el('td'); if (h && KNOWN[h]) cov.append(el('span', 'known: ' + KNOWN[h], 'tag ok')); else if (h) cov.append(el('span', lab && lab.hashes.includes(h) ? 'yes' : lab ? 'no: new since the mark' : 'not marked', 'tag ' + (lab && lab.hashes.includes(h) ? 'ok' : lab ? 'warn' : '')));
+    const cov = el('td'); if (h && KNOWN[h]) cov.append(el('span', 'known: ' + KNOWN[h], 'tag ok')); else if (h && sg) cov.append(el('span', sg.hashes.includes(h) ? 'suggested' : 'not in the suggestion', 'tag ' + (sg.hashes.includes(h) ? 'sug' : ''))); else if (h) cov.append(el('span', lab && lab.hashes.includes(h) ? 'yes' : lab ? 'no: new since the mark' : 'not marked', 'tag ' + (lab && lab.hashes.includes(h) ? 'ok' : lab ? 'warn' : '')));
     tr.append(hc, el('td', xs.length, 'n'), el('td', xs.filter((x) => hitOf(x.r)).length + ' of ' + xs.length, 'n'), el('td', count(xs.map((x) => x.r), (r) => r.model).slice(0, 4).map(([m, n]) => m + ' ×' + n).join(', ')), span(c), cov);
     return tr;
   }));
@@ -1973,9 +1988,12 @@ function knownList() {
 function safeList() {
   const box = $('safeList'); box.replaceChildren();
   const rows = Object.entries(LABELS).sort((a, b) => (a[1].at < b[1].at ? 1 : -1));
-  $('safeCount').textContent = rows.length + (rows.length === 1 ? ' finding' : ' findings');
+  const open = Object.keys(SUGG).filter((k) => suggOf(k) && !LABELS[k]), declined = Object.keys(SUGG).filter((k) => SUGG[k].declined_by && !LABELS[k]).length;
+  $('safeCount').textContent = rows.length + (rows.length === 1 ? ' finding' : ' findings') + (open.length ? ` · ${open.length} suggested` : '');
   if (labelErr) box.append(el('p', labelErr, 'peak err'));
+  if (open.length) suggList(box, open, declined);
   if (!rows.length) { box.append(el('p', 'Nothing is marked yet. Mark a finding in “Unusual changes seen on several devices” or inside a report.', 'peak')); return; }
+  if (open.length) box.append(el('h3', 'Marked'));
   const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Comment', ''], ['Marked by', ''], ['When (UTC)', 'n'], ['Files', 'n'], ['Devices now', 'n'], ['', 'n']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const [key, lab] of rows) {
@@ -1985,6 +2003,24 @@ function safeList() {
     if (labelState(g) === 'new') { const t = el('span', 'new file since', 'tag warn'); t.style.marginLeft = '8px'; t.title = 'A file with another fingerprint was reported at this path after it was marked. It is shown on the dashboard again.'; pc.append(t); }
     rm.type = 'button'; rm.addEventListener('click', (e) => { e.stopPropagation(); setLabel(g, '', ''); }); act.append(rm);
     tr.append(el('td', kind), pc, el('td', lab.note || '–'), el('td', lab.by, 'who'), el('td', lab.at.slice(0, 16).replace('T', ' '), 'n'), files, now, act);
+    tr.addEventListener('click', () => openItem(key));
+    tb.append(tr);
+  }
+  box.append(tb);
+}
+// Suggestions that wait for a yes or a no, most devices first. Each says why and how many
+// devices carry it now; a row opens the finding with its fingerprints and devices.
+function suggList(box, keys, declined) {
+  box.append(el('h3', `Suggested, waiting for a yes (${keys.length})`), el('p', 'Found by an analysis of the reports: a file that matches a published release or tool byte for byte, or the same file on many devices with traces no more often than their firmware predicts. Nothing here is hidden until someone confirms it. Confirm marks only the fingerprints of the suggestion.' + (declined ? ` ${declined} declined.` : ''), 'sub'));
+  const rows = keys.map((key) => { const i = key.indexOf(' '), kind = key.slice(0, i), path = key.slice(i + 1); return { key, kind, path, s: SUGG[key], g: REVALL.get(key) || { kind, path, n: 0, hit: 0, sha: new Set(SUGG[key].hashes) } }; }).sort((a, b) => b.g.n - a.g.n || a.key.localeCompare(b.key));
+  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Why', ''], ['Files', 'n'], ['Devices now', 'n'], ['', 'n']]) hd.append(el('th', t, c));
+  tb.append(hd);
+  for (const { key, kind, path, s, g } of rows) {
+    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', s.hashes.length || '–', 'n'), act = el('td', null, 'n');
+    files.title = s.hashes.length ? 'Fingerprints this suggestion covers:\n' + s.hashes.slice(0, 6).join('\n') + (s.hashes.length > 6 ? '\n…' : '') : 'Nothing with a fingerprint: a link or a directory.';
+    if ([...g.sha].some((h) => !s.hashes.includes(h) && !KNOWN[h])) { const t = el('span', 'other files too', 'tag'); t.style.marginLeft = '8px'; t.title = 'Other files at this path are not part of the suggestion. They stay listed after a yes.'; pc.append(t); }
+    act.append(markButton(g, act)); tr.style.cursor = 'pointer';
+    tr.append(el('td', kind), pc, el('td', s.note), files, el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n'), act);
     tr.addEventListener('click', () => openItem(key));
     tb.append(tr);
   }
@@ -2014,7 +2050,7 @@ async function poll() {
       const { latest } = await getJson('/latest');
       let added = 0;
       // marks a colleague set in the meantime
-      try { const l = JSON.stringify((await getJson('/labels')).labels); if (l !== JSON.stringify(LABELS)) { LABELS = JSON.parse(l); added = added || 0; relabel = true; } } catch { /* an older worker without labels */ }
+      try { const j = await getJson('/labels'), l = JSON.stringify(j.labels), sg = JSON.stringify(j.suggestions || {}); if (l !== JSON.stringify(LABELS) || sg !== JSON.stringify(SUGG)) { LABELS = JSON.parse(l); SUGG = JSON.parse(sg); relabel = true; } } catch { /* an older worker without labels */ }
       // new reports come 40 at a time, oldest first; a full page means there may be more
       for (let n = 40, rounds = 0; latest > newest && n >= 40 && rounds < 25; rounds++) {
         const items = (await getJson('/data?since=' + encodeURIComponent(newest || '1970-01-01T00:00:00.000Z'))).items;
@@ -2043,7 +2079,7 @@ function sinceLastVisit() {
 $('liveBtn').addEventListener('click', () => { live = !live; $('liveBtn').textContent = 'Live: ' + (live ? 'on' : 'off'); $('liveBtn').setAttribute('aria-pressed', String(live)); poll(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
 (async () => {
-  try { LABELS = (await getJson('/labels')).labels; } catch { /* an older worker without labels: nothing is marked */ }
+  try { const j = await getJson('/labels'); LABELS = j.labels; SUGG = j.suggestions || {}; } catch { /* an older worker without labels: nothing is marked */ }
   $('status').textContent = 'Loading …';
   try {
     let cursor = '';

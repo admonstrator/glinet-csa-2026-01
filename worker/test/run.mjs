@@ -1,6 +1,7 @@
 // node worker/test/run.mjs          run the tests
 // node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV in memory
 import worker, { validate, reportedTable, REPORT_FIELDS, UPDATE_KEYS } from '../src/index.js';
+import { suggestionsSql } from '../tools/suggestions-sql.mjs';
 import nodeCrypto from 'node:crypto';
 import http from 'node:http';
 
@@ -358,6 +359,31 @@ if (process.argv[2] === 'serve') {
   expect('a change from another site or as a form is refused', (await lab(safe1, { 'content-type': 'application/json', origin: 'https://evil.example' })).status === 403 && (await lab(safe1, { 'content-type': 'text/plain', origin: 'https://example.org' })).status === 403);
   expect('refuses markup in key or note, an unknown verdict and a bad fingerprint', (await lab({ ...safe1, key: '<b>' })).status === 400 && (await lab({ ...safe1, note: 'x\u0000' })).status === 400 && (await lab({ ...safe1, verdict: 'whatever' })).status === 400 && (await lab({ ...safe1, hashes: ['zz'] })).status === 400);
   expect('an empty verdict removes the label', Object.keys((await (await lab({ ...safe1, verdict: '' })).json()).labels).length === 0);
+  // suggestions: loaded as SQL, answered on the dashboard
+  {
+    const h1 = 'b'.repeat(64), h2 = 'c'.repeat(64);
+    const list = [{ key: 'changed /etc/init.d/samba4', note: 'Vendor pattern: same file on 1000 devices.', hashes: [h1] }, { key: 'new-link /usr/bin/login to=/bin/busybox', note: 'Link to busybox.', hashes: [] }, { key: 'hidden /lib/wifi/.first_time_boot', note: 'Empty marker file.', hashes: [h2] }];
+    const sql = suggestionsSql(list, { by: 'test analysis', at: '2026-11-24T15:00:00.000Z' });
+    env.DB.raw.exec(sql);
+    const j0 = await (await d('labels')).json();
+    expect('suggestions come with the labels and hide nothing', Object.keys(j0.suggestions).length === 3 && Object.keys(j0.labels).length === 0 && j0.suggestions['changed /etc/init.d/samba4'].hashes[0] === h1 && j0.suggestions['changed /etc/init.d/samba4'].by === 'test analysis' && j0.suggestions['changed /etc/init.d/samba4'].declined_by === '');
+    const yes = await (await lab({ key: list[0].key, verdict: 'safe', note: list[0].note, hashes: list[0].hashes })).json();
+    expect('a yes turns a suggestion into a label in the name of who said it', yes.labels[list[0].key].by === claims.email && yes.labels[list[0].key].hashes[0] === h1 && yes.labels[list[0].key].note === list[0].note && !yes.suggestions[list[0].key]);
+    const no = await (await lab({ key: list[1].key, verdict: 'decline', note: '', hashes: [] })).json();
+    expect('a no keeps the suggestion with who declined it, and sets no label', no.suggestions[list[1].key].declined_by === claims.email && /^2\d{3}-/.test(no.suggestions[list[1].key].declined_at) && !no.labels[list[1].key]);
+    env.DB.raw.exec(suggestionsSql(list.map((s) => ({ ...s, note: 'again' })), { by: 'second run' }));
+    const j1 = await (await d('labels')).json();
+    expect('loading the same suggestions again changes none that is there or declined', j1.suggestions[list[1].key].declined_by === claims.email && j1.suggestions[list[2].key].note === 'Empty marker file.' && j1.suggestions[list[0].key].note === 'again' && j1.labels[list[0].key].note === list[0].note);
+    expect('a no from another site is refused', (await lab({ key: list[2].key, verdict: 'decline', note: '', hashes: [] }, { 'content-type': 'application/json', origin: 'https://evil.example' })).status === 403);
+    const db = env.DB; delete env.DB;
+    expect('without the database there are no suggestions to answer', (await lab({ key: list[2].key, verdict: 'decline', note: '', hashes: [] })).status === 400 && Object.keys((await (await d('labels')).json()).suggestions).length === 0);
+    env.DB = db;
+    let thrown = 0;
+    for (const bad of [[{ key: '<b>x</b>', note: 'n', hashes: [] }], [{ key: 'changed /etc/x', note: 'ü', hashes: [] }], [{ key: 'changed /etc/x', note: 'n', hashes: ['zz'] }], [{ key: 'changed /etc/x', note: 'n', hashes: [] }, { key: 'changed /etc/x', note: 'n', hashes: [] }]]) try { suggestionsSql(bad); } catch { thrown++; }
+    expect('the SQL tool refuses what the dashboard would refuse, and a key twice', thrown === 4);
+    expect('a quote in a note cannot end the SQL string', (() => { env.DB.raw.exec(suggestionsSql([{ key: 'changed /etc/quote', note: "it's fine'); DROP TABLE labels; --", hashes: [] }])); return env.DB.raw.prepare('SELECT note FROM suggestions WHERE key = ?').get('changed /etc/quote').note.startsWith("it's") && env.DB.raw.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'labels'").get().n === 1; })());
+    env.DB.raw.exec('DELETE FROM labels; DELETE FROM suggestions');
+  }
   expect('a label is not taken for a report', (await (await d('data')).json()).items.length === kvReports);
   const all1 = (await (await d('data')).json());
   expect('dashboard reads the moved reports from D1', all1.items.length === kvReports && all1.cursor === '' && all1.items[0].report.model === 'GL-AXT1800');
