@@ -22,3 +22,15 @@ writeFileSync(
     `export const RESULT = ${JSON.stringify(result)};\n`,
 );
 console.log(`result.js written (${result.length} characters)`);
+
+// The fingerprints of the known release files once more, for the fingerprint check in
+// index.js (POST .../lookup): the hashes only, sorted, without the names, since the
+// answer names no source. A module, because the worker cannot import JSON as it is.
+const hashes = Object.keys(JSON.parse(readFileSync(new URL('known-hashes.json', dir), 'utf8'))).sort();
+if (!hashes.every((h) => /^[0-9a-f]{64}$/.test(h))) throw new Error('known-hashes.json has a key that is not a SHA-256');
+writeFileSync(
+  new URL('known.js', dir),
+  '// Generated from known-hashes.json by build.mjs. Do not edit; change the JSON and run "node build.mjs".\n' +
+    `export const KNOWN_RELEASE_HASHES = new Set(${JSON.stringify(hashes)});\n`,
+);
+console.log(`known.js written (${hashes.length} fingerprints)`);

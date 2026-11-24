@@ -5,6 +5,7 @@
 
 import { DASHBOARD } from './dashboard.js';
 import { RESULT } from './result.js';
+import { KNOWN_RELEASE_HASHES } from './known.js';
 
 const MAX_BYTES = 49152;
 const SAFE = /^[A-Za-z0-9 ._:\/+@=,()-]*$/;
@@ -108,6 +109,32 @@ async function sealDeviceId(env, id) {
 const text = (body, status = 200) =>
   new Response(body + '\n', { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
 
+// The body of a request as bytes, at most max of them. A content-length above that is
+// refused before anything is read; otherwise the body is read as a stream and given up as
+// soon as more than max bytes arrived, so a missing or false content-length cannot bring a
+// large body into memory. null: too large.
+async function readCapped(request, max) {
+  const declared = request.headers.get('content-length');
+  if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared.trim()) > max) return null;
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader(), parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      try { await reader.cancel(); } catch { /* the answer is the same */ }
+      return null;
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.byteLength; }
+  return out;
+}
+
 export function validate(report) {
   if (report === null || typeof report !== 'object' || Array.isArray(report)) return 'not an object';
   const fields = report.schema === 10 ? FIELDS_V10 : report.schema === 9 ? FIELDS_V9 : report.schema === 8 ? FIELDS_V8 : report.schema === 7 ? FIELDS_V7 : report.schema === 6 ? FIELDS_V6 : report.schema === 5 ? FIELDS_V5 : report.schema === 4 ? FIELDS_V4 : report.schema === 3 ? FIELDS_V3 : report.schema === 2 ? FIELDS_V2 : FIELDS;
@@ -137,11 +164,12 @@ const kvLoad = async (env, names) =>
 // was given for, so a new file at a path that was called harmless shows up again.
 // Kept in D1 (the table is created on first use) or, without D1, in one KV entry.
 const LABELS_KEY = 'meta/csa-2026-01-labels';
+export const LABELS_TABLE = 'CREATE TABLE IF NOT EXISTS labels (key TEXT PRIMARY KEY, verdict TEXT NOT NULL, note TEXT NOT NULL, hashes TEXT NOT NULL, by TEXT NOT NULL, at TEXT NOT NULL)';
 let labelsTable = false;
 const labels = {
   async ready(env) {
     if (labelsTable) return;
-    await env.DB.prepare('CREATE TABLE IF NOT EXISTS labels (key TEXT PRIMARY KEY, verdict TEXT NOT NULL, note TEXT NOT NULL, hashes TEXT NOT NULL, by TEXT NOT NULL, at TEXT NOT NULL)').run();
+    await env.DB.prepare(LABELS_TABLE).run();
     labelsTable = true;
   },
   async all(env) {
@@ -260,8 +288,9 @@ const reports = {
 };
 
 async function submit(request, env) {
-  const raw = await request.text();
-  if (raw.length > MAX_BYTES) return text('too large', 413);
+  const body = await readCapped(request, MAX_BYTES);
+  if (!body) return text('too large', 413);
+  const raw = new TextDecoder().decode(body);
   let report;
   try {
     report = JSON.parse(raw);
@@ -673,6 +702,128 @@ async function reported(request, env, ctx) {
   });
 }
 
+// ---------------------------------------------------------------- the fingerprint check
+// From 2.60 the script can ask, after its user agreed, whether the files it listed for
+// review are known: known malware, known to be all right, or not known. It sends the
+// SHA-256 of "<kind> <path>" and the SHA-256 of the file per line; docs/lookup.md is the
+// contract for request and answer. The answer can only make the script's verdict worse.
+// Every request is taken for an attack: the size is capped while reading, the bytes are
+// checked before anything is decoded, every line must fit a fixed pattern, and every
+// refusal is a fixed text that holds nothing of the request. Nothing of a request is
+// stored or logged; the one write is the counter of an entry in bad_hashes.
+// Off unless the worker has LOOKUP = "on" among its vars: then every method gets 404.
+const LOOKUP_MAX_BYTES = 8192;
+const LOOKUP_MAX_ITEMS = 40;
+const LOOKUP_HEAD = [/^csa-2026-01-lookup 1$/, /^version 2\.[0-9]{1,3}$/, /^nonce [0-9a-f]{32}$/];
+const LOOKUP_ITEM = /^[0-9a-f]{64} [0-9a-f]{64}$/;
+const plain = (body, status = 200) =>
+  new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
+
+// A request as bytes: its nonce and its lines as [key hash, file hash], or null when a
+// single byte or line does not fit. Only 0x0a and 0x20 to 0x7e may occur; nothing is
+// trimmed, normalised or replaced.
+export function lookupRequest(bytes) {
+  for (let i = 0; i < bytes.length; i++) if (bytes[i] !== 0x0a && (bytes[i] < 0x20 || bytes[i] > 0x7e)) return null;
+  if (bytes.length === 0 || bytes[bytes.length - 1] !== 0x0a) return null;
+  // the bytes are ASCII now, so this cannot fail or change anything
+  const lines = new TextDecoder().decode(bytes).slice(0, -1).split('\n');
+  if (lines.length < LOOKUP_HEAD.length + 1 || lines.length > LOOKUP_HEAD.length + LOOKUP_MAX_ITEMS) return null;
+  for (let i = 0; i < LOOKUP_HEAD.length; i++) if (!LOOKUP_HEAD[i].test(lines[i])) return null;
+  const seen = new Set(), items = [];
+  for (const line of lines.slice(LOOKUP_HEAD.length)) {
+    if (!LOOKUP_ITEM.test(line) || seen.has(line)) return null;
+    seen.add(line);
+    items.push([line.slice(0, 64), line.slice(65)]);
+  }
+  return { nonce: lines[2].slice('nonce '.length), items };
+}
+
+// Files the maintainers know as malware, by SHA-256. They come in as SQL
+// (tools/bad-hashes-sql.mjs), so only with D1. answer = 1: the check answers known_bad;
+// answer = 0: the entry waits for a person, and the check answers as if it were not there.
+// asked counts the lines asked about the file, released or not, and asked_last is the day
+// of the last one, so the maintainers see a file come up before they release it.
+export const BAD_HASHES_TABLE = "CREATE TABLE IF NOT EXISTS bad_hashes (sha256 TEXT PRIMARY KEY, note TEXT NOT NULL, answer INTEGER NOT NULL DEFAULT 0, by TEXT NOT NULL, at TEXT NOT NULL, asked INTEGER NOT NULL DEFAULT 0, asked_last TEXT NOT NULL DEFAULT '')";
+let badHashesTable = false;
+const badHashes = {
+  async ready(env) {
+    if (badHashesTable) return;
+    await env.DB.prepare(BAD_HASHES_TABLE).run();
+    badHashesTable = true;
+  },
+  // the entries among these fingerprints, as a Map from fingerprint to answer
+  async find(env, files) {
+    await badHashes.ready(env);
+    const places = files.map((_, i) => '?' + (i + 1)).join(', ');
+    const { results } = await env.DB.prepare(`SELECT sha256, answer FROM bad_hashes WHERE sha256 IN (${places})`).bind(...files).all();
+    return new Map(results.map((r) => [r.sha256, Number(r.answer)]));
+  },
+  // counts: a Map from fingerprint to the number of lines that asked for it
+  async count(env, counts, day) {
+    const up = env.DB.prepare('UPDATE bad_hashes SET asked = asked + ?2, asked_last = ?3 WHERE sha256 = ?1');
+    await env.DB.batch([...counts].map(([file, n]) => up.bind(file, n, day)));
+  },
+};
+
+// The marks "probably safe" of the dashboard as the check needs them: a Map from the
+// SHA-256 of a mark's key to the fingerprints it was set for. Kept per isolate for a
+// minute, so that a check costs no query of its own and a mark removed on the dashboard
+// counts no more a minute later. Suggestions are not marks and never count. "now" can be
+// replaced, for the tests.
+export const markCache = { ttl: 60_000, now: () => Date.now(), at: 0, map: null };
+async function safeMarks(env) {
+  const now = markCache.now();
+  if (markCache.map && now >= markCache.at && now - markCache.at < markCache.ttl) return markCache.map;
+  const map = new Map();
+  for (const [key, label] of Object.entries(await labels.all(env))) {
+    if (!label || label.verdict !== 'safe' || !Array.isArray(label.hashes)) continue;
+    map.set(await sha256hex(key), new Set(label.hashes.filter((h) => typeof h === 'string')));
+  }
+  markCache.at = now;
+  markCache.map = map;
+  return map;
+}
+
+// One word per line, in the order asked: known_bad before known_safe before unknown.
+async function lookupWords(env, items, day) {
+  let bad = new Map();
+  if (env.DB) {
+    bad = await badHashes.find(env, [...new Set(items.map(([, file]) => file))]);
+    // one more for every line whose file is in the table, released or not
+    const counts = new Map();
+    for (const [, file] of items) if (bad.has(file)) counts.set(file, (counts.get(file) || 0) + 1);
+    if (counts.size) {
+      try { await badHashes.count(env, counts, day); } catch { /* the answer does not depend on the counter */ }
+    }
+  }
+  const marks = await safeMarks(env);
+  return items.map(([key, file]) => {
+    if (bad.get(file) === 1) return 'known_bad';
+    if ((marks.has(key) && marks.get(key).has(file)) || KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
+    return 'unknown';
+  });
+}
+
+async function lookup(request, env) {
+  if (env.LOOKUP !== 'on') return plain('not found\n', 404);
+  if (request.method !== 'POST') return plain('method not allowed\n', 405);
+  const body = await readCapped(request, LOOKUP_MAX_BYTES);
+  if (!body) return plain('too large\n', 413);
+  const ask = lookupRequest(body);
+  if (!ask) return plain('bad request\n', 400);
+  const now = new Date().toISOString();
+  let words;
+  try {
+    words = await lookupWords(env, ask.items, now.slice(0, 10));
+  } catch {
+    // the database or KV failed: no answer rather than one that misses an entry
+    return plain('not available\n', 503);
+  }
+  const lines = ['csa-2026-01-lookup-answer 1', 'nonce ' + ask.nonce, `at ${now.slice(0, 10)} ${now.slice(11, 16)} UTC`];
+  ask.items.forEach(([key, file], i) => lines.push(`${key} ${file} ${words[i]}`));
+  return plain(lines.join('\n') + '\n');
+}
+
 export default {
   async fetch(request, env, ctx) {
     const { pathname, hostname } = new URL(request.url);
@@ -688,6 +839,8 @@ export default {
     if (hostname.startsWith('csa.') && (pathname === '/' || /^\/[0-9A-Za-z-]{9,16}$/.test(pathname))) return resultPage(request, env, ctx);
     if (/\/csa-2026-01-fix\.sig$/.test(pathname)) return signature(request, env);
     if (/\/csa-2026-01-fix(\/|$)/.test(pathname)) return script(request, env, ctx, pathname);
+    // the fingerprint check (docs/lookup.md), for every method: a POST there is never a report
+    if (pathname.endsWith('/csa-2026-01-report/lookup')) return lookup(request, env);
     if (pathname.endsWith('/migrate')) {
       // a browser, or curl without -X POST, sends GET and would only see the text below
       if (request.method !== 'POST') return text('This address needs POST: curl -X POST -H "Authorization: Bearer <EXPORT_TOKEN>" <this address>', 405);
