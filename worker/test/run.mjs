@@ -498,7 +498,13 @@ if (process.argv[2] === 'serve') {
     const sha = (s) => nodeCrypto.createHash('sha256').update(s).digest('hex');
     const HEAD = ['csa-2026-01-lookup 1', 'version 2.60', 'nonce ' + NONCE];
     const ask = (items, head = HEAD) => [...head, ...items.map((x) => (Array.isArray(x) ? x.join(' ') : x))].join('\n') + '\n';
-    const look = (body, headers = {}, method = 'POST') => call(method, body, headers, LK);
+    // the check, waiting for what it hands to waitUntil (the counter) before the test reads on
+    const look = async (body, headers = {}, method = 'POST', path = LK) => {
+      const later = [];
+      const r = await worker.fetch(new Request('https://example.org' + path, { method, body, headers }), env, { waitUntil(p) { later.push(p); } });
+      await Promise.all(later);
+      return r;
+    };
     const reportCount = () => env.DB.raw.prepare('SELECT count(*) AS n FROM reports').get().n + [...store.keys()].filter((k) => k.startsWith('csa-2026-01/')).length;
     const reportsBefore = reportCount(), postedBefore = posted.length;
     const row = (h) => env.DB.raw.prepare('SELECT * FROM bad_hashes WHERE sha256 = ?').get(h);
@@ -545,10 +551,12 @@ if (process.argv[2] === 'serve') {
     expect('suggestions never count, open or declined', body1.includes(`${sha(sugKey)} ${h('3')} unknown\n`) && body1.includes(`${sha(noKey)} ${h('4')} unknown\n`));
     expect('a release file is known_safe at any path', body1.includes(`${sha('changed /x')} ${release} known_safe\n`));
     expect('known_bad for an entry with answer 1, also where a mark covers the same file; unknown for answer 0', body1.includes(`${sha(noKey)} ${h('7')} known_bad\n`) && body1.includes(`${sha(markKey2)} ${h('7')} known_bad\n`) && body1.includes(`${sha(noKey)} ${h('8')} unknown\n`));
-    expect('every line counts for its entry, released or not, with the day; an entry not asked for stays as it was', row(h('7')).asked === 2 && row(h('7')).asked_last === today() && row(h('8')).asked === 1 && row(h('8')).asked_last === today() && row(h('9')).asked === 0 && row(h('9')).asked_last === '');
+    expect('a request counts once for each entry it asks about, released or not, with the day, however many of its lines name it; an entry not asked for stays as it was', row(h('7')).asked === 1 && row(h('7')).asked_last === today() && row(h('8')).asked === 1 && row(h('8')).asked_last === today() && row(h('9')).asked === 0 && row(h('9')).asked_last === '');
     const rows0 = env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n;
     await look(ask([[sha('a'), h('6')], [sha('b'), h('8')]]));
     expect('a file that is not in the table leaves no trace; the counter keeps rising', env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n === rows0 && !row(h('6')) && row(h('8')).asked === 2);
+    await look(ask(Array.from({ length: 40 }, (_, i) => [sha('same file ' + i), h('8')])));
+    expect('one file under 40 keys in one request: one more, not 40', row(h('8')).asked === 3);
     const forty = Array.from({ length: 40 }, (_, i) => [sha('k' + i), sha('f' + i)]);
     const r40 = await look(ask(forty));
     expect('40 lines are taken, in order', r40.status === 200 && (await r40.text()).trim().split('\n').slice(3).every((l, i) => l === `${forty[i][0]} ${forty[i][1]} unknown`));
@@ -656,9 +664,11 @@ if (process.argv[2] === 'serve') {
     // released through the tool, as the worker answers it
     env.DB.raw.exec(badHashesSql([{ sha256: H('c'), note: 'waiting', answer: 0 }]));
     const q = ['csa-2026-01-lookup 1', 'version 2.60', 'nonce ' + 'f'.repeat(32), 'e'.repeat(64) + ' ' + H('c')].join('\n') + '\n';
-    const w1 = (await (await call('POST', q, {}, '/csa-2026-01-report/lookup')).text()).trim().split(' ').at(-1);
+    // the check as the worker answers it, waiting for the counter it writes after the answer
+    const look = async (body) => { const later = []; const r = await worker.fetch(new Request('https://example.org/csa-2026-01-report/lookup', { method: 'POST', body }), env, { waitUntil(p) { later.push(p); } }); await Promise.all(later); return r; };
+    const w1 = (await (await look(q)).text()).trim().split(' ').at(-1);
     env.DB.raw.exec(badHashesSql([{ sha256: H('c'), note: 'confirmed', answer: 1 }]));
-    const w2 = (await (await call('POST', q, {}, '/csa-2026-01-report/lookup')).text()).trim().split(' ').at(-1);
+    const w2 = (await (await look(q)).text()).trim().split(' ').at(-1);
     expect('the worker answers unknown while an entry waits and known_bad once it is released; it was counted both times', w1 === 'unknown' && w2 === 'known_bad' && env.DB.raw.prepare('SELECT asked FROM bad_hashes WHERE sha256 = ?').get(H('c')).asked === 2);
     // --script: the fingerprints the script carries in public
     const sh = readFileSync(new URL('../../gl-helper-triage.sh', import.meta.url), 'utf8');

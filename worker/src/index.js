@@ -741,8 +741,10 @@ export function lookupRequest(bytes) {
 // Files the maintainers know as malware, by SHA-256. They come in as SQL
 // (tools/bad-hashes-sql.mjs), so only with D1. answer = 1: the check answers known_bad;
 // answer = 0: the entry waits for a person, and the check answers as if it were not there.
-// asked counts the lines asked about the file, released or not, and asked_last is the day
-// of the last one, so the maintainers see a file come up before they release it.
+// asked counts the requests that asked about the file, released or not (one each, however
+// many of its lines name it), and asked_last is the day of the last one, so the maintainers
+// see a file come up before they release it. Anyone can send requests: a hint, not a count
+// of devices.
 export const BAD_HASHES_TABLE = "CREATE TABLE IF NOT EXISTS bad_hashes (sha256 TEXT PRIMARY KEY, note TEXT NOT NULL, answer INTEGER NOT NULL DEFAULT 0, by TEXT NOT NULL, at TEXT NOT NULL, asked INTEGER NOT NULL DEFAULT 0, asked_last TEXT NOT NULL DEFAULT '')";
 let badHashesTable = false;
 const badHashes = {
@@ -758,10 +760,10 @@ const badHashes = {
     const { results } = await env.DB.prepare(`SELECT sha256, answer FROM bad_hashes WHERE sha256 IN (${places})`).bind(...files).all();
     return new Map(results.map((r) => [r.sha256, Number(r.answer)]));
   },
-  // counts: a Map from fingerprint to the number of lines that asked for it
-  async count(env, counts, day) {
-    const up = env.DB.prepare('UPDATE bad_hashes SET asked = asked + ?2, asked_last = ?3 WHERE sha256 = ?1');
-    await env.DB.batch([...counts].map(([file, n]) => up.bind(file, n, day)));
+  // one more for each of these fingerprints
+  async count(env, files, day) {
+    const up = env.DB.prepare('UPDATE bad_hashes SET asked = asked + 1, asked_last = ?2 WHERE sha256 = ?1');
+    await env.DB.batch(files.map((file) => up.bind(file, day)));
   },
 };
 
@@ -785,15 +787,18 @@ async function safeMarks(env) {
 }
 
 // One word per line, in the order asked: known_bad before known_safe before unknown.
-async function lookupWords(env, items, day) {
+async function lookupWords(env, items, day, ctx) {
   let bad = new Map();
   if (env.DB) {
     bad = await badHashes.find(env, [...new Set(items.map(([, file]) => file))]);
-    // one more for every line whose file is in the table, released or not
-    const counts = new Map();
-    for (const [, file] of items) if (bad.has(file)) counts.set(file, (counts.get(file) || 0) + 1);
-    if (counts.size) {
-      try { await badHashes.count(env, counts, day); } catch { /* the answer does not depend on the counter */ }
+    // one more for each file of this request that is in the table, released or not. Written
+    // after the answer: an answer that waited for it would take longer for a file in the
+    // table, and so tell an entry that waits from a file nobody listed.
+    const found = [...bad.keys()];
+    if (found.length) {
+      const counted = badHashes.count(env, found, day).catch(() => { /* the answer does not depend on the counter */ });
+      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(counted);
+      else await counted;
     }
   }
   const marks = await safeMarks(env);
@@ -804,7 +809,7 @@ async function lookupWords(env, items, day) {
   });
 }
 
-async function lookup(request, env) {
+async function lookup(request, env, ctx) {
   if (env.LOOKUP !== 'on') return plain('not found\n', 404);
   if (request.method !== 'POST') return plain('method not allowed\n', 405);
   const body = await readCapped(request, LOOKUP_MAX_BYTES);
@@ -814,7 +819,7 @@ async function lookup(request, env) {
   const now = new Date().toISOString();
   let words;
   try {
-    words = await lookupWords(env, ask.items, now.slice(0, 10));
+    words = await lookupWords(env, ask.items, now.slice(0, 10), ctx);
   } catch {
     // the database or KV failed: no answer rather than one that misses an entry
     return plain('not available\n', 503);
@@ -840,7 +845,7 @@ export default {
     if (/\/csa-2026-01-fix\.sig$/.test(pathname)) return signature(request, env);
     if (/\/csa-2026-01-fix(\/|$)/.test(pathname)) return script(request, env, ctx, pathname);
     // the fingerprint check (docs/lookup.md), for every method: a POST there is never a report
-    if (pathname.endsWith('/csa-2026-01-report/lookup')) return lookup(request, env);
+    if (pathname.endsWith('/csa-2026-01-report/lookup')) return lookup(request, env, ctx);
     if (pathname.endsWith('/migrate')) {
       // a browser, or curl without -X POST, sends GET and would only see the text below
       if (request.method !== 'POST') return text('This address needs POST: curl -X POST -H "Authorization: Bearer <EXPORT_TOKEN>" <this address>', 405);

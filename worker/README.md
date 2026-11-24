@@ -183,7 +183,7 @@ or as a declined one, is left as it is. They are kept in the D1 table `suggestio
 ## Fingerprint check
 
 From script 2.60 the script can ask the worker whether the files it listed for review are
-known: known malware, known to be all right, or not known. It asks only after its user
+known: known malware, known as probably safe, or not known. It asks only after its user
 agreed (or with `--lookup`), only on the device itself, and only for files with a
 fingerprint, at most 40. For each file it sends two SHA-256 values: of the line
 `<kind> <path>` exactly as the report would carry them, and of the file. Once per request
@@ -203,14 +203,19 @@ asked, in the same order, each with one word:
   `bad_hashes` with `answer = 0`.
 
 The answer can only make the script's result worse: `known_bad` makes it `INFECTED`,
-`known_safe` only adds a note to a `REVIEW` line.
+`known_safe` only adds a note to a `REVIEW` line. A mark holds every fingerprint that
+reports sent for its key, made-up reports included, so the script shows `known_safe` as
+"probably safe" and keeps the file listed for review.
 
 The worker takes every request for an attack. It refuses a body over 8192 bytes, by its
 `content-length` and while reading it, so a missing or false length does not help. Before
 anything is decoded it checks every byte: only `0x0a` and `0x20` to `0x7e` may occur. Then
 every line must fit its fixed pattern. Anything else gets a fixed text (`400 bad request`,
-`413 too large`), never a part of the request. **Nothing of a request is stored or
-logged**; the only write is the counter of a `bad_hashes` entry that was asked for. Each
+`413 too large`), never a part of the request; when D1 or KV fails while reading, the answer
+is `503 not available` rather than one that misses an entry. **Nothing of a request is
+stored or logged**; the only write is the counter of a `bad_hashes` entry that was asked
+for, made after the answer, so the answer takes no longer for an entry that waits than for
+a file nobody listed. Each
 worker instance reads the marks at most once a minute, so a mark removed on the dashboard
 no longer counts a minute later.
 
@@ -243,7 +248,7 @@ answers only `known_safe` and `unknown`.
 | `note` | what it is, for the maintainers; never sent |
 | `answer` | `1` released: the check answers `known_bad`. `0` waiting: it counts as not known |
 | `by`, `at` | who added or last changed the entry, and when |
-| `asked` | how many lines asked for the file, released or not |
+| `asked` | how many requests asked for the file (one each), released or not. Anyone can send requests: a hint, not a count of devices |
 | `asked_last` | the day of the last one, `YYYY-MM-DD` |
 
 The first fill takes the fingerprints the script itself carries in public (`GLH_SHAS`,
