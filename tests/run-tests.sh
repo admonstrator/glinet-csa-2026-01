@@ -1047,6 +1047,28 @@ umount "$D/m"
 bash "$(dirname "$T")/triage-remote.sh" -p >"$BASE/tr.txt" 2>&1; rc=$?
 expect "triage-remote.sh: -p without a value stops with exit 4" '[ $rc = 4 ] && grep -q "needs a value" "$BASE/tr.txt"'
 
+echo "=== --changes: the files that differ from the base image, on request only"
+D=$(mkscen chg "$OWL"); U=$D/u
+mnt "$D" "$OWL"
+echo 'new rules' >"$D/m/etc/rc.local"; echo openwrt >"$D/m/etc/hostname"; rm "$D/m/etc/init.d/dnsmasq"
+mkdir -p "$D/m/etc/config"; echo mine >"$D/m/etc/config/wireless"; touch -d '2026-11-20 21:03:11 UTC' "$D/m/etc/config/wireless"
+rm "$D/m/bin/netstat"; ln -s /tmp/n "$D/m/bin/netstat"
+echo x >"$D/m/etc/esc$(printf '\033')[2Jname"; mkdir "$D/m/etc/a
+b"; echo y >"$D/m/etc/a
+b/in"
+run "$D" "$OWL" --changes >"$D/chg.txt" 2>&1; rc=$?
+cat "$D/chg.txt"
+expect "--changes: new, changed and removed files with their time, unchanged copies left out" '[ $rc = 0 ] && grep -q "^changed  .*  /etc/rc.local$" "$D/chg.txt" && grep -q "^new      2026-11-20 21:03:11  /etc/config/wireless$" "$D/chg.txt" && grep -q "^removed  .*  /etc/init.d/dnsmasq$" "$D/chg.txt" && grep -q "^changed  .*  /bin/netstat -> /tmp/n$" "$D/chg.txt" && ! grep -q /etc/hostname "$D/chg.txt"'
+expect "--changes: no escape from a file name reaches the screen, a name with a line break is listed" '! grep -q "$(printf "\033")" "$D/chg.txt" && grep -q "^new  .*/etc/esc?\[2Jname$" "$D/chg.txt" && grep -q "^odd-name .*/etc/a?b$" "$D/chg.txt" && grep -q "^# 2 new, 2 changed, 1 removed, 1 odd-name$" "$D/chg.txt"'
+expect "--changes: no findings, no report, no archive" '! grep -qE "IOC|REVIEW|Verdict|report" "$D/chg.txt" && [ -z "$(ls "$D/out")" ]'
+triage --root "$D/m" --upper "$U" -o "$D/out" --changes >"$D/chg2.txt" 2>&1; rc=$?
+expect "--changes without a base image lists the overlay's files as written" '[ $rc = 0 ] && grep -q "^written  .*  /etc/hostname$" "$D/chg2.txt" && grep -q "^removed  .*  /etc/init.d/dnsmasq$" "$D/chg2.txt" && grep -q "no base image" "$D/chg2.txt"'
+triage --root "$D/m" --lower "$OWL" -o "$D/out" --changes >"$D/chg3.txt" 2>&1; rc=$?
+expect "--changes without an overlay compares the running system with the base image" '[ $rc = 0 ] && grep -q "^changed  .*  /etc/rc.local$" "$D/chg3.txt" && grep -q "^removed  .*  /etc/init.d/dnsmasq$" "$D/chg3.txt" && ! grep -q /etc/hostname "$D/chg3.txt"'
+umount "$D/m"
+triage --root "$NB" -o "$NB/out" --changes >"$BASE/chg4.txt" 2>&1; rc=$?
+expect "--changes with neither says so and stops with exit 4" '[ $rc = 4 ] && grep -q "No list of changes" "$BASE/chg4.txt"'
+
 echo "=== what the base image's busybox loads must be the base image's (issue 8)"
 OWB=$BASE/openwrt-rom-libs
 cp -a "$OWL" "$OWB"; mkdir -p "$OWB/lib"

@@ -10,6 +10,7 @@
 #   sh gl-helper-triage.sh --archive [-o DIR]   collect evidence into DIR (default /tmp)
 #   sh gl-helper-triage.sh --archive --stdout   stream the evidence tar.gz to stdout
 #   sh gl-helper-triage.sh --fix [-o DIR]       archive first (mandatory), then remediate
+#   sh gl-helper-triage.sh --changes            list the files that differ from the base image
 #
 # At the end the script offers to send a short anonymous report (model, firmware, which
 # indicators, when) to the community, also from a device without indicators, so that we
@@ -236,6 +237,9 @@ gl-helper-triage.sh - check, archive and remediate the GL.iNet "gl-helper" impla
   -o, --out DIR        output directory for the archive
   --color, --no-color  force or disable coloured output (default: only on a terminal)
   --report             send the short anonymous report without asking (a summary is shown)
+  --changes            list every file that differs from the base image (new, changed,
+                       removed), with the time it was last written. Judges nothing,
+                       sends nothing; the list can be long
   --update             replace this script by the current version, after checking its
                        signature. Changes nothing else and checks nothing
   --unsigned           with --update on firmware that has no tool to check the
@@ -279,6 +283,7 @@ while [ $# -gt 0 ]; do
 	--archive) MODE=archive ;;
 	--fix) MODE=fix ;;
 	--update) MODE=update ;;
+	--changes) MODE=changes ;;
 	--unsigned) UNSIGNED=1 ;;
 	--stdout) STDOUT=1 ;;
 	--color) COLOR=1 ;;
@@ -3240,8 +3245,76 @@ do_update() {
 	return 4
 }
 
+# ---------------------------------------------------------------- changes
+# --changes lists every file that differs from the base image, for an owner who wants to
+# see what has been written to the device since the firmware was installed: new files,
+# changed ones and deleted ones, each with the time it was last written. It judges
+# nothing, sends nothing and is no part of a check or the report. It runs only when asked
+# for: on a device in use the list runs to hundreds or thousands of lines (settings,
+# packages, logs). Copies of the base image's files that the overlay holds unchanged are
+# left out. Without a base image every file of the overlay is listed as "written".
+
+# Time a file or a link itself was last written, UTC, or dashes where it cannot be read.
+change_time() {
+	local t
+	if [ -L "$1" ]; then
+		t=$(TZ=UTC0 ls -ld --full-time "$1" 2>/dev/null |
+			awk '{ for (i = 1; i < NF; i++) if ($i ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) { print $i, substr($(i + 1), 1, 8); exit } }')
+	else
+		t=$(date -u -r "$1" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+	fi
+	printf '%s' "${t:----------- --------}"
+}
+
+list_changes() {
+	local w f rel kind p nl
+	nl=$(printf '\nx'); nl=${nl%x}
+	if [ -n "$UPPER" ]; then w=${UPPER%/}
+	elif [ -n "$LOWER" ]; then w=${ROOT%/}
+	else
+		say "No list of changes: there is no overlay and no base image (/rom) here, so nothing tells the firmware's own files from changed ones."
+		return 4
+	fi
+	say "# gl-helper-triage.sh $VERSION --changes, $WHEN, $HOST"
+	say "# files that differ from the base image ${LOWER:-(none)}, read from ${UPPER:-the running system ${ROOT}}"
+	[ -z "$LOWER" ] && say "# no base image: every file of the overlay is listed as written, new and changed ones cannot be told apart"
+	say "# new: not in the base image   changed: differs from it   removed: deleted from it"
+	say "# odd-name: a name with a line break in it, shown with ? in its place"
+	say "# time: last written, UTC. Root can set it to anything; a year before 2020 means the clock was not set yet"
+	{
+		find "${w:-/}" -xdev ! -type d ! -name "*$nl*" 2>/dev/null | sort | while IFS= read -r f; do
+			# the files in a directory whose name has a line break come in pieces that do not exist
+			exists "$f" || continue
+			rel=${f#"$w"/}
+			if [ -n "$UPPER" ] && whiteout "$f"; then kind=removed
+			elif [ -z "$LOWER" ]; then kind=written
+			elif ! exists "$(l "$rel")"; then kind=new
+			elif same_as_lower "$rel"; then continue
+			else kind=changed; fi
+			p=/$rel
+			[ -L "$f" ] && p="$p -> $(readlink "$f" 2>/dev/null)"
+			printf '%-8s %s  %s\n' "$kind" "$(change_time "$f")" "$p"
+		done
+		# A name with a line break in it cannot be read line by line, nor looked up again from
+		# here. It is listed with "?" in place of the break, so that it cannot hide; for a
+		# directory that is the directory, not the files in it.
+		find "${w:-/}" -xdev -name "*$nl*" -exec sh -c 'printf "%s" "$1" | tr "\n" "?"; echo' sh {} \; 2>/dev/null | sort | while IFS= read -r f; do
+			printf '%-8s %s  %s\n' odd-name '---------- --------' "/${f#"$w"/}"
+		done
+		# without an overlay a deleted file leaves no mark: it is missing from the running system
+		[ -z "$UPPER" ] && find "${LOWER%/}" -xdev ! -type d 2>/dev/null | sort | while IFS= read -r f; do
+			rel=${f#"${LOWER%/}"/}
+			exists "$f" && ! exists "$(r "$rel")" && printf '%-8s %s  %s\n' removed '---------- --------' "/$rel"
+		done
+	} | tee "$TMP/changes" | tr '\001-\010\013-\037\177' '?' >&3
+	say "# $(awk '{ n[$1]++ } END { o = ""; split("new changed removed written odd-name", k, " ")
+		for (i = 1; i <= 5; i++) if (n[k[i]] || i <= 3) o = o (o == "" ? "" : ", ") (n[k[i]] + 0) " " k[i]; print o }' "$TMP/changes")"
+	return 0
+}
+
 # ---------------------------------------------------------------- main
 if [ "$MODE" = update ]; then do_update; exit $?; fi
+if [ "$MODE" = changes ]; then list_changes; exit $?; fi
 report_head
 detect "$TMP/findings"
 [ "$LIVE" = 1 ] && build_report

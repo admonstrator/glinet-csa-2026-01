@@ -102,6 +102,7 @@ cd glinet-csa-2026-01
 | `--archive [-o DIR]` | Report plus evidence archive in `DIR` (default `/tmp`) |
 | `--fix [-o DIR]` | Archive first, then clean up and check again |
 | `--update` | Replace the script with the current signed version |
+| `--changes` | List every file that differs from the base image, with the time it was last written. Judges nothing, sends nothing |
 | `--report`, `--no-report` | Send the anonymous report without asking, or never offer it |
 | `--with-secrets` | Keep private keys and passwords in the evidence archive |
 
