@@ -1,9 +1,13 @@
 // node worker/test/run.mjs          run the tests
-// node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV in memory
-import worker, { validate, reportedTable, REPORT_FIELDS, UPDATE_KEYS } from '../src/index.js';
+// node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV and a D1 in memory
+// node worker/test/run.mjs serve seed.json    the same, with marks and bad hashes for the
+//                                             fingerprint check (see "serve" below)
+import worker, { validate, validLabel, reportedTable, REPORT_FIELDS, UPDATE_KEYS, LABELS_TABLE, BAD_HASHES_TABLE, lookupRequest, markCache } from '../src/index.js';
 import { suggestionsSql } from '../tools/suggestions-sql.mjs';
+import { badHashesSql, scriptHashes } from '../tools/bad-hashes-sql.mjs';
 import nodeCrypto from 'node:crypto';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -47,14 +51,40 @@ const call = (method, body, headers = {}, path = '/csa-2026-01-report') =>
   worker.fetch(new Request(`https://example.org${path}`, { method, body, headers }), env, { waitUntil() {} });
 
 if (process.argv[2] === 'serve') {
+  // With a D1 in memory and the fingerprint check switched on, so that the script can be
+  // run against the real worker: point it at http://127.0.0.1:8787/csa-2026-01-report/lookup.
+  // A seed file fills the check:
+  //   { "labels": { "<kind> <path>": { "hashes": ["<sha256>", ...] } },
+  //     "bad_hashes": [{ "sha256": "<sha256>", "answer": 1 }] }
+  // each mark set as "probably safe", each entry checked as tools/bad-hashes-sql.mjs does.
+  env.DB = d1(); env.LOOKUP = 'on';
+  if (process.argv[3]) {
+    const seed = JSON.parse(readFileSync(process.argv[3], 'utf8')), at = new Date().toISOString();
+    env.DB.raw.exec(LABELS_TABLE);
+    const put = env.DB.raw.prepare('INSERT OR REPLACE INTO labels (key, verdict, note, hashes, by, at) VALUES (?, ?, ?, ?, ?, ?)');
+    for (const [key, l] of Object.entries(seed.labels || {})) {
+      const label = { key, verdict: 'safe', note: (l && l.note) || 'seed', hashes: (l && l.hashes) || [] }, bad = validLabel(label);
+      if (bad) throw new Error(`seed, label ${key.slice(0, 80)}: ${bad}`);
+      put.run(key, 'safe', label.note, JSON.stringify(label.hashes), 'seed', at);
+    }
+    const bad = seed.bad_hashes || [];
+    if (bad.length) env.DB.raw.exec(badHashesSql(bad.map((e) => ({ note: 'seed', by: 'seed', ...e }))));
+    console.log(`seed: ${Object.keys(seed.labels || {}).length} marks, ${bad.length} bad hashes`);
+  }
+  // the newest report, as the KV entry looked: what serve printed before there was a D1
+  const lastReport = () => { const r = env.DB.raw.prepare('SELECT received, report FROM reports ORDER BY received DESC, id DESC LIMIT 1').get(); return r ? JSON.stringify({ received: r.received, report: JSON.parse(r.report) }) : ''; };
   http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const r = await call(req.method, req.method === 'POST' ? Buffer.concat(chunks) : undefined, req.headers, req.url);
+    const body = await r.text();
     res.writeHead(r.status, Object.fromEntries(r.headers));
-    res.end(await r.text());
-    if (req.method === 'POST') console.log(r.status, [...store.entries()].filter(([k]) => k.startsWith('csa-2026-01/')).at(-1)?.[1] ?? '');
+    res.end(body);
+    // the check: the answer (the worker itself logs nothing of a request)
+    if (new URL(req.url, 'http://x').pathname.endsWith('/csa-2026-01-report/lookup')) console.log(`lookup ${r.status}\n${body}`);
+    else if (req.method === 'POST') console.log(r.status, lastReport());
   }).listen(8787, '127.0.0.1');
+  console.log('serving on http://127.0.0.1:8787/');
 } else {
   let failed = 0;
   const expect = (name, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}`); if (!ok) failed++; };
@@ -461,6 +491,195 @@ if (process.argv[2] === 'serve') {
     const shKeys = (/^UPDATE_KEYS='([^']*)'$/m.exec(readFileSync(new URL('../../gl-helper-triage.sh', import.meta.url), 'utf8')) || [null, null])[1];
     expect('the worker checks signatures with the keys the script carries', shKeys !== null && shKeys.split(/\s+/).filter(Boolean).join(' ') === UPDATE_KEYS.join(' ') && (UPDATE_KEYS.length > 0 || (await sig('POST', sign(k1, v2))).status === 400));
     await env.REPORTS.put('script/csa-2026-01-fix', 'null'); await env.REPORTS.put('script/csa-2026-01-fix.sig', 'null');
+  }
+  // ---- the fingerprint check: POST .../lookup (docs/lookup.md)
+  {
+    const LK = '/csa-2026-01-report/lookup', NONCE = '0123456789abcdef0123456789abcdef';
+    const sha = (s) => nodeCrypto.createHash('sha256').update(s).digest('hex');
+    const HEAD = ['csa-2026-01-lookup 1', 'version 2.60', 'nonce ' + NONCE];
+    const ask = (items, head = HEAD) => [...head, ...items.map((x) => (Array.isArray(x) ? x.join(' ') : x))].join('\n') + '\n';
+    const look = (body, headers = {}, method = 'POST') => call(method, body, headers, LK);
+    const reportCount = () => env.DB.raw.prepare('SELECT count(*) AS n FROM reports').get().n + [...store.keys()].filter((k) => k.startsWith('csa-2026-01/')).length;
+    const reportsBefore = reportCount(), postedBefore = posted.length;
+    const row = (h) => env.DB.raw.prepare('SELECT * FROM bad_hashes WHERE sha256 = ?').get(h);
+    const today = () => new Date().toISOString().slice(0, 10);
+    const h = (c) => c.repeat(64);
+    // the check's data: two marks, an open and a declined suggestion, three entries of bad_hashes
+    const markKey = 'new-binary /usr/sbin/tailscaled', markKey2 = 'changed /etc/init.d/dropbear', sugKey = 'hidden /lib/wifi/.marker', noKey = 'changed /etc/hotplug.d/iface/99-x';
+    const putLabel = env.DB.raw.prepare('INSERT OR REPLACE INTO labels (key, verdict, note, hashes, by, at) VALUES (?, ?, ?, ?, ?, ?)');
+    putLabel.run(markKey, 'safe', 'Tailscale updater', JSON.stringify([h('1'), h('2')]), 'a@example.org', '2026-11-24T10:00:00Z');
+    putLabel.run(markKey2, 'safe', 'marked, and later found to be malware', JSON.stringify([h('7')]), 'a@example.org', '2026-11-24T10:00:00Z');
+    env.DB.raw.exec(suggestionsSql([{ key: sugKey, note: 'open', hashes: [h('3')] }, { key: noKey, note: 'declined', hashes: [h('4')] }]));
+    env.DB.raw.prepare("UPDATE suggestions SET declined_by = 'b@example.org', declined_at = '2026-11-24T11:00:00Z' WHERE key = ?").run(noKey);
+    env.DB.raw.exec(badHashesSql([{ sha256: h('7'), note: 'released', answer: 1 }, { sha256: h('8'), note: 'waiting', answer: 0 }, { sha256: h('9'), note: 'released, never asked', answer: 1 }], { at: '2026-11-24T12:00:00Z' }));
+    const release = Object.keys(JSON.parse(readFileSync(new URL('../src/known-hashes.json', import.meta.url), 'utf8')))[0];
+    markCache.map = null;
+
+    // switched off: every method gets 404, and a POST there is never a report
+    expect('the check is off without LOOKUP = "on": 404 for every method, with a fixed text', await (async () => { for (const m of ['POST', 'GET', 'PUT', 'DELETE']) { const r = await look(m === 'GET' || m === 'DELETE' ? undefined : ask([[sha(markKey), h('1')]]), {}, m); if (r.status !== 404 || (await r.text()) !== 'not found\n') return false; } return true; })());
+    expect('switched off, a report posted to it is not stored', (await look(JSON.stringify(good))).status === 404 && reportCount() === reportsBefore);
+    env.LOOKUP = 'yes';
+    expect('only the exact value "on" switches it on', (await look(ask([[sha(markKey), h('1')]]))).status === 404);
+    env.LOOKUP = 'on';
+    expect('anything but POST: 405 with a fixed text', await (async () => { for (const m of ['GET', 'PUT', 'DELETE', 'PATCH']) { const r = await look(m === 'GET' || m === 'DELETE' ? undefined : 'x', {}, m); if (r.status !== 405 || (await r.text()) !== 'method not allowed\n') return false; } return true; })());
+
+    // a valid request and its answer, byte for byte
+    const items = [
+      [sha(markKey), h('1')],    // a mark with this fingerprint
+      [sha(markKey), h('5')],    // the same mark, another file
+      [sha(noKey), h('7')],      // in bad_hashes, released
+      [sha(markKey2), h('7')],   // the same file under a mark: bad wins
+      [sha(noKey), h('8')],      // in bad_hashes, waiting
+      [sha(sugKey), h('3')],     // an open suggestion
+      [sha(noKey), h('4')],      // a declined suggestion
+      [sha('changed /x'), release], // a release file, at any path
+      [sha('changed /x'), h('6')],  // nothing known
+    ];
+    const words = ['known_safe', 'unknown', 'known_bad', 'known_bad', 'unknown', 'unknown', 'unknown', 'known_safe', 'unknown'];
+    const r1 = await look(ask(items)), body1 = await r1.text(), at1 = body1.split('\n')[2];
+    const want1 = ['csa-2026-01-lookup-answer 1', 'nonce ' + NONCE, at1, ...items.map((x, i) => `${x[0]} ${x[1]} ${words[i]}`)].join('\n') + '\n';
+    const atTime = Date.parse(at1.slice(3, 19).replace(' ', 'T') + 'Z');
+    expect('a valid request gets its answer, byte for byte: nonce, time to the minute, one line per line asked, in order', r1.status === 200 && body1 === want1 && /^at \d{4}-\d\d-\d\d \d\d:\d\d UTC$/.test(at1) && Math.abs(Date.now() - atTime) < 120_000);
+    expect('the answer is plain text that nothing may sniff, cache or read from another site', r1.headers.get('content-type') === 'text/plain; charset=utf-8' && r1.headers.get('cache-control') === 'no-store' && r1.headers.get('x-content-type-options') === 'nosniff' && !r1.headers.has('access-control-allow-origin'));
+    expect('known_safe by a mark: the SHA-256 of its key and one of its fingerprints; another file at the same key is unknown', words[0] === 'known_safe' && body1.includes(`${sha(markKey)} ${h('1')} known_safe\n`) && body1.includes(`${sha(markKey)} ${h('5')} unknown\n`));
+    expect('suggestions never count, open or declined', body1.includes(`${sha(sugKey)} ${h('3')} unknown\n`) && body1.includes(`${sha(noKey)} ${h('4')} unknown\n`));
+    expect('a release file is known_safe at any path', body1.includes(`${sha('changed /x')} ${release} known_safe\n`));
+    expect('known_bad for an entry with answer 1, also where a mark covers the same file; unknown for answer 0', body1.includes(`${sha(noKey)} ${h('7')} known_bad\n`) && body1.includes(`${sha(markKey2)} ${h('7')} known_bad\n`) && body1.includes(`${sha(noKey)} ${h('8')} unknown\n`));
+    expect('every line counts for its entry, released or not, with the day; an entry not asked for stays as it was', row(h('7')).asked === 2 && row(h('7')).asked_last === today() && row(h('8')).asked === 1 && row(h('8')).asked_last === today() && row(h('9')).asked === 0 && row(h('9')).asked_last === '');
+    const rows0 = env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n;
+    await look(ask([[sha('a'), h('6')], [sha('b'), h('8')]]));
+    expect('a file that is not in the table leaves no trace; the counter keeps rising', env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n === rows0 && !row(h('6')) && row(h('8')).asked === 2);
+    const forty = Array.from({ length: 40 }, (_, i) => [sha('k' + i), sha('f' + i)]);
+    const r40 = await look(ask(forty));
+    expect('40 lines are taken, in order', r40.status === 200 && (await r40.text()).trim().split('\n').slice(3).every((l, i) => l === `${forty[i][0]} ${forty[i][1]} unknown`));
+    expect('a version of up to three digits and one line are taken', (await look(ask([[sha('k'), h('6')]], ['csa-2026-01-lookup 1', 'version 2.123', 'nonce ' + NONCE]))).status === 200);
+
+    // a mark removed on the dashboard counts no more after a minute
+    const t0 = Date.now(); markCache.now = () => t0; markCache.map = null;
+    const one = async () => (await (await look(ask([[sha(markKey), h('1')]]))).text()).trim().split(' ').at(-1);
+    const before = await one();
+    env.DB.raw.prepare('DELETE FROM labels WHERE key = ?').run(markKey);
+    markCache.now = () => t0 + 59_000; const cached = await one();
+    markCache.now = () => t0 + 60_000; const after = await one();
+    expect('the marks are kept for a minute: a removed mark is unknown after that', before === 'known_safe' && cached === 'known_safe' && after === 'unknown');
+    markCache.now = () => Date.now(); markCache.map = null;
+
+    // without D1: no bad_hashes, the marks from KV
+    const db = env.DB; delete env.DB;
+    await env.REPORTS.put('meta/csa-2026-01-labels', JSON.stringify({ [markKey]: { verdict: 'safe', note: 'n', hashes: [h('1')], by: 'x', at: 'y' }, [noKey]: { verdict: '', note: '', hashes: [h('4')], by: 'x', at: 'y' } }));
+    const kvItems = [[sha(markKey), h('1')], [sha(noKey), h('7')], [sha(noKey), h('4')], [sha('changed /x'), release]];
+    const rkv = await (await look(ask(kvItems))).text();
+    expect('without D1 the answer holds only known_safe and unknown: marks from KV and release files, no bad_hashes', rkv.trim().split('\n').slice(3).map((l) => l.split(' ')[2]).join() === 'known_safe,unknown,unknown,known_safe');
+    env.DB = db; markCache.map = null; await env.REPORTS.put('meta/csa-2026-01-labels', '{}');
+
+    // a counter that cannot be written does not cost the answer; a database that cannot be
+    // read gives no answer rather than one that misses an entry
+    env.DB = { prepare: db.prepare, batch: async () => { throw new Error('D1 busy'); } };
+    const rc = await look(ask([[sha(noKey), h('7')]]));
+    expect('a failing counter update does not fail the answer', rc.status === 200 && (await rc.text()).endsWith(' known_bad\n'));
+    env.DB = { prepare: () => { throw new Error('D1 down'); }, batch: db.batch };
+    const rd = await look(ask([[sha(noKey), h('7')]]));
+    expect('a database that cannot be read: 503 with a fixed text, not an answer without bad_hashes', rd.status === 503 && (await rd.text()) === 'not available\n');
+    env.DB = db;
+
+    // hostile input: each a fixed text, never a part of the request
+    const bad400 = async (body, headers) => { const r = await look(body, headers); return r.status === 400 && (await r.text()) === 'bad request\n'; };
+    const L = (i) => [sha('k' + i), sha('f' + i)];
+    expect('41 lines are refused', await bad400(ask(Array.from({ length: 41 }, (_, i) => L(i)))));
+    expect('no line to check is refused', await bad400(ask([])));
+    expect('the same line twice is refused, the same file under two keys is not', await bad400(ask([L(1), L(2), L(1)])) && (await look(ask([[sha('a'), h('6')], [sha('b'), h('6')]]))).status === 200);
+    expect('a wrong first line, version or nonce is refused', await bad400(ask([L(1)], ['csa-2026-01-lookup 2', HEAD[1], HEAD[2]])) && await bad400(ask([L(1)], ['csa-2026-01-lookup  1', HEAD[1], HEAD[2]])) && await bad400(ask([L(1)], [HEAD[0], 'version 3.1', HEAD[2]])) && await bad400(ask([L(1)], [HEAD[0], 'version 2.1234', HEAD[2]])) && await bad400(ask([L(1)], [HEAD[0], 'version 2.', HEAD[2]])) && await bad400(ask([L(1)], [HEAD[0], HEAD[1], 'nonce ' + NONCE.slice(1)])) && await bad400(ask([L(1)], [HEAD[0], HEAD[1], 'nonce ' + NONCE.toUpperCase()])) && await bad400(ask([L(1)], [HEAD[1], HEAD[0], HEAD[2]])) && await bad400(ask([L(1)], [HEAD[0], HEAD[2]])));
+    expect('uppercase hex, a short hash, a third field or a missing space is refused', await bad400(ask([[sha('k').toUpperCase(), sha('f')]])) && await bad400(ask([[sha('k'), sha('f').slice(0, 63) + 'A']])) && await bad400(ask([[sha('k'), sha('f').slice(0, 63)]])) && await bad400(ask([[sha('k'), sha('f'), 'known_safe']])) && await bad400(ask([sha('k') + sha('f')])) && await bad400(ask([sha('k') + '  ' + sha('f')])));
+    const valid = ask([L(1), L(2)]);
+    expect('an empty line, \\r\\n, a missing or an extra final \\n, a space before or after a line are refused', await bad400(valid.replace('\n', '\n\n')) && await bad400(valid + '\n') && await bad400('\n' + valid) && await bad400(valid.replace(/\n/g, '\r\n')) && await bad400(valid.slice(0, -1)) && await bad400(valid.replace('\n', ' \n')) && await bad400(' ' + valid) && await bad400(''));
+    // every byte outside 0x0a and 0x20-0x7e, in the first line, in the middle of a hash, at
+    // the end of the last line: always the fixed text
+    const enc = (s) => Buffer.from(s, 'latin1');
+    const spots = [5, valid.indexOf('\n', 60) + 30, valid.length - 1];
+    let byteFails = 0, byteTried = 0;
+    for (let b = 0; b < 256; b++) {
+      if (b === 0x0a || (b >= 0x20 && b <= 0x7e)) continue;
+      for (const at of spots) {
+        byteTried++;
+        const raw = Buffer.concat([enc(valid.slice(0, at)), Buffer.from([b]), enc(valid.slice(at))]);
+        const r = await look(raw), t = await r.text();
+        if (r.status !== 400 || t !== 'bad request\n') byteFails++;
+      }
+    }
+    expect(`every byte outside 0x0a and 0x20-0x7e is refused with the fixed text (${byteTried} requests)`, byteTried === 160 * 3 && byteFails === 0);
+    expect('the byte check comes before any decoding: an emoji, U+2028, an umlaut, broken UTF-8, NUL and a BOM are refused', await bad400(valid.replace('version', 'version\u{1F600}')) && await bad400(valid.replace('\n', '\u2028')) && await bad400(valid.replace('lookup', 'l\u00f6okup')) && await bad400(Buffer.concat([enc(valid.slice(0, 20)), Buffer.from([0xc3]), enc(valid.slice(20))])) && await bad400(Buffer.concat([Buffer.from([0xff, 0xfe]), enc(valid)])) && await bad400(valid.replace('1\n', '1\u0000\n')) && await bad400('\ufeff' + valid) && await bad400(valid.replace('version 2.60', 'version 2.\u0666\u0660')));
+    expect('the parser itself takes only the exact form', lookupRequest(enc(valid)) && lookupRequest(enc(valid)).nonce === NONCE && lookupRequest(enc(valid)).items.length === 2 && lookupRequest(enc(valid.replace('\n', '\t'))) === null && lookupRequest(new Uint8Array(0)) === null);
+    expect('a body that is not a request at all: JSON, HTML, a report', await bad400(JSON.stringify(good)) && await bad400('<script>alert(1)</script>\n') && await bad400("'; DROP TABLE bad_hashes; --\n") && env.DB.raw.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'bad_hashes'").get().n === 1);
+
+    // size: content-length first, then the stream with a hard cap
+    expect('8192 bytes are read, 8193 are too large', await bad400('a'.repeat(8192)) && (await look('a'.repeat(8193))).status === 413);
+    const r413 = await look('a'.repeat(8193));
+    expect('too large: 413 with a fixed text', r413.status === 413 && (await r413.text()) === 'too large\n');
+    // a body handed out in pieces as it is read: how much was taken shows whether it was all read
+    const stream = (total, chunk = 1024) => { const s = { pulled: 0 }; s.body = new ReadableStream({ pull(c) { if (s.pulled >= total) return c.close(); s.pulled += chunk; c.enqueue(new Uint8Array(chunk).fill(0x61)); } }, { highWaterMark: 0 }); return s; };
+    const send = (s, headers = {}, path = LK) => worker.fetch(new Request('https://example.org' + path, { method: 'POST', body: s.body, headers, duplex: 'half' }), env, { waitUntil() {} });
+    let s = stream(10_000_000), r = await send(s);
+    expect('10 MB without a content-length: 413 after reading little more than 8192 bytes', r.status === 413 && s.pulled <= 8192 + 1024);
+    s = stream(9000); r = await send(s, { 'content-length': '10' });
+    expect('a content-length that says less than comes: 413 all the same', r.status === 413 && s.pulled <= 8192 + 1024);
+    s = stream(100); r = await send(s, { 'content-length': '8193' });
+    expect('a content-length above 8192: 413 without reading the body', r.status === 413 && s.pulled === 0 && (await r.text()) === 'too large\n');
+    expect('the check never stores a report', reportCount() === reportsBefore && posted.length === postedBefore);
+    s = stream(10_000_000, 65536); r = await send(s, {}, '/csa-2026-01-report');
+    expect('reports use the same capped reader: a large body is refused after 48 KiB and one piece', r.status === 413 && s.pulled <= 49152 + 65536 && (await r.text()) === 'too large\n');
+    s = stream(100); r = await send(s, { 'content-length': '49153' }, '/csa-2026-01-report');
+    expect('a report with a content-length above 48 KiB is refused without reading', r.status === 413 && s.pulled === 0);
+    expect('reports still work as before', (await call('POST', JSON.stringify(good))).status === 200 && (await call('POST', 'x'.repeat(49152))).status === 400 && (await call('POST', 'x'.repeat(49153))).status === 413);
+
+    // the table: in schema.sql and created by the worker, the same columns
+    const cols = (sql) => { const x = new DatabaseSync(':memory:'); x.exec(sql); return JSON.stringify(x.prepare('PRAGMA table_info(bad_hashes)').all()); };
+    expect('bad_hashes in schema.sql is the table the worker creates', cols(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')) === cols(BAD_HASHES_TABLE) && cols(BAD_HASHES_TABLE).includes('"asked_last"'));
+  }
+  // ---- tools/bad-hashes-sql.mjs
+  {
+    const H = (c) => c.repeat(64);
+    let thrown = 0;
+    const bads = [
+      [{ sha256: H('A'), note: 'n', answer: 1 }], [{ sha256: H('a').slice(1), note: 'n', answer: 1 }], [{ sha256: H('g'), note: 'n', answer: 1 }], [{ note: 'n', answer: 1 }],
+      [{ sha256: H('a'), note: '', answer: 1 }], [{ sha256: H('a'), note: 'x'.repeat(201), answer: 1 }], [{ sha256: H('a'), note: 'caf\u00e9', answer: 1 }], [{ sha256: H('a'), note: 'a\nb', answer: 1 }],
+      [{ sha256: H('a'), note: 'n', answer: 2 }], [{ sha256: H('a'), note: 'n', answer: '1' }], [{ sha256: H('a'), note: 'n', answer: true }], [{ sha256: H('a'), note: 'n' }],
+      [{ sha256: H('a'), note: 'n', answer: 1 }, { sha256: H('a'), note: 'm', answer: 0 }], [{ sha256: H('a'), note: 'n', answer: 1, anwser: 0 }], [{ sha256: H('a'), note: 'n', answer: 1, by: '' }], [{ sha256: H('a'), note: 'n', answer: 1, at: 'yesterday' }], [null], 'not a list',
+    ];
+    for (const b of bads) try { badHashesSql(b); } catch { thrown++; }
+    expect('the bad-hashes tool refuses a bad fingerprint, note, answer, by or at, a fingerprint twice and an unknown field', thrown === bads.length && badHashesSql([{ sha256: H('a'), note: 'x'.repeat(200), answer: 0 }]).startsWith('CREATE TABLE IF NOT EXISTS bad_hashes'));
+    const x = new DatabaseSync(':memory:'), get = (c) => x.prepare('SELECT * FROM bad_hashes WHERE sha256 = ?').get(H(c));
+    x.exec(badHashesSql([{ sha256: H('a'), note: 'seen on two devices', answer: 0 }, { sha256: H('b'), note: "it's malware'); DROP TABLE bad_hashes; --", answer: 1, by: 'b@example.org', at: '2026-11-24T12:00:00Z' }], { by: 'a@example.org', at: '2026-11-24T10:00:00Z' }));
+    expect('it writes entries with who and when, and a quote cannot end the SQL string', get('a').answer === 0 && get('a').by === 'a@example.org' && get('a').at === '2026-11-24T10:00:00Z' && get('a').asked === 0 && get('b').note === "it's malware'); DROP TABLE bad_hashes; --" && get('b').by === 'b@example.org');
+    x.exec("UPDATE bad_hashes SET asked = 5, asked_last = '2026-11-23' WHERE sha256 = '" + H('a') + "'");
+    x.exec(badHashesSql([{ sha256: H('a'), note: 'malware, confirmed', answer: 1 }], { by: 'c@example.org', at: '2026-11-24T13:00:00Z' }));
+    expect('loading an entry again releases it: note, answer, by and at change, the counter stays', get('a').answer === 1 && get('a').note === 'malware, confirmed' && get('a').by === 'c@example.org' && get('a').at === '2026-11-24T13:00:00Z' && get('a').asked === 5 && get('a').asked_last === '2026-11-23' && x.prepare('SELECT count(*) AS n FROM bad_hashes').get().n === 2);
+    // released through the tool, as the worker answers it
+    env.DB.raw.exec(badHashesSql([{ sha256: H('c'), note: 'waiting', answer: 0 }]));
+    const q = ['csa-2026-01-lookup 1', 'version 2.60', 'nonce ' + 'f'.repeat(32), 'e'.repeat(64) + ' ' + H('c')].join('\n') + '\n';
+    const w1 = (await (await call('POST', q, {}, '/csa-2026-01-report/lookup')).text()).trim().split(' ').at(-1);
+    env.DB.raw.exec(badHashesSql([{ sha256: H('c'), note: 'confirmed', answer: 1 }]));
+    const w2 = (await (await call('POST', q, {}, '/csa-2026-01-report/lookup')).text()).trim().split(' ').at(-1);
+    expect('the worker answers unknown while an entry waits and known_bad once it is released; it was counted both times', w1 === 'unknown' && w2 === 'known_bad' && env.DB.raw.prepare('SELECT asked FROM bad_hashes WHERE sha256 = ?').get(H('c')).asked === 2);
+    // --script: the fingerprints the script carries in public
+    const sh = readFileSync(new URL('../../gl-helper-triage.sh', import.meta.url), 'utf8');
+    const listed = (name) => ((new RegExp(`^${name}='?([0-9a-f\\n]+)'?$`, 'm').exec(sh) || [])[1] || '').split('\n').filter(Boolean);
+    const want = [...listed('GLH_SHAS'), ...listed('BD_INIT_SHA'), ...listed('BD_ULOGD_SHAS')], got = scriptHashes(sh);
+    expect('--script takes GLH_SHAS, BD_INIT_SHA and BD_ULOGD_SHAS from the script, each with answer 1 and a note', want.length >= 10 && got.map((e) => e.sha256).join() === want.join() && got.every((e) => e.answer === 1 && /^[\x20-\x7e]{10,200}$/.test(e.note)));
+    let missing = false; try { scriptHashes(sh.replace(/^BD_INIT_SHA=/m, 'XX=')); } catch { missing = true; }
+    expect('--script stops when one of the lists is missing', missing);
+    const cli = execFileSync(process.execPath, [new URL('../tools/bad-hashes-sql.mjs', import.meta.url).pathname, '--script', new URL('../../gl-helper-triage.sh', import.meta.url).pathname], { encoding: 'utf8' });
+    const y = new DatabaseSync(':memory:'); y.exec(cli);
+    expect('the command line with --script gives SQL that loads every one of them as released', y.prepare('SELECT count(*) AS n FROM bad_hashes WHERE answer = 1').get().n === want.length && y.prepare('SELECT by FROM bad_hashes LIMIT 1').get().by === 'gl-helper-triage.sh');
+    env.DB.raw.exec(cli);
+    const glh = listed('GLH_SHAS')[0], rs = await (await call('POST', q.replace(H('c'), glh), {}, '/csa-2026-01-report/lookup')).text();
+    expect('after the first fill, a file of the malware is known_bad', rs.endsWith(`${glh} known_bad\n`));
+  }
+  // ---- the generated modules match their sources (CI diffs only dashboard.js)
+  {
+    const { KNOWN_RELEASE_HASHES } = await import('../src/known.js'), { RESULT } = await import('../src/result.js');
+    const json = Object.keys(JSON.parse(readFileSync(new URL('../src/known-hashes.json', import.meta.url), 'utf8')));
+    expect('known.js holds exactly the fingerprints of known-hashes.json (run "node build.mjs")', KNOWN_RELEASE_HASHES.size === json.length && json.every((x) => KNOWN_RELEASE_HASHES.has(x)));
+    expect('result.js is result.html as it is (run "node build.mjs")', RESULT === readFileSync(new URL('../src/result.html', import.meta.url), 'utf8'));
   }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');
