@@ -1,13 +1,15 @@
 // node worker/test/run.mjs          run the tests
 // node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV in memory
-import worker, { validate, reportedTable, firstTraces, TRACE_SQL, REPORT_FIELDS, UPDATE_KEYS } from '../src/index.js';
+import worker, { validate, reportedTable, firstTraces, TRACE_SQL, REPORT_FIELDS, UPDATE_KEYS, kvMemo } from '../src/index.js';
 import { suggestionsSql } from '../tools/suggestions-sql.mjs';
 import nodeCrypto from 'node:crypto';
 import http from 'node:http';
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-const store = new Map(), meta = new Map();
+// The worker keeps KV values in memory for a minute; the tests change KV behind its back,
+// so every change makes it forget.
+const store = new (class extends Map { set(k, v) { kvMemo.clear(); return super.set(k, v); } delete(k) { kvMemo.clear(); return super.delete(k); } })(), meta = new Map();
 // D1 as the worker sees it, backed by a real SQLite database with the real schema
 function d1() {
   const db = new DatabaseSync(':memory:'); db.exec(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
@@ -472,6 +474,24 @@ if (process.argv[2] === 'serve') {
     const shKeys = (/^UPDATE_KEYS='([^']*)'$/m.exec(readFileSync(new URL('../../gl-helper-triage.sh', import.meta.url), 'utf8')) || [null, null])[1];
     expect('the worker checks signatures with the keys the script carries', shKeys !== null && shKeys.split(/\s+/).filter(Boolean).join(' ') === UPDATE_KEYS.join(' ') && (UPDATE_KEYS.length > 0 || (await sig('POST', sign(k1, v2))).status === 400));
     await env.REPORTS.put('script/csa-2026-01-fix', 'null'); await env.REPORTS.put('script/csa-2026-01-fix.sig', 'null');
+  }
+  // ---- KV read through memory, and KV that refuses reads
+  {
+    const kvRead = env.REPORTS.get; let reads = 0;
+    await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'kv', body: '#!/bin/sh\nVERSION=7.79\n', checked: Date.now() }));
+    env.REPORTS.get = async (k) => { reads++; return kvRead(k); };
+    for (let i = 0; i < 5; i++) { await call('GET', undefined, {}, '/2026-01/'); await call('GET', undefined, {}, '/csa-2026-01-fix'); await call('GET', undefined, {}, '/2026-01/reported.json'); }
+    expect('fifteen calls to the public addresses read each key from KV once', reads === 3);
+    env.REPORTS.get = async () => { throw new Error('KV GET failed: 429 Too Many Requests'); };
+    const fromMemory = await call('GET', undefined, {}, '/csa-2026-01-fix');
+    expect('when KV refuses reads, what is known stays served', fromMemory.status === 200 && (await fromMemory.text()).includes('VERSION=7.79'));
+    kvMemo.clear();
+    const scans = env.DB.prepare; let dbCalls = 0; env.DB.prepare = (sql) => { dbCalls++; return scans(sql); };
+    const gone = await call('GET', undefined, {}, '/csa-2026-01-fix'), tab = await call('GET', undefined, {}, '/2026-01/reported.json'), page = await call('GET', undefined, {}, '/2026-01/');
+    expect('with nothing known, the script download goes to GitHub', gone.status === 302 && gone.headers.get('location') === 'https://raw.githubusercontent.com/admonstrator/glinet-csa-2026-01/main/gl-helper-triage.sh');
+    expect('the reported table answers 503 rather than reading all reports on every call', tab.status === 503 && dbCalls === 0);
+    expect('the result page is still served, without a firmware list', page.status === 200 && (await page.text()).includes('const FIRMWARE = null;'));
+    env.DB.prepare = scans; env.REPORTS.get = kvRead;
   }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');

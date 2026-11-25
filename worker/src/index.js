@@ -126,6 +126,33 @@ const LATEST_KEY = 'meta/csa-2026-01-latest';
 // From KV, reports are therefore handed out 40 at a time. A D1 query is one subrequest.
 const PAGE = 40;
 const DB_PAGE = 500;
+
+// The values the public addresses need (script, firmware list, reported table) are read
+// from KV through the memory of this copy of the worker: each key at most once a minute,
+// not on every call. The free plan allows 100,000 KV reads a day, and every visitor of the
+// advisory and of the result page used to cost one or two. KV itself keeps a value up to
+// a minute at each location, so nothing gets older than it already could. When KV refuses
+// a read, the last value known here is used; with none, the read fails and the caller
+// decides what to do without it.
+export const kvMemo = new Map();
+const KV_MEMO_MS = 60_000;
+async function kvGet(env, key, fresh = false) {
+  const m = kvMemo.get(key);
+  if (m && !fresh && Date.now() - m.at < KV_MEMO_MS) return m.value;
+  try {
+    const value = await env.REPORTS.get(key);
+    kvMemo.set(key, { at: Date.now(), value });
+    return value;
+  } catch (e) {
+    if (!m) throw e;
+    m.at = Date.now(); // ask KV again in a minute
+    return m.value;
+  }
+}
+async function kvPut(env, key, value) {
+  await env.REPORTS.put(key, value);
+  kvMemo.set(key, { at: Date.now(), value });
+}
 const row = (r) => ({ id: r.id, received: r.received, report: JSON.parse(r.report) });
 const kvLoad = async (env, names) =>
   (await Promise.all(names.map(async (name) => [name, await env.REPORTS.get(name)]))).filter((x) => x[1]).map(([id, v]) => ({ id, ...JSON.parse(v) }));
@@ -420,8 +447,8 @@ async function newestCommit(errors) {
 // copy back to note the time could put an older script over a newer one stored meanwhile.
 const TRIED_KEY = 'script/csa-2026-01-fix.tried';
 async function refreshScript(env, force) {
-  const have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
-  const last = Math.max(have ? have.checked : 0, Number((await env.REPORTS.get(TRIED_KEY)) || 0));
+  const have = JSON.parse((await kvGet(env, SCRIPT_KEY, true)) || 'null');
+  const last = Math.max(have ? have.checked : 0, Number((await kvGet(env, TRIED_KEY, true)) || 0));
   if (have && !force && Date.now() - last < 600_000) return have;
   if (have && Date.now() - last < 30_000) return have;
   const errors = [];
@@ -436,13 +463,13 @@ async function refreshScript(env, force) {
       if (!body.startsWith('#!/bin/sh') || body.length < 1000 || body.length > 500_000) throw new Error(`file: not the script (${body.length} characters)`);
     }
     const next = { commit, body, checked: Date.now() };
-    await env.REPORTS.put(SCRIPT_KEY, JSON.stringify(next));
+    await kvPut(env, SCRIPT_KEY, JSON.stringify(next));
     return next;
   } catch (e) {
     // GitHub not reachable or rate limited: keep what there is, try again in half a minute,
     // and say why to whoever asked for the refresh
     errors.push(String((e && e.message) || e));
-    try { await env.REPORTS.put(TRIED_KEY, String(Date.now() - 570_000)); } catch { /* the next call tries again */ }
+    try { await kvPut(env, TRIED_KEY, String(Date.now() - 570_000)); } catch { /* the next call tries again */ }
     return have ? { ...have, error: errors.join('; ').replace(/[^\x20-\x7e]/g, '?').slice(0, 300) } : null;
   }
 }
@@ -456,7 +483,9 @@ async function script(request, env, ctx, pathname) {
     return new Response(now.commit + '\n', { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...(now.error ? { 'x-refresh-error': now.error } : {}) } });
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
-  let have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
+  let have;
+  // KV refuses and nothing is known here: GitHub serves the script, a few minutes behind at most
+  try { have = JSON.parse((await kvGet(env, SCRIPT_KEY)) || 'null'); } catch { return Response.redirect(RAW_MAIN, 302); }
   if (!have) have = await refreshScript(env, true);
   else if (Date.now() - have.checked > 600_000) ctx.waitUntil(refreshScript(env, false));
   // nothing stored and GitHub not reachable from here: send the client to GitHub itself
@@ -498,18 +527,18 @@ async function signatureFits(env, sigText, body) {
   return false;
 }
 async function signature(request, env) {
-  let have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
+  let have = JSON.parse((await kvGet(env, SCRIPT_KEY, true)) || 'null');
   if (request.method === 'POST') {
     const sigText = (await request.text()).slice(0, 1024);
     // the signature may be for a version this worker has not fetched yet
     if (!have || !(await signatureFits(env, sigText, have.body))) have = await refreshScript(env, true);
     if (!have) return text('could not reach GitHub', 502);
     if (!(await signatureFits(env, sigText, have.body))) return text('this signature does not fit the script served now', 400);
-    await env.REPORTS.put(SIG_KEY, JSON.stringify({ sha: await sha256hex(have.body), sig: sigText }));
+    await kvPut(env, SIG_KEY, JSON.stringify({ sha: await sha256hex(have.body), sig: sigText }));
     return text(have.commit);
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
-  const kept = JSON.parse((await env.REPORTS.get(SIG_KEY)) || 'null');
+  const kept = JSON.parse((await kvGet(env, SIG_KEY, true)) || 'null');
   if (!have || !kept || kept.sha !== (await sha256hex(have.body))) return text('no signature for the script served now', 404);
   return new Response(request.method === 'HEAD' ? null : kept.sig, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'access-control-allow-origin': '*' } });
 }
@@ -541,16 +570,19 @@ async function refreshFirmware(env, have) {
     if (Object.keys(models).length < 5) throw new Error('too few models');
     const stamp = new Date(res.headers.get('last-modified') || Date.now()), asof = isNaN(stamp) ? '' : stamp.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
     const next = { checked: Date.now(), asof, models };
-    await env.REPORTS.put(FIRMWARE_KEY, JSON.stringify(next));
+    await kvPut(env, FIRMWARE_KEY, JSON.stringify(next));
     return next;
   } catch {
-    if (have) await env.REPORTS.put(FIRMWARE_KEY, JSON.stringify({ ...have, checked: Date.now() - 3000_000 }));
+    if (have) await kvPut(env, FIRMWARE_KEY, JSON.stringify({ ...have, checked: Date.now() - 3000_000 }));
     return have;
   }
 }
+// When KV refuses and nothing is known here, this fails: no list, rather than the archive
+// asked and the list written on every call.
 async function firmwareList(env, ctx) {
+  const raw = await kvGet(env, FIRMWARE_KEY);
   let have = null;
-  try { have = JSON.parse((await env.REPORTS.get(FIRMWARE_KEY)) || 'null'); } catch { have = null; }
+  try { have = JSON.parse(raw || 'null'); } catch { have = null; }
   if (!have) return refreshFirmware(env, null);
   if (Date.now() - have.checked > 3600_000) ctx.waitUntil(refreshFirmware(env, have));
   return have;
@@ -560,7 +592,7 @@ async function resultPage(request, env, ctx) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
   let current = '';
   try {
-    const have = JSON.parse((await env.REPORTS.get(SCRIPT_KEY)) || 'null');
+    const have = JSON.parse((await kvGet(env, SCRIPT_KEY)) || 'null');
     current = ((have && /^VERSION=(\d{1,2}\.\d{1,3})$/m.exec(have.body)) || [])[1] || '';
   } catch { /* not known: the page then says nothing about versions */ }
   let fw = null;
@@ -663,8 +695,10 @@ async function refreshReported(env, ctx, have) {
     const fw = await firmwareList(env, ctx);
     if (!fw || !fw.models) throw new Error('no firmware list');
     const rules = await sha256hex([attackTrace, firstTraces, NOT_TRACE, ATTACK_DAY, TRACE_SQL].join('\n'));
+    // when KV refuses, this throws: better to wait than to read all reports on every call
+    const keptRaw = await env.REPORTS.get(REPORTED_DEVICES_KEY);
     let kept = null;
-    try { kept = JSON.parse((await env.REPORTS.get(REPORTED_DEVICES_KEY)) || 'null'); } catch { kept = null; }
+    try { kept = JSON.parse(keptRaw || 'null'); } catch { kept = null; }
     const again = !kept || kept.rules !== rules || !(Date.parse(kept.upto) > 0) || !Array.isArray(kept.devices);
     const first = new Map(again ? [] : kept.devices.map(([dev, platform, model, firmware]) => [dev, { platform, model, firmware }]));
     // the newest report now, read from the index: one row
@@ -675,11 +709,11 @@ async function refreshReported(env, ctx, have) {
     firstTraces(results, first);
     if (again || upto !== kept.upto) await env.REPORTS.put(REPORTED_DEVICES_KEY, JSON.stringify({ rules, upto, devices: [...first].map(([dev, d]) => [dev, d.platform, d.model, d.firmware]) }));
     const next = { checked: Date.now(), body: { advisory: 'CSA-2026-01', as_of: new Date().toISOString().slice(0, 16) + 'Z', min_devices: REPORTED_MIN, models: reportedTable(first, fw.models) } };
-    await env.REPORTS.put(REPORTED_KEY, JSON.stringify(next));
+    await kvPut(env, REPORTED_KEY, JSON.stringify(next));
     return next;
   } catch {
     // keep what there is, and try again in a few minutes rather than on every call
-    if (have) await env.REPORTS.put(REPORTED_KEY, JSON.stringify({ ...have, checked: Date.now() - REPORTED_EVERY + 180_000 }));
+    if (have) await kvPut(env, REPORTED_KEY, JSON.stringify({ ...have, checked: Date.now() - REPORTED_EVERY + 180_000 }));
     return have || null;
   }
 }
@@ -687,8 +721,11 @@ async function refreshReported(env, ctx, have) {
 async function reported(request, env, ctx) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
   if (!env.DB) return text('not available', 503);
+  let raw;
+  // KV refuses and nothing is known here: no answer, and the advisory shows its own table
+  try { raw = await kvGet(env, REPORTED_KEY); } catch { return text('not available', 503); }
   let have = null;
-  try { have = JSON.parse((await env.REPORTS.get(REPORTED_KEY)) || 'null'); } catch { have = null; }
+  try { have = JSON.parse(raw || 'null'); } catch { have = null; }
   if (!have) have = await refreshReported(env, ctx, null);
   else if (Date.now() - have.checked > REPORTED_EVERY) ctx.waitUntil(refreshReported(env, ctx, have));
   if (!have) return text('not available', 503);
