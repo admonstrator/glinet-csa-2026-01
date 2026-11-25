@@ -503,6 +503,22 @@ reports have been read. When the rules for a trace change in the code, or that e
 missing, the next run reads all reports once. To force that, delete the entry:
 `npx wrangler kv key delete --remote --binding REPORTS reported/csa-2026-01-devices`.
 
+## Version and table for the pages on gl-i.net
+
+`https://csa.gl-i.net/2026-01/live.json` gives what the advisory and the fix guide show
+between two builds, in one small answer: the version of the script served now with its
+release time, and the table above. A reader's browser asks for it once per page, instead
+of fetching the whole script for its version and the table in a second call.
+
+```json
+{ "script": { "version": "2.55", "released": "2026-11-24T14:41:00Z" },
+  "reported": { "advisory": "CSA-2026-01", "as_of": "2026-11-25T08:22Z", "min_devices": 5, "models": [] } }
+```
+
+It takes nothing in: GET and HEAD only, parameters, headers and bodies are not read, and
+it answers the same to everyone. A part that is not known is `null`. Browsers may keep it
+for a minute. Deploy the worker before the website uses the address.
+
 ## Known release files
 
 `src/known-hashes.json` lists the SHA-256 of every binary in the releases of the

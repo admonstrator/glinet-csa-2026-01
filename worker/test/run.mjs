@@ -446,6 +446,20 @@ if (process.argv[2] === 'serve') {
     store.set('reported/csa-2026-01-devices', JSON.stringify({ ...devices(), rules: 'older rules' })); await stale();
     expect('when the rules change, all reports are read again', (await (await tab()).text()).includes('"firmware":["4.8.2","4.10.0"]'));
     expect('the table cannot be written to', (await worker.fetch(new Request('https://csa.example.org/2026-01/reported.json', { method: 'POST', body: '{}' }), env, { waitUntil() {} })).status === 405);
+    // ---- live.json: the version of the script and the table, for the pages on gl-i.net
+    {
+      const live = (path = '/2026-01/live.json', init) => worker.fetch(new Request('https://csa.example.org' + path, init), env, { waitUntil() {} });
+      await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'lv', body: "#!/bin/sh\nVERSION=7.80\nRELEASED='2026-11-25 08:41 UTC'\n", checked: Date.now() }));
+      const r = await live(), raw = await r.text(), j = JSON.parse(raw), table = await (await tab()).json();
+      expect('live.json gives the version, its release time and the reported table in one answer', r.status === 200 && Object.keys(j).join() === 'script,reported' && j.script.version === '7.80' && j.script.released === '2026-11-25T08:41:00Z' && JSON.stringify(j.reported) === JSON.stringify(table));
+      expect('any page may read it, it is kept a minute and read as JSON only', r.headers.get('access-control-allow-origin') === '*' && r.headers.get('cache-control') === 'public, max-age=60' && r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('content-type').startsWith('application/json'));
+      const odd = await (await live('/2026-01/live.json?script=<b>&reported=1', { headers: { cookie: 'x=<b>', 'x-forwarded-for': '<b>' } })).text();
+      expect('live.json takes nothing from the request: parameters and headers change nothing', odd === raw);
+      expect('nothing can be sent to it', (await live('/2026-01/live.json', { method: 'POST', body: '{"script":1}' })).status === 405 && (await live('/2026-01/live.json', { method: 'PUT', body: 'x' })).status === 405 && (await live('/2026-01/live.json', { method: 'DELETE' })).status === 405);
+      await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'lv', body: '#!/bin/sh\nVERSION=<b>\n', checked: Date.now() }));
+      expect('a version of an odd shape is not handed on', JSON.parse(await (await live()).text()).script === null);
+      await env.REPORTS.put('script/csa-2026-01-fix', 'null');
+    }
     const kvm = (v, i) => ({ dev: 'k' + v + i, platform: 'glkvm-RM1', model: 'rm1', firmware: 'V' + v + ' release1', ioc: 1, findings: ['process implant'] });
     const rows = [...[0, 1, 2, 3, 4].map((i) => kvm('1.10.1', i)), ...[0, 1, 2, 3, 4].map((i) => kvm('1.10.3', i))];
     const k = reportedTable(firstTraces(rows), { rm1: { r: ['1.10.3', '2026-11-22'] } });

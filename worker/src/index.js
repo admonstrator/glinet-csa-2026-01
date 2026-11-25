@@ -588,12 +588,20 @@ async function firmwareList(env, ctx) {
   return have;
 }
 
+// The version of a stored script and its release time ("2026-11-24T14:41:00Z", or ''), from
+// its VERSION= and RELEASED= lines; null when there is none.
+function servedVersion(have) {
+  const v = have && /^VERSION=(\d{1,2}\.\d{1,3})$/m.exec(have.body);
+  if (!v) return null;
+  const d = /^RELEASED='(\d{4}-\d\d-\d\d) (\d\d:\d\d) UTC'$/m.exec(have.body);
+  return { version: v[1], released: d ? `${d[1]}T${d[2]}:00Z` : '' };
+}
+
 async function resultPage(request, env, ctx) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
   let current = '';
   try {
-    const have = JSON.parse((await kvGet(env, SCRIPT_KEY)) || 'null');
-    current = ((have && /^VERSION=(\d{1,2}\.\d{1,3})$/m.exec(have.body)) || [])[1] || '';
+    current = (servedVersion(JSON.parse((await kvGet(env, SCRIPT_KEY)) || 'null')) || {}).version || '';
   } catch { /* not known: the page then says nothing about versions */ }
   let fw = null;
   try { fw = await firmwareList(env, ctx); } catch { fw = null; }
@@ -718,20 +726,40 @@ async function refreshReported(env, ctx, have) {
   }
 }
 
-async function reported(request, env, ctx) {
-  if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
-  if (!env.DB) return text('not available', 503);
+// The table as kept, worked out again behind the answer once it is older than a quarter of
+// an hour. null without the database, or when KV refuses and nothing is known here: then
+// the advisory shows its own table.
+async function reportedNow(env, ctx) {
+  if (!env.DB) return null;
   let raw;
-  // KV refuses and nothing is known here: no answer, and the advisory shows its own table
-  try { raw = await kvGet(env, REPORTED_KEY); } catch { return text('not available', 503); }
+  try { raw = await kvGet(env, REPORTED_KEY); } catch { return null; }
   let have = null;
   try { have = JSON.parse(raw || 'null'); } catch { have = null; }
   if (!have) have = await refreshReported(env, ctx, null);
   else if (Date.now() - have.checked > REPORTED_EVERY) ctx.waitUntil(refreshReported(env, ctx, have));
-  if (!have) return text('not available', 503);
-  return new Response(request.method === 'HEAD' ? null : JSON.stringify(have.body) + '\n', {
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*', 'x-content-type-options': 'nosniff' },
+  return have ? have.body : null;
+}
+
+const openJson = (request, body, maxAge) =>
+  new Response(request.method === 'HEAD' ? null : JSON.stringify(body) + '\n', {
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': `public, max-age=${maxAge}`, 'access-control-allow-origin': '*', 'x-content-type-options': 'nosniff' },
   });
+
+async function reported(request, env, ctx) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
+  const body = await reportedNow(env, ctx);
+  return body ? openJson(request, body, 300) : text('not available', 503);
+}
+
+// For the advisory and the fix guide on gl-i.net: the version of the script served now
+// and its release time, with the reported table, in one small answer. Before, a reader's
+// browser fetched the whole script for its version and the table in a second call. Read
+// from memory and KV like the rest; a part that is not known is null.
+async function live(request, env, ctx) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
+  let script = null;
+  try { script = servedVersion(JSON.parse((await kvGet(env, SCRIPT_KEY)) || 'null')); } catch { script = null; }
+  return openJson(request, { script, reported: await reportedNow(env, ctx) }, 60);
 }
 
 export default {
@@ -742,6 +770,8 @@ export default {
     if (pathname === '/2026-01/') return resultPage(request, env, ctx);
     // the table for the advisory: models and firmware versions with traces, by the reports
     if (pathname === '/2026-01/reported.json') return reported(request, env, ctx);
+    // the version of the script and the table, for the pages on gl-i.net
+    if (pathname === '/2026-01/live.json') return live(request, env, ctx);
     if (/^\/(csa-)?2026-01\/?$/.test(pathname)) return Response.redirect(new URL('/2026-01/', request.url).href, 302);
     // On csa.gl-i.net the page is also the front door: csa.gl-i.net/#AA006011D is what the
     // script prints. A code typed without the "#" arrives as the path; the page then moves
