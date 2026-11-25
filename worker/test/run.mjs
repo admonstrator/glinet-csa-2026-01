@@ -1,6 +1,6 @@
 // node worker/test/run.mjs          run the tests
 // node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV in memory
-import worker, { validate, reportedTable, REPORT_FIELDS, UPDATE_KEYS } from '../src/index.js';
+import worker, { validate, reportedTable, firstTraces, TRACE_SQL, REPORT_FIELDS, UPDATE_KEYS } from '../src/index.js';
 import { suggestionsSql } from '../tools/suggestions-sql.mjs';
 import nodeCrypto from 'node:crypto';
 import http from 'node:http';
@@ -427,15 +427,26 @@ if (process.argv[2] === 'serve') {
     expect('unknown models, the older backdoor alone, odd versions and firmware built after the attack stay out', !/zz9|4\.7\.13|4\.12\.0|script|4\.6\.0/.test(raw1));
     expect('a device counts for the firmware of its first report with traces', !raw1.includes('4.9.9'));
     expect('the table holds nothing but model, kind and versions', Object.keys(t1).join() === 'advisory,as_of,min_devices,models' && Object.keys(t1.models[0]).join() === 'model,sku,kind,firmware' && !/a0|rep00/.test(raw1));
-    rep('b4', { model: 'be9300', firmware: '4.10.1' });
+    const devices = () => JSON.parse(store.get('reported/csa-2026-01-devices'));
+    const upto = devices().upto;
+    expect('it keeps the first report with traces of each device and how far it has read', /^[0-9a-f]{64}$/.test(devices().rules) && upto === env.DB.raw.prepare('SELECT max(received) AS m FROM reports').get().m && devices().devices.some((d) => d.join() === 'a0,openwrt,mt6000,4.8.3 release2 build 540 2026-10-02'));
+    // stored a moment after a later report: the overlap still catches it
+    rep('b4', { model: 'be9300', firmware: '4.10.1' }, new Date(Date.parse(upto) - 60_000).toISOString());
     expect('the table is kept: a new report does not change it at once', !(await (await tab()).text()).includes('be9300'));
-    const kept = JSON.parse(store.get('reported/csa-2026-01')); store.set('reported/csa-2026-01', JSON.stringify({ ...kept, checked: 0 }));
-    let later; const stale = await (await tab({ waitUntil(p) { later = p; } })).text(); await later;
-    expect('after a quarter of an hour it is worked out again, behind the answer', !stale.includes('be9300') && (await (await tab()).text()).includes('"sku":"GL-BE9300","kind":"Router","firmware":["4.10.1"]'));
+    const stale = async () => { const kept = JSON.parse(store.get('reported/csa-2026-01')); store.set('reported/csa-2026-01', JSON.stringify({ ...kept, checked: 0 })); let later; const t = await (await tab({ waitUntil(p) { later = p; } })).text(); await later; return t; };
+    expect('after a quarter of an hour it is worked out again, behind the answer', !(await stale()).includes('be9300') && (await (await tab()).text()).includes('"sku":"GL-BE9300","kind":"Router","firmware":["4.10.1"]'));
+    const plan = env.DB.raw.prepare('EXPLAIN QUERY PLAN ' + TRACE_SQL).all('a', 'b').map((r) => r.detail).join();
+    expect('it reads the reports through the index on the time of receipt', /^SEARCH reports USING INDEX reports_received \(received>\? AND received<\?\)$/.test(plan));
+    // the older reports are not read again: a change to them shows only once the rules change
+    env.DB.raw.exec("UPDATE reports SET report = json_set(report, '$.ioc', 0, '$.findings', json('[]')) WHERE json_extract(report, '$.device_id') LIKE 'a_'");
+    await stale();
+    expect('a later run reads only the reports received since', (await (await tab()).text()).includes('"firmware":["4.8.2","4.8.3","4.10.0"]'));
+    store.set('reported/csa-2026-01-devices', JSON.stringify({ ...devices(), rules: 'older rules' })); await stale();
+    expect('when the rules change, all reports are read again', (await (await tab()).text()).includes('"firmware":["4.8.2","4.10.0"]'));
     expect('the table cannot be written to', (await worker.fetch(new Request('https://csa.example.org/2026-01/reported.json', { method: 'POST', body: '{}' }), env, { waitUntil() {} })).status === 405);
     const kvm = (v, i) => ({ dev: 'k' + v + i, platform: 'glkvm-RM1', model: 'rm1', firmware: 'V' + v + ' release1', ioc: 1, findings: ['process implant'] });
     const rows = [...[0, 1, 2, 3, 4].map((i) => kvm('1.10.1', i)), ...[0, 1, 2, 3, 4].map((i) => kvm('1.10.3', i))];
-    const k = reportedTable(rows, { rm1: { r: ['1.10.3', '2026-11-22'] } });
+    const k = reportedTable(firstTraces(rows), { rm1: { r: ['1.10.3', '2026-11-22'] } });
     expect('where the report gives no build day, the archive does: a release from after the attack stays out', k.length === 1 && k[0].kind === 'KVM' && k[0].sku === 'GL-RM1' && k[0].firmware.join() === '1.10.1');
   }
   // every report these tests posted: what the worker took, the schema must let through

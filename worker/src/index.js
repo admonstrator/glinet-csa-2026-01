@@ -302,6 +302,8 @@ async function migrate(request, env) {
   const items = await kvLoad(env, page.keys.map((k) => k.name));
   const insert = env.DB.prepare('INSERT OR IGNORE INTO reports (id, received, report) VALUES (?1, ?2, ?3)');
   if (items.length) await env.DB.batch(items.map((x) => insert.bind(x.id, x.received, JSON.stringify(x.report))));
+  // older reports came in: the reported table reads them all again
+  if (items.length) await env.REPORTS.put(REPORTED_DEVICES_KEY, 'null');
   const total = await env.DB.prepare('SELECT count(*) AS n FROM reports').first('n');
   return new Response(JSON.stringify({ copied: items.length, in_database: total, cursor: page.list_complete ? '' : page.cursor }) + '\n', {
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
@@ -594,6 +596,13 @@ async function resultPage(request, env, ctx) {
 // script that sent the report did not know it yet.
 // Worked out at most every 15 minutes and kept in KV in between.
 const REPORTED_KEY = 'reported/csa-2026-01';
+// Which device had its first report with traces on which firmware, and up to which time of
+// receipt the reports have been read, kept in KV apart from the table. Each run then reads
+// only the reports received since, through the index on "received", not all of them. Two
+// minutes of overlap catch a report stored a moment after a later one. When the rules
+// below change, or the copy is missing, all reports are read once more.
+const REPORTED_DEVICES_KEY = 'reported/csa-2026-01-devices';
+const REPORTED_OVERLAP = 120_000;
 const REPORTED_MIN = 5;
 const REPORTED_EVERY = 900_000;
 const ATTACK_DAY = '2026-11-20';
@@ -608,13 +617,17 @@ function attackTrace(r) {
   return r.platform === 'openwrt' && r.astrowarp !== 'on' && (r.state_file_size == null || r.state_file_size === 0) && at >= Date.parse(ATTACK_DAY);
 }
 
-// rows: one per report, oldest first. fw: the models of the firmware list.
-export function reportedTable(rows, fw, min = REPORTED_MIN) {
-  const first = new Map();
+// rows: one per report, oldest first. Adds each device's first report with traces to "first".
+export function firstTraces(rows, first = new Map()) {
   for (const r of rows) {
     if (typeof r.dev !== 'string' || !r.dev || first.has(r.dev) || !attackTrace(r)) continue;
-    first.set(r.dev, r);
+    first.set(r.dev, { platform: r.platform, model: r.model, firmware: r.firmware });
   }
+  return first;
+}
+
+// first: as firstTraces gives it. fw: the models of the firmware list.
+export function reportedTable(first, fw, min = REPORTED_MIN) {
   const cells = new Map();
   for (const [dev, r] of first) {
     const kind = r.platform === 'openwrt' ? 'Router' : String(r.platform).startsWith('glkvm') ? 'KVM' : '';
@@ -638,19 +651,30 @@ export function reportedTable(rows, fw, min = REPORTED_MIN) {
   return [...models.values()].sort((a, b) => (a.model < b.model ? -1 : 1)).map((m) => ({ ...m, firmware: m.firmware.sort((a, b) => (verKey(a) < verKey(b) ? -1 : 1)) }));
 }
 
+// only what the table needs, and only reports that can count, received in (?1, ?2]
+const xj = (f) => `json_extract(report, '$.${f}')`;
+export const TRACE_SQL =
+  `SELECT ${xj('device_id')} AS dev, ${xj('model')} AS model, ${xj('firmware')} AS firmware, ${xj('platform')} AS platform, ${xj('ioc')} AS ioc, ${xj('findings')} AS findings, ` +
+  `${xj('astrowarp')} AS astrowarp, ${xj('state_file_size')} AS state_file_size, ${xj('state_file_time')} AS state_file_time FROM reports ` +
+  `WHERE received > ?1 AND received <= ?2 AND ${xj('device_id')} != '' AND (${xj('ioc')} > 0 OR ${xj('state_file_time')} != '') ORDER BY received, id`;
+
 async function refreshReported(env, ctx, have) {
   try {
     const fw = await firmwareList(env, ctx);
     if (!fw || !fw.models) throw new Error('no firmware list');
-    const x = (f) => `json_extract(report, '$.${f}')`;
-    // only what the table needs, and only reports that can count
-    const { results } = await env.DB.prepare(
-      `SELECT ${x('device_id')} AS dev, ${x('model')} AS model, ${x('firmware')} AS firmware, ${x('platform')} AS platform, ${x('ioc')} AS ioc, ${x('findings')} AS findings, ` +
-        `${x('astrowarp')} AS astrowarp, ${x('state_file_size')} AS state_file_size, ${x('state_file_time')} AS state_file_time FROM reports ` +
-        `WHERE ${x('device_id')} != '' AND (${x('ioc')} > 0 OR ${x('state_file_time')} != '') ORDER BY received, id`,
-    ).all();
+    const rules = await sha256hex([attackTrace, firstTraces, NOT_TRACE, ATTACK_DAY, TRACE_SQL].join('\n'));
+    let kept = null;
+    try { kept = JSON.parse((await env.REPORTS.get(REPORTED_DEVICES_KEY)) || 'null'); } catch { kept = null; }
+    const again = !kept || kept.rules !== rules || !(Date.parse(kept.upto) > 0) || !Array.isArray(kept.devices);
+    const first = new Map(again ? [] : kept.devices.map(([dev, platform, model, firmware]) => [dev, { platform, model, firmware }]));
+    // the newest report now, read from the index: one row
+    const upto = (await env.DB.prepare('SELECT max(received) AS latest FROM reports').first('latest')) || '';
+    const from = again ? '' : new Date(Date.parse(kept.upto) - REPORTED_OVERLAP).toISOString();
+    const { results } = await env.DB.prepare(TRACE_SQL).bind(from, upto).all();
     for (const r of results) { try { r.findings = JSON.parse(r.findings || '[]'); } catch { r.findings = []; } }
-    const next = { checked: Date.now(), body: { advisory: 'CSA-2026-01', as_of: new Date().toISOString().slice(0, 16) + 'Z', min_devices: REPORTED_MIN, models: reportedTable(results, fw.models) } };
+    firstTraces(results, first);
+    if (again || upto !== kept.upto) await env.REPORTS.put(REPORTED_DEVICES_KEY, JSON.stringify({ rules, upto, devices: [...first].map(([dev, d]) => [dev, d.platform, d.model, d.firmware]) }));
+    const next = { checked: Date.now(), body: { advisory: 'CSA-2026-01', as_of: new Date().toISOString().slice(0, 16) + 'Z', min_devices: REPORTED_MIN, models: reportedTable(first, fw.models) } };
     await env.REPORTS.put(REPORTED_KEY, JSON.stringify(next));
     return next;
   } catch {

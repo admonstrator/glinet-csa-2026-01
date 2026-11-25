@@ -490,6 +490,13 @@ The list says nothing per device or per report, and no numbers. It is worked out
 every 15 minutes and kept in KV in between. It needs the reports in D1; without the
 database the address answers 503, and the advisory shows its own table alone.
 
+Each run reads only the reports received since the last one (with two minutes of
+overlap), through the index on `received`. Which device had its first report with traces
+on which firmware is kept in KV under `reported/csa-2026-01-devices`, with how far the
+reports have been read. When the rules for a trace change in the code, or that entry is
+missing, the next run reads all reports once. To force that, delete the entry:
+`npx wrangler kv key delete --remote --binding REPORTS reported/csa-2026-01-devices`.
+
 ## Known release files
 
 `src/known-hashes.json` lists the SHA-256 of every binary in the releases of the
