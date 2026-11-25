@@ -6,7 +6,10 @@
 name = "csa-2026-01-report"
 main = "src/index.js"
 compatibility_date = "2026-11-01"
-workers_dev = true
+# Off: the worker answers only on its own addresses in the gl-i.net zone, where the
+# Cloudflare rules (rate limit) apply. The workers.dev address would skip them.
+workers_dev = false
+preview_urls = false
 
 # Keep the sender out of the logs as well.
 [observability]

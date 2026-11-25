@@ -33,7 +33,8 @@ Older wrangler versions spell the command `kv:namespace create`.
 npx wrangler deploy
 ```
 
-This prints the worker's address, `https://csa-2026-01-report.<your-subdomain>.workers.dev`.
+With `workers_dev = false`, as in the template, the worker has no address yet; it gets
+one in the next section.
 
 ```bash
 npx wrangler secret put EXPORT_TOKEN
@@ -53,8 +54,9 @@ and deploy again:
 routes = [{ pattern = "app.gl-i.net/csa-2026-01-report*", zone_name = "gl-i.net" }]
 ```
 
-If `app.gl-i.net` is not behind Cloudflare, use the `workers.dev` address and change
-`REPORT_URL` in `gl-helper-triage.sh`.
+If `app.gl-i.net` is not behind Cloudflare, set `workers_dev = true`, use the
+`workers.dev` address and change `REPORT_URL` in `gl-helper-triage.sh`. The rules of the
+zone (see "Protect it") do not apply to that address.
 
 ## Check it
 
@@ -357,9 +359,21 @@ the table. The names of the menus in the Cloudflare dashboard change now and the
 
 ## Protect it
 
-Anyone can send made-up reports; the worker only checks their shape and size (4 KB). In
-the Cloudflare dashboard, add a rate limiting rule for the path
-`/csa-2026-01-report`, for example 10 requests per minute per IP address.
+Anyone can send made-up reports; the worker only checks their shape and size (48 KiB).
+The spending limit for Workers ends every call once it is reached, and with it every KV
+and D1 access, but it does not count KV and D1 themselves. Two settings keep made-up
+calls from costing anything:
+
+- A rate limiting rule in the `gl-i.net` zone (Security, WAF, Rate limiting rules),
+  counted per IP address, for the paths where every call reaches KV or D1:
+  `/csa-2026-01-report`, `/csa-2026-01-fix.sig` and `/csa-2026-01-fix/refresh`. On the
+  Free plan of the zone a rule can match only the path, counts over 10 seconds and
+  blocks for 10 seconds; 3 requests per 10 seconds leave room for the script and for the
+  publish workflow, which calls every 35 seconds. The worker takes reports only at
+  `/csa-2026-01-report`; a POST to any other address stores nothing, so that one path
+  covers them all.
+- `workers_dev = false` and `preview_urls = false` in `wrangler.toml`: the rules of the
+  zone apply only to its own addresses, and the `workers.dev` address would skip them.
 
 ## Schema validation in front of the worker
 

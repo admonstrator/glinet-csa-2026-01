@@ -192,6 +192,12 @@ if (process.argv[2] === 'serve') {
   expect('a report cannot be posted to the script address', (await worker.fetch(new Request('https://example.org/csa-2026-01-fix', { method: 'POST', body: JSON.stringify(good) }), env, ctx)).status === 405);
   expect('the stored script is not listed as a report', !(await (await call('GET', undefined, { authorization: 'Bearer test-token' }, '/csa-2026-01-report/export')).text()).includes('#!/bin/sh'));
   expect('reports still work', (await call('POST', JSON.stringify(good))).status === 200);
+  {
+    const before = store.size;
+    const elsewhere = await Promise.all(['/', '/x', '/csa-2026-01-report/x', '/csa-2026-01-reports', '/2026-01/'].map((p) => call('POST', JSON.stringify(good), {}, p)));
+    expect('a report sent to any other address is refused and not stored', elsewhere.every((r) => r.status === 405) && store.size === before);
+    expect('the report address with a trailing slash still works', (await call('POST', JSON.stringify(good), {}, '/csa-2026-01-report/')).status === 200);
+  }
   globalThis.fetch = before;
 
   // device id (schema 4)

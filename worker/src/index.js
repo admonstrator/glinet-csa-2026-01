@@ -785,7 +785,10 @@ export default {
       return migrate(request, env);
     }
     if (pathname.endsWith('/dashboard/labels') && (request.method === 'GET' || request.method === 'POST')) return dashboard(request, env, 'labels');
-    if (request.method === 'POST') return submit(request, env);
+    // Reports are taken only at the address the script sends to. A POST anywhere else stores
+    // nothing, so a rate limit on this one path (a Cloudflare rule, ahead of the worker)
+    // covers every way in.
+    if (request.method === 'POST' && /^\/csa-2026-01-report\/?$/.test(pathname)) return submit(request, env);
     if (request.method === 'GET' && pathname.endsWith('/export')) return exportReports(request, env);
     if (request.method === 'GET' && /\/dashboard\/?$/.test(pathname)) return dashboard(request, env, false);
     if (request.method === 'GET' && pathname.endsWith('/dashboard/data')) return dashboard(request, env, true);
