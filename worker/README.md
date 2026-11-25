@@ -81,6 +81,12 @@ gets all reports with a few queries instead of one read per report. The worker u
 as soon as a database is bound as `DB`, and KV until then. The KV namespace stays: the
 script download keeps its copy there.
 
+The free plan also allows 100,000 KV reads and 100,000 calls of the worker a day. The
+script, the firmware list and the reported table are therefore read through the memory
+of the worker, each key at most once a minute. When KV refuses reads anyway, the script
+download sends the client to GitHub, `reported.json` answers 503 and the result page
+goes without the firmware list. Against the limit on calls only the paid plan helps.
+
 1. Create the database. The command prints a `database_id`.
 
    ```bash
