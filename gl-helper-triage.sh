@@ -3819,6 +3819,8 @@ lookup() {
 	say "   Asking the community list (at most 25 seconds, Ctrl-C stops it) ..."
 	lookup_send; rc=$?
 	trap 'exit 4' INT
+	# Ctrl-C after the tool ended counts as well: the request did go out
+	[ "$LOOKUP_STOP" = 1 ] && { [ "$rc" = 0 ] || [ "$rc" = 1 ]; } && rc=3
 	if [ "$rc" = 3 ]; then
 		say "   ${YEL}Stopped (Ctrl-C). Nothing changed.${N}"
 		lookup_txt "Stopped with Ctrl-C while waiting for the answer. Nothing changed." sent

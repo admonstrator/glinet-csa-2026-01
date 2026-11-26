@@ -2037,6 +2037,13 @@ EOF
 	PATH="$K/fakessh:$PATH" bash "$(dirname "$T")/triage-remote.sh" --fix --lookup -o "$K/ev" root@dev >"$K/remote3.txt" 2>&1; rc=$?
 	expect "triage-remote.sh --fix --lookup with a trace --fix leaves: incomplete, with what to do" '[ $rc = 3 ] && grep -q "Also: the attack reached this device" "$K/remote3.txt" && grep -q "fix does not remove the file the community list knows as malware: reinstall the firmware" "$K/remote3.txt" && grep -q "remediation incomplete" "$K/remote3.txt" && ! grep -q "fix exited with" "$K/remote3.txt"'
 	rm -f "$KL/etc/mp_ip_mapping_info"; rm -rf "${K:?}/ev" "${KL:?}"/tmp/gl-triage-*
+	# the connection drops during --fix: ssh's 255 becomes 4, an error, with what to do
+	mkdir -p "$K/dropssh"
+	printf '#!/bin/bash\ncase "${!#}" in *--fix*) exit 255 ;; esac\nexec "%s/fakessh/ssh" "$@"\n' "$K" >"$K/dropssh/ssh"
+	chmod +x "$K/dropssh/ssh"
+	PATH="$K/dropssh:$PATH" bash "$(dirname "$T")/triage-remote.sh" --fix --lookup -o "$K/ev" root@dev >"$K/remote4.txt" 2>&1; rc=$?
+	expect "triage-remote.sh: a connection that drops during --fix ends as 4, with what to do" '[ $rc = 4 ] && grep -q "fix exited with 4" "$K/remote4.txt" && grep -q "reinstall the firmware" "$K/remote4.txt"'
+	rm -rf "${K:?}/ev" "${KL:?}"/tmp/gl-triage-*
 	lk --lookup --show-report >"$K/rep.txt"
 	expect "the report knows nothing of the check" 'grep -q "Verdict: INFECTED - a file listed" "$K/rep.txt" && grep -q "^   \"ioc\": 0,$" "$K/rep.txt" && ! sed -n "/^== Anonymous report/,\$p" "$K/rep.txt" | grep -q lookup'
 	# On a terminal it asks. The terminal comes from script(1), where it works here.
@@ -2086,12 +2093,12 @@ EOF
 		# Ctrl-C while it waits for the answer stops the check, and the result still comes
 		kmode dribble; n0=$(nreq); t0=$(date +%s)
 		python3 "$K/drive.py" "$KL" "$KURL" 'Ctrl-C stops it' --lookup >"$K/intr2.txt" 2>/dev/null; t1=$(date +%s)
-		# Ctrl-C at once after the line that offers it: still only the check stops
+		expect "Ctrl-C while waiting for the answer: stopped at once, nothing changed, the run goes on to its result" '[ "$(nreq)" = "$((n0 + 1))" ] && [ $((t1 - t0)) -lt 20 ] && grep -q "Stopped (Ctrl-C). Nothing changed." "$K/intr2.txt" && ! grep -q "No answer from the community list" "$K/intr2.txt" && grep -q "Verdict:" "$K/intr2.txt" && grep -q "^RC=0$" "$K/intr2.txt"'
 		kmode dribble
+		# Ctrl-C at once after the line that offers it: still only the check stops
 		DRIVE_DELAY=0 python3 "$K/drive.py" "$KL" "$KURL" 'Ctrl-C stops it' --lookup >"$K/intr3.txt" 2>/dev/null
 		kmode ok
 		expect "Ctrl-C at once after the line that offers it: the check stops, not the run" 'grep -q "Stopped (Ctrl-C). Nothing" "$K/intr3.txt" && grep -q "Verdict:" "$K/intr3.txt" && grep -q "^RC=0$" "$K/intr3.txt"'
-		expect "Ctrl-C while waiting for the answer: stopped at once, nothing changed, the run goes on to its result" '[ "$(nreq)" = "$((n0 + 1))" ] && [ $((t1 - t0)) -lt 20 ] && grep -q "Stopped (Ctrl-C). Nothing changed." "$K/intr2.txt" && ! grep -q "No answer from the community list" "$K/intr2.txt" && grep -q "Verdict:" "$K/intr2.txt" && grep -q "^RC=0$" "$K/intr2.txt"'
 	else
 		echo "  SKIP: the question on a terminal (script(1) gives no terminal here)"
 	fi

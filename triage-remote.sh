@@ -117,6 +117,8 @@ for target in "$@"; do
 	echo "-- remediating $target"
 	run --fix $color
 	frc=$?
+	# no connection: an error like any other, within the exit codes above
+	(( frc == 255 )) && frc=4
 	# --fix does not know the file the list knows as malware: never "remediated" then
 	if (( lb )); then echo "$lbmsg"; (( frc < 3 )) && frc=3; fi
 	note "$frc"
