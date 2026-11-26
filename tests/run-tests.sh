@@ -1677,7 +1677,10 @@ umount "$D/m"
 
 echo "=== every run says how old this version is and how to get the current one"
 D=$(mkscen age "$OWL"); mnt "$D" "$OWL"
+# fresh means released this hour: the real RELEASED ages, and a run a day later would fail
+TNOW=$T; T=$BASE/fresh-version.sh; sed "s|^RELEASED=.*|RELEASED='$(date -u '+%Y-%m-%d %H:%M UTC')'|" "$TNOW" >"$T"
 run "$D" "$OWL" --check >"$D/check.txt"
+T=$TNOW
 expect "a fresh version: its release time and the command to update" 'grep -q "^   Released  *20[0-9-]* [0-9:]* UTC" "$D/check.txt" && grep -q "^   Update  *sh .* --update" "$D/check.txt" && ! grep -q "newer version is likely" "$D/check.txt"'
 TNOW=$T; T=$BASE/old-version.sh; sed "s|^RELEASED=.*|RELEASED='2026-11-01 08:00 UTC'|" "$TNOW" >"$T"
 run "$D" "$OWL" --check >"$D/check.txt"
