@@ -53,10 +53,10 @@
 # which is listed for review too, are taken out. This is a stopgap: a reinstall of the
 # firmware without kept settings is still recommended.
 
-VERSION=2.55
+VERSION=2.60
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
 # website reads both lines to show the current version and how long ago it came out.
-RELEASED='2026-11-24 14:36 UTC'
+RELEASED='2026-11-26 16:45 UTC'
 
 # Where the malware lives and what it puts there. The first two directories are the ones
 # GL.iNet's cleanup in the KVM firmware knows. The rest comes from the installer itself
