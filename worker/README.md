@@ -33,7 +33,8 @@ Older wrangler versions spell the command `kv:namespace create`.
 npx wrangler deploy
 ```
 
-This prints the worker's address, `https://csa-2026-01-report.<your-subdomain>.workers.dev`.
+With `workers_dev = false`, as in the template, the worker has no address yet; it gets
+one in the next section.
 
 ```bash
 npx wrangler secret put EXPORT_TOKEN
@@ -53,8 +54,9 @@ and deploy again:
 routes = [{ pattern = "app.gl-i.net/csa-2026-01-report*", zone_name = "gl-i.net" }]
 ```
 
-If `app.gl-i.net` is not behind Cloudflare, use the `workers.dev` address and change
-`REPORT_URL` in `gl-helper-triage.sh`.
+If `app.gl-i.net` is not behind Cloudflare, set `workers_dev = true`, use the
+`workers.dev` address and change `REPORT_URL` in `gl-helper-triage.sh`. The rules of the
+zone (see "Protect it") do not apply to that address.
 
 ## Check it
 
@@ -80,6 +82,12 @@ reports. D1, Cloudflare's database, allows 100,000 written rows a day, and the d
 gets all reports with a few queries instead of one read per report. The worker uses D1
 as soon as a database is bound as `DB`, and KV until then. The KV namespace stays: the
 script download keeps its copy there.
+
+The free plan also allows 100,000 KV reads and 100,000 calls of the worker a day. The
+script, the firmware list and the reported table are therefore read through the memory
+of the worker, each key at most once a minute. When KV refuses reads anyway, the script
+download sends the client to GitHub, `reported.json` answers 503 and the result page
+goes without the firmware list. Against the limit on calls only the paid plan helps.
 
 1. Create the database. The command prints a `database_id`.
 
@@ -454,12 +462,23 @@ the table. The names of the menus in the Cloudflare dashboard change now and the
 
 ## Protect it
 
-Anyone can send made-up reports; the worker only checks their shape and size (48 KiB). In
-the Cloudflare dashboard, add a rate limiting rule for the path
-`/csa-2026-01-report`, for example 10 requests per minute per IP address.
+Anyone can send made-up reports; the worker only checks their shape and size (48 KiB).
+The spending limit for Workers ends every call once it is reached, and with it every KV
+and D1 access, but it does not count KV and D1 themselves. Two settings keep made-up
+calls from costing anything:
 
-Add one for the fingerprint check too, for the path `/csa-2026-01-report/lookup`, for
-example 5 requests per minute per IP address. The script asks once per run.
+- A rate limiting rule in the `gl-i.net` zone (Security, WAF, Rate limiting rules),
+  counted per IP address, for the paths where every call reaches KV or D1:
+  `/csa-2026-01-report`, `/csa-2026-01-report/lookup` (the fingerprint check, which the
+  script asks once per run), `/csa-2026-01-fix.sig` and `/csa-2026-01-fix/refresh`. On the
+  Free plan of the zone a rule can match only the path, counts over 10 seconds and
+  blocks for 10 seconds; 3 requests per 10 seconds leave room for the script and for the
+  publish workflow, which calls every 35 seconds. The worker takes reports only at
+  `/csa-2026-01-report`, and the fingerprint check only at `/csa-2026-01-report/lookup`;
+  a POST to any other address neither stores a report nor answers a check, so these
+  paths cover them all.
+- `workers_dev = false` and `preview_urls = false` in `wrangler.toml`: the rules of the
+  zone apply only to its own addresses, and the `workers.dev` address would skip them.
 
 ## Schema validation in front of the worker
 
@@ -499,9 +518,10 @@ node test/run.mjs serve
 
 The second command serves the worker on `127.0.0.1:8787` with storage in memory, KV and
 a D1 database, and with the fingerprint check switched on. Point the script at it with
-`GL_TRIAGE_REPORT_URL=http://127.0.0.1:8787/`; the check is at
-`http://127.0.0.1:8787/csa-2026-01-report/lookup`. For each report it prints the status and
-the stored report, for each check the status and the answer.
+`GL_TRIAGE_REPORT_URL=http://127.0.0.1:8787/csa-2026-01-report` (the worker takes reports
+only at that path) and, for the check, with
+`GL_TRIAGE_LOOKUP_URL=http://127.0.0.1:8787/csa-2026-01-report/lookup`. For each report it
+prints the status and the stored report, for each check the status and the answer.
 
 A seed file fills the check, so that a run of the script can get every answer:
 
@@ -618,6 +638,29 @@ what the dashboard counts under "With traces": the older backdoor is left out.
 The list says nothing per device or per report, and no numbers. It is worked out at most
 every 15 minutes and kept in KV in between. It needs the reports in D1; without the
 database the address answers 503, and the advisory shows its own table alone.
+
+Each run reads only the reports received since the last one (with two minutes of
+overlap), through the index on `received`. Which device had its first report with traces
+on which firmware is kept in KV under `reported/csa-2026-01-devices`, with how far the
+reports have been read. When the rules for a trace change in the code, or that entry is
+missing, the next run reads all reports once. To force that, delete the entry:
+`npx wrangler kv key delete --remote --binding REPORTS reported/csa-2026-01-devices`.
+
+## Version and table for the pages on gl-i.net
+
+`https://csa.gl-i.net/2026-01/live.json` gives what the advisory and the fix guide show
+between two builds, in one small answer: the version of the script served now with its
+release time, and the table above. A reader's browser asks for it once per page, instead
+of fetching the whole script for its version and the table in a second call.
+
+```json
+{ "script": { "version": "2.55", "released": "2026-11-24T14:41:00Z" },
+  "reported": { "advisory": "CSA-2026-01", "as_of": "2026-11-25T08:22Z", "min_devices": 5, "models": [] } }
+```
+
+It takes nothing in: GET and HEAD only, parameters, headers and bodies are not read, and
+it answers the same to everyone. A part that is not known is `null`. Browsers may keep it
+for a minute. Deploy the worker before the website uses the address.
 
 ## Known release files
 

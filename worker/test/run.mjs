@@ -2,7 +2,7 @@
 // node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV and a D1 in memory
 // node worker/test/run.mjs serve seed.json    the same, with marks and bad hashes for the
 //                                             fingerprint check (see "serve" below)
-import worker, { validate, validLabel, reportedTable, REPORT_FIELDS, UPDATE_KEYS, LABELS_TABLE, BAD_HASHES_TABLE, lookupRequest, markCache } from '../src/index.js';
+import worker, { validate, validLabel, reportedTable, firstTraces, TRACE_SQL, REPORT_FIELDS, UPDATE_KEYS, LABELS_TABLE, BAD_HASHES_TABLE, lookupRequest, markCache, kvMemo } from '../src/index.js';
 import { suggestionsSql } from '../tools/suggestions-sql.mjs';
 import { badHashesSql, scriptHashes } from '../tools/bad-hashes-sql.mjs';
 import nodeCrypto from 'node:crypto';
@@ -11,7 +11,9 @@ import { execFileSync } from 'node:child_process';
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-const store = new Map(), meta = new Map();
+// The worker keeps KV values in memory for a minute; the tests change KV behind its back,
+// so every change makes it forget.
+const store = new (class extends Map { set(k, v) { kvMemo.clear(); return super.set(k, v); } delete(k) { kvMemo.clear(); return super.delete(k); } })(), meta = new Map();
 // D1 as the worker sees it, backed by a real SQLite database with the real schema
 function d1() {
   const db = new DatabaseSync(':memory:'); db.exec(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
@@ -220,6 +222,12 @@ if (process.argv[2] === 'serve') {
   expect('a report cannot be posted to the script address', (await worker.fetch(new Request('https://example.org/csa-2026-01-fix', { method: 'POST', body: JSON.stringify(good) }), env, ctx)).status === 405);
   expect('the stored script is not listed as a report', !(await (await call('GET', undefined, { authorization: 'Bearer test-token' }, '/csa-2026-01-report/export')).text()).includes('#!/bin/sh'));
   expect('reports still work', (await call('POST', JSON.stringify(good))).status === 200);
+  {
+    const before = store.size;
+    const elsewhere = await Promise.all(['/', '/x', '/csa-2026-01-report/x', '/csa-2026-01-reports', '/2026-01/'].map((p) => call('POST', JSON.stringify(good), {}, p)));
+    expect('a report sent to any other address is refused and not stored', elsewhere.every((r) => r.status === 405) && store.size === before);
+    expect('the report address with a trailing slash still works', (await call('POST', JSON.stringify(good), {}, '/csa-2026-01-report/')).status === 200);
+  }
   globalThis.fetch = before;
 
   // device id (schema 4)
@@ -457,15 +465,40 @@ if (process.argv[2] === 'serve') {
     expect('unknown models, the older backdoor alone, odd versions and firmware built after the attack stay out', !/zz9|4\.7\.13|4\.12\.0|script|4\.6\.0/.test(raw1));
     expect('a device counts for the firmware of its first report with traces', !raw1.includes('4.9.9'));
     expect('the table holds nothing but model, kind and versions', Object.keys(t1).join() === 'advisory,as_of,min_devices,models' && Object.keys(t1.models[0]).join() === 'model,sku,kind,firmware' && !/a0|rep00/.test(raw1));
-    rep('b4', { model: 'be9300', firmware: '4.10.1' });
+    const devices = () => JSON.parse(store.get('reported/csa-2026-01-devices'));
+    const upto = devices().upto;
+    expect('it keeps the first report with traces of each device and how far it has read', /^[0-9a-f]{64}$/.test(devices().rules) && upto === env.DB.raw.prepare('SELECT max(received) AS m FROM reports').get().m && devices().devices.some((d) => d.join() === 'a0,openwrt,mt6000,4.8.3 release2 build 540 2026-10-02'));
+    // stored a moment after a later report: the overlap still catches it
+    rep('b4', { model: 'be9300', firmware: '4.10.1' }, new Date(Date.parse(upto) - 60_000).toISOString());
     expect('the table is kept: a new report does not change it at once', !(await (await tab()).text()).includes('be9300'));
-    const kept = JSON.parse(store.get('reported/csa-2026-01')); store.set('reported/csa-2026-01', JSON.stringify({ ...kept, checked: 0 }));
-    let later; const stale = await (await tab({ waitUntil(p) { later = p; } })).text(); await later;
-    expect('after a quarter of an hour it is worked out again, behind the answer', !stale.includes('be9300') && (await (await tab()).text()).includes('"sku":"GL-BE9300","kind":"Router","firmware":["4.10.1"]'));
+    const stale = async () => { const kept = JSON.parse(store.get('reported/csa-2026-01')); store.set('reported/csa-2026-01', JSON.stringify({ ...kept, checked: 0 })); let later; const t = await (await tab({ waitUntil(p) { later = p; } })).text(); await later; return t; };
+    expect('after a quarter of an hour it is worked out again, behind the answer', !(await stale()).includes('be9300') && (await (await tab()).text()).includes('"sku":"GL-BE9300","kind":"Router","firmware":["4.10.1"]'));
+    const plan = env.DB.raw.prepare('EXPLAIN QUERY PLAN ' + TRACE_SQL).all('a', 'b').map((r) => r.detail).join();
+    expect('it reads the reports through the index on the time of receipt', /^SEARCH reports USING INDEX reports_received \(received>\? AND received<\?\)$/.test(plan));
+    // the older reports are not read again: a change to them shows only once the rules change
+    env.DB.raw.exec("UPDATE reports SET report = json_set(report, '$.ioc', 0, '$.findings', json('[]')) WHERE json_extract(report, '$.device_id') LIKE 'a_'");
+    await stale();
+    expect('a later run reads only the reports received since', (await (await tab()).text()).includes('"firmware":["4.8.2","4.8.3","4.10.0"]'));
+    store.set('reported/csa-2026-01-devices', JSON.stringify({ ...devices(), rules: 'older rules' })); await stale();
+    expect('when the rules change, all reports are read again', (await (await tab()).text()).includes('"firmware":["4.8.2","4.10.0"]'));
     expect('the table cannot be written to', (await worker.fetch(new Request('https://csa.example.org/2026-01/reported.json', { method: 'POST', body: '{}' }), env, { waitUntil() {} })).status === 405);
+    // ---- live.json: the version of the script and the table, for the pages on gl-i.net
+    {
+      const live = (path = '/2026-01/live.json', init) => worker.fetch(new Request('https://csa.example.org' + path, init), env, { waitUntil() {} });
+      await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'lv', body: "#!/bin/sh\nVERSION=7.80\nRELEASED='2026-11-25 08:41 UTC'\n", checked: Date.now() }));
+      const r = await live(), raw = await r.text(), j = JSON.parse(raw), table = await (await tab()).json();
+      expect('live.json gives the version, its release time and the reported table in one answer', r.status === 200 && Object.keys(j).join() === 'script,reported' && j.script.version === '7.80' && j.script.released === '2026-11-25T08:41:00Z' && JSON.stringify(j.reported) === JSON.stringify(table));
+      expect('any page may read it, it is kept a minute and read as JSON only', r.headers.get('access-control-allow-origin') === '*' && r.headers.get('cache-control') === 'public, max-age=60' && r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('content-type').startsWith('application/json'));
+      const odd = await (await live('/2026-01/live.json?script=<b>&reported=1', { headers: { cookie: 'x=<b>', 'x-forwarded-for': '<b>' } })).text();
+      expect('live.json takes nothing from the request: parameters and headers change nothing', odd === raw);
+      expect('nothing can be sent to it', (await live('/2026-01/live.json', { method: 'POST', body: '{"script":1}' })).status === 405 && (await live('/2026-01/live.json', { method: 'PUT', body: 'x' })).status === 405 && (await live('/2026-01/live.json', { method: 'DELETE' })).status === 405);
+      await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'lv', body: '#!/bin/sh\nVERSION=<b>\n', checked: Date.now() }));
+      expect('a version of an odd shape is not handed on', JSON.parse(await (await live()).text()).script === null);
+      await env.REPORTS.put('script/csa-2026-01-fix', 'null');
+    }
     const kvm = (v, i) => ({ dev: 'k' + v + i, platform: 'glkvm-RM1', model: 'rm1', firmware: 'V' + v + ' release1', ioc: 1, findings: ['process implant'] });
     const rows = [...[0, 1, 2, 3, 4].map((i) => kvm('1.10.1', i)), ...[0, 1, 2, 3, 4].map((i) => kvm('1.10.3', i))];
-    const k = reportedTable(rows, { rm1: { r: ['1.10.3', '2026-11-22'] } });
+    const k = reportedTable(firstTraces(rows), { rm1: { r: ['1.10.3', '2026-11-22'] } });
     expect('where the report gives no build day, the archive does: a release from after the attack stays out', k.length === 1 && k[0].kind === 'KVM' && k[0].sku === 'GL-RM1' && k[0].firmware.join() === '1.10.1');
   }
   // every report these tests posted: what the worker took, the schema must let through
@@ -564,6 +597,8 @@ if (process.argv[2] === 'serve') {
     const forty = Array.from({ length: 40 }, (_, i) => [sha('k' + i), sha('f' + i)]);
     const r40 = await look(ask(forty));
     expect('40 lines are taken, in order', r40.status === 200 && (await r40.text()).trim().split('\n').slice(3).every((l, i) => l === `${forty[i][0]} ${forty[i][1]} unknown`));
+    const elsewhere = await Promise.all(['/x/csa-2026-01-report/lookup', '/csa-2026-01-report/lookup/', '/csa-2026-01-reportx/csa-2026-01-report/lookup'].map((p) => look(ask([[sha(noKey), h('7')]]), {}, 'POST', p)));
+    expect('the check answers only at its own address: anywhere else a POST is refused and counts nothing', elsewhere.every((r) => r.status === 405) && row(h('7')).asked === 1);
     expect('a version of up to three digits and one line are taken', (await look(ask([[sha('k'), h('6')]], ['csa-2026-01-lookup 1', 'version 2.123', 'nonce ' + NONCE]))).status === 200);
 
     // a mark removed on the dashboard counts no more after a minute
@@ -717,6 +752,24 @@ if (process.argv[2] === 'serve') {
     expect('a code with 1 reads exactly as before', JSON.stringify(classify(c1)) === JSON.stringify(classify({ ...c1, lb: undefined })) && parse('#' + withRv(base, 1), '/').rv === -1 && !parse('#' + withRv(base, 1), '/').lb && parse('#v=2.39&p=r&k=cc&rv=3', '/2026-01/').lb === undefined);
     expect('known malware is a finding of type ioc, listed as such, and the other changes stay listed for review', typeOf('lb') === 'ioc' && typeOf('rv') === 'review' && NAMES.lb === 'IOC  lookup-bad');
     expect('its texts are there in English, German and Chinese, and each says that --fix does not remove it', ['en', 'de', 'zh'].every((l) => T[l].kinds.lb && T[l].kinds.lb.every((x) => x.length > 8) && T[l].kinds.lb[1].includes('--fix') && T[l].results.l && T[l].results.l[3].length === 2 && T[l].results.l[3].some((x) => x.includes('--fix'))) && T.en.results.l[0] === 'INFECTED' && T.de.results.l[0] === 'INFIZIERT' && T.zh.results.l[0] === T.zh.results.m[0]);
+  }
+  // ---- KV read through memory, and KV that refuses reads
+  {
+    const kvRead = env.REPORTS.get; let reads = 0;
+    await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'kv', body: '#!/bin/sh\nVERSION=7.79\n', checked: Date.now() }));
+    env.REPORTS.get = async (k) => { reads++; return kvRead(k); };
+    for (let i = 0; i < 5; i++) { await call('GET', undefined, {}, '/2026-01/'); await call('GET', undefined, {}, '/csa-2026-01-fix'); await call('GET', undefined, {}, '/2026-01/reported.json'); }
+    expect('fifteen calls to the public addresses read each key from KV once', reads === 3);
+    env.REPORTS.get = async () => { throw new Error('KV GET failed: 429 Too Many Requests'); };
+    const fromMemory = await call('GET', undefined, {}, '/csa-2026-01-fix');
+    expect('when KV refuses reads, what is known stays served', fromMemory.status === 200 && (await fromMemory.text()).includes('VERSION=7.79'));
+    kvMemo.clear();
+    const scans = env.DB.prepare; let dbCalls = 0; env.DB.prepare = (sql) => { dbCalls++; return scans(sql); };
+    const gone = await call('GET', undefined, {}, '/csa-2026-01-fix'), tab = await call('GET', undefined, {}, '/2026-01/reported.json'), page = await call('GET', undefined, {}, '/2026-01/');
+    expect('with nothing known, the script download goes to GitHub', gone.status === 302 && gone.headers.get('location') === 'https://raw.githubusercontent.com/admonstrator/glinet-csa-2026-01/main/gl-helper-triage.sh');
+    expect('the reported table answers 503 rather than reading all reports on every call', tab.status === 503 && dbCalls === 0);
+    expect('the result page is still served, without a firmware list', page.status === 200 && (await page.text()).includes('const FIRMWARE = null;'));
+    env.DB.prepare = scans; env.REPORTS.get = kvRead;
   }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');
