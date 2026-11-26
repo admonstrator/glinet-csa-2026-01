@@ -2,7 +2,7 @@
 // node worker/test/run.mjs serve    serve the worker on 127.0.0.1:8787 with a KV and a D1 in memory
 // node worker/test/run.mjs serve seed.json    the same, with marks and bad hashes for the
 //                                             fingerprint check (see "serve" below)
-import worker, { validate, validLabel, reportedTable, firstTraces, TRACE_SQL, REPORT_FIELDS, UPDATE_KEYS, LABELS_TABLE, BAD_HASHES_TABLE, lookupRequest, markCache, kvMemo } from '../src/index.js';
+import worker, { validate, validLabel, reportedTable, firstTraces, TRACE_SQL, REPORT_FIELDS, UPDATE_KEYS, LABELS_TABLE, BAD_HASHES_TABLE, badHashes, lookupRequest, markCache, kvMemo } from '../src/index.js';
 import { suggestionsSql } from '../tools/suggestions-sql.mjs';
 import { badHashesSql, scriptHashes } from '../tools/bad-hashes-sql.mjs';
 import nodeCrypto from 'node:crypto';
@@ -584,16 +584,31 @@ if (process.argv[2] === 'serve') {
     expect('suggestions never count, open or declined', body1.includes(`${sha(sugKey)} ${h('3')} unknown\n`) && body1.includes(`${sha(noKey)} ${h('4')} unknown\n`));
     expect('a release file is known_safe at any path', body1.includes(`${sha('changed /x')} ${release} known_safe\n`));
     expect('known_bad for an entry with answer 1, also where a mark covers the same file; unknown for answer 0', body1.includes(`${sha(noKey)} ${h('7')} known_bad\n`) && body1.includes(`${sha(markKey2)} ${h('7')} known_bad\n`) && body1.includes(`${sha(noKey)} ${h('8')} unknown\n`));
-    expect('a request counts once for each entry it asks about, released or not, with the day, however many of its lines name it; an entry not asked for stays as it was', row(h('7')).asked === 1 && row(h('7')).asked_last === today() && row(h('8')).asked === 1 && row(h('8')).asked_last === today() && row(h('9')).asked === 0 && row(h('9')).asked_last === '');
+    expect('a request counts a day for each entry it asks about, released or not, however many of its lines name it; an entry not asked for stays as it was', row(h('7')).asked === 1 && row(h('7')).asked_last === today() && row(h('8')).asked === 1 && row(h('8')).asked_last === today() && row(h('9')).asked === 0 && row(h('9')).asked_last === '');
     const rows0 = env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n;
-    await look(ask([[sha('a'), h('6')], [sha('b'), h('8')]]));
-    expect('a file that is not in the table leaves no trace; the counter keeps rising', env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n === rows0 && !row(h('6')) && row(h('8')).asked === 2);
-    // the answer does not wait for the counter: with a database whose writes never end, it comes all the same
-    const stuck = { ...env, DB: new Proxy(env.DB, { get(t, k) { if (k === 'batch') return () => new Promise(() => {}); const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }) };
-    const notWaiting = await Promise.race([worker.fetch(new Request('https://example.org' + LK, { method: 'POST', body: ask([[sha(noKey), h('8')]]) }), stuck, { waitUntil() {} }).then((r) => r.status), new Promise((r) => setTimeout(() => r('waited'), 2000))]);
-    expect('the answer does not wait for the counter: a write that never ends does not hold it', notWaiting === 200);
+    // a database that notes its writes: the same day, a request writes nothing at all
+    let batches = 0;
+    const spy = { ...env, DB: new Proxy(env.DB, { get(t, k) { if (k === 'batch') return (...a) => { batches++; return t.batch(...a); }; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }) };
+    const spyLook = async (body) => { const later = []; const r = await worker.fetch(new Request('https://example.org' + LK, { method: 'POST', body }), spy, { waitUntil(p) { later.push(p); } }); await Promise.all(later); return r; };
+    for (let i = 0; i < 5; i++) await spyLook(ask([[sha('a'), h('6')], [sha('b'), h('8')], [sha(noKey), h('7')]]));
+    expect('a file that is not in the table leaves no trace; the same day, more requests write nothing and count nothing', env.DB.raw.prepare('SELECT count(*) AS n FROM bad_hashes').get().n === rows0 && !row(h('6')) && row(h('8')).asked === 1 && row(h('7')).asked === 1 && batches === 0);
+    // the next day: one more, however many lines and requests
+    env.DB.raw.prepare("UPDATE bad_hashes SET asked_last = '2026-11-01' WHERE sha256 = ?").run(h('8'));
     await look(ask(Array.from({ length: 40 }, (_, i) => [sha('same file ' + i), h('8')])));
-    expect('one file under 40 keys in one request: one more, not 40', row(h('8')).asked === 3);
+    await look(ask([[sha('b'), h('8')]]));
+    expect('a new day: one file under 40 keys and another request, one more, not 41', row(h('8')).asked === 2 && row(h('8')).asked_last === today());
+    // the answer does not wait for the counter: with a database whose writes never end, it comes all the same
+    env.DB.raw.prepare("UPDATE bad_hashes SET asked_last = '2026-11-01' WHERE sha256 = ?").run(h('8'));
+    let stuckWrites = 0;
+    const stuck = { ...env, DB: new Proxy(env.DB, { get(t, k) { if (k === 'batch') return () => { stuckWrites++; return new Promise(() => {}); }; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }) };
+    const notWaiting = await Promise.race([worker.fetch(new Request('https://example.org' + LK, { method: 'POST', body: ask([[sha(noKey), h('8')]]) }), stuck, { waitUntil() {} }).then((r) => r.status), new Promise((r) => setTimeout(() => r('waited'), 2000))]);
+    expect('the answer does not wait for the counter: a write that never ends does not hold it', notWaiting === 200 && stuckWrites === 1);
+    env.DB.raw.prepare('UPDATE bad_hashes SET asked_last = ? WHERE sha256 = ?').run(today(), h('8'));
+    // two workers that both saw yesterday: the second write changes nothing
+    env.DB.raw.prepare("UPDATE bad_hashes SET asked_last = '2026-11-01' WHERE sha256 = ?").run(h('9'));
+    const before9 = row(h('9')).asked;
+    await badHashes.count(env, [h('9')], today()); await badHashes.count(env, [h('9')], today());
+    expect('two workers counting the same new day: one more, not two', row(h('9')).asked === before9 + 1);
     const forty = Array.from({ length: 40 }, (_, i) => [sha('k' + i), sha('f' + i)]);
     const r40 = await look(ask(forty));
     expect('40 lines are taken, in order', r40.status === 200 && (await r40.text()).trim().split('\n').slice(3).every((l, i) => l === `${forty[i][0]} ${forty[i][1]} unknown`));
@@ -708,7 +723,7 @@ if (process.argv[2] === 'serve') {
     const w1 = (await (await look(q)).text()).trim().split(' ').at(-1);
     env.DB.raw.exec(badHashesSql([{ sha256: H('c'), note: 'confirmed', answer: 1 }]));
     const w2 = (await (await look(q)).text()).trim().split(' ').at(-1);
-    expect('the worker answers unknown while an entry waits and known_bad once it is released; it was counted both times', w1 === 'unknown' && w2 === 'known_bad' && env.DB.raw.prepare('SELECT asked FROM bad_hashes WHERE sha256 = ?').get(H('c')).asked === 2);
+    expect('the worker answers unknown while an entry waits and known_bad once it is released; counted once that day', w1 === 'unknown' && w2 === 'known_bad' && env.DB.raw.prepare('SELECT asked FROM bad_hashes WHERE sha256 = ?').get(H('c')).asked === 1);
     // --script: the fingerprints the script carries in public
     const sh = readFileSync(new URL('../../gl-helper-triage.sh', import.meta.url), 'utf8');
     const listed = (name) => ((new RegExp(`^${name}='?([0-9a-f\\n]+)'?$`, 'm').exec(sh) || [])[1] || '').split('\n').filter(Boolean);

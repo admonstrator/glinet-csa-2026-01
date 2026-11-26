@@ -836,22 +836,23 @@ export function lookupRequest(bytes) {
 // of devices.
 export const BAD_HASHES_TABLE = "CREATE TABLE IF NOT EXISTS bad_hashes (sha256 TEXT PRIMARY KEY, note TEXT NOT NULL, answer INTEGER NOT NULL DEFAULT 0, by TEXT NOT NULL, at TEXT NOT NULL, asked INTEGER NOT NULL DEFAULT 0, asked_last TEXT NOT NULL DEFAULT '')";
 let badHashesTable = false;
-const badHashes = {
+export const badHashes = {
   async ready(env) {
     if (badHashesTable) return;
     await env.DB.prepare(BAD_HASHES_TABLE).run();
     badHashesTable = true;
   },
-  // the entries among these fingerprints, as a Map from fingerprint to answer
+  // the entries among these fingerprints, as a Map from fingerprint to { answer, last }
   async find(env, files) {
     await badHashes.ready(env);
     const places = files.map((_, i) => '?' + (i + 1)).join(', ');
-    const { results } = await env.DB.prepare(`SELECT sha256, answer FROM bad_hashes WHERE sha256 IN (${places})`).bind(...files).all();
-    return new Map(results.map((r) => [r.sha256, Number(r.answer)]));
+    const { results } = await env.DB.prepare(`SELECT sha256, answer, asked_last FROM bad_hashes WHERE sha256 IN (${places})`).bind(...files).all();
+    return new Map(results.map((r) => [r.sha256, { answer: Number(r.answer), last: r.asked_last }]));
   },
-  // one more for each of these fingerprints
+  // one more day for each of these fingerprints; a second worker that saw the same old day
+  // changes nothing
   async count(env, files, day) {
-    const up = env.DB.prepare('UPDATE bad_hashes SET asked = asked + 1, asked_last = ?2 WHERE sha256 = ?1');
+    const up = env.DB.prepare('UPDATE bad_hashes SET asked = asked + 1, asked_last = ?2 WHERE sha256 = ?1 AND asked_last <> ?2');
     await env.DB.batch(files.map((file) => up.bind(file, day)));
   },
 };
@@ -880,16 +881,19 @@ async function lookupWords(env, items, day, ctx) {
   const bad = env.DB ? await badHashes.find(env, [...new Set(items.map(([, file]) => file))]) : new Map();
   const marks = await safeMarks(env);
   const words = items.map(([key, file]) => {
-    if (bad.get(file) === 1) return 'known_bad';
+    if (bad.get(file)?.answer === 1) return 'known_bad';
     if ((marks.has(key) && marks.get(key).has(file)) || KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
     return 'unknown';
   });
-  // One more for each file of this request that is in the table, released or not. Started
-  // when every read is done and not waited for: an answer that waited for the write, or
-  // read the marks behind it, would take longer for a file in the table, and so tell an
-  // entry that waits from a file nobody listed (review of 2.60).
-  if (bad.size) {
-    const counted = badHashes.count(env, [...bad.keys()], day).catch(() => { /* the answer does not depend on the counter */ });
+  // One more day for each file of this request that is in the table, released or not, and
+  // not counted today yet: at most one write per entry and day, however many requests come
+  // (made-up requests could otherwise run up D1 writes, which the spending limit does not
+  // cover). Started when every read is done and not waited for: an answer that waited for
+  // the write, or read the marks behind it, would take longer for a file in the table, and
+  // so tell an entry that waits from a file nobody listed (review of 2.60).
+  const due = [...bad].filter(([, e]) => e.last !== day).map(([file]) => file);
+  if (due.length) {
+    const counted = badHashes.count(env, due, day).catch(() => { /* the answer does not depend on the counter */ });
     if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(counted);
     else await counted;
   }

@@ -222,8 +222,9 @@ every line must fit its fixed pattern. Anything else gets a fixed text (`400 bad
 `413 too large`), never a part of the request; when D1 or KV fails while reading, the answer
 is `503 not available` rather than one that misses an entry. **Nothing of a request is
 stored or logged**; the only write is the counter of a `bad_hashes` entry that was asked
-for, made after the answer, so the answer takes no longer for an entry that waits than for
-a file nobody listed. Each
+for, at most once a day per entry, made after the answer, so the answer takes no longer for
+an entry that waits than for a file nobody listed. Made-up requests can therefore not run
+up D1 writes: with the 14 entries of the first fill there are at most 14 a day. Each
 worker instance reads the marks at most once a minute, so a mark removed on the dashboard
 no longer counts a minute later.
 
@@ -256,8 +257,8 @@ answers only `known_safe` and `unknown`.
 | `note` | what it is, for the maintainers; never sent |
 | `answer` | `1` released: the check answers `known_bad`. `0` waiting: it counts as not known |
 | `by`, `at` | who added or last changed the entry, and when |
-| `asked` | how many requests asked for the file (one each), released or not. Anyone can send requests: a hint, not a count of devices |
-| `asked_last` | the day of the last one, `YYYY-MM-DD` |
+| `asked` | on how many days a check asked for the file (one a day, however many requests), released or not. Anyone can send requests: a hint, not a count of devices |
+| `asked_last` | the last of those days, `YYYY-MM-DD` |
 
 The first fill takes the fingerprints the script itself carries in public (`GLH_SHAS`,
 `BD_INIT_SHA`, `BD_ULOGD_SHAS`), each released:

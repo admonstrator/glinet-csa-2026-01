@@ -95,11 +95,13 @@ For each line, the first that applies:
 3. `unknown`: everything else, including open or declined suggestions, a mark whose
    fingerprints do not include this file, and entries of `bad_hashes` with `answer = 0`.
 
-Each request adds one to the `asked` of every entry of `bad_hashes` it names, released or
-not, however many of its lines name it, and sets `asked_last` to the day. The server
-writes this after the answer, so an entry that waits does not answer more slowly than a
-file nobody listed. A file that is not in the table leaves no trace. Anyone can send
-requests: `asked` is a hint, not a count of devices.
+The first request of a day that names an entry of `bad_hashes`, released or not, adds one
+to its `asked` and sets `asked_last` to the day; later requests that day write nothing.
+`asked` is the number of days on which the file was asked about, and an entry costs at
+most one write a day, however many requests come. The server writes this after the
+answer, so an entry that waits does not answer more slowly than a file nobody listed. A
+file that is not in the table leaves no trace. Anyone can send requests: `asked` is a
+hint, not a count of devices.
 
 The check is on only when the worker has `LOOKUP = "on"` among its `[vars]`.
 

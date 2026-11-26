@@ -10,7 +10,8 @@ CREATE INDEX IF NOT EXISTS reports_received ON reports (received, id);
 -- Files known as malware, for the fingerprint check (POST /csa-2026-01-report/lookup).
 -- Filled with tools/bad-hashes-sql.mjs; the worker also creates the table on first use.
 -- answer 1: the check answers known_bad; 0: the entry waits and counts as not known.
--- asked, asked_last: how often a check asked for the file, and on which day last.
+-- asked, asked_last: on how many days a check asked for the file (at most one write a day),
+-- and the last of them.
 CREATE TABLE IF NOT EXISTS bad_hashes (
   sha256 TEXT PRIMARY KEY,             -- of the file, 64 lowercase hex characters
   note TEXT NOT NULL,                  -- what it is, for the maintainers; never sent
