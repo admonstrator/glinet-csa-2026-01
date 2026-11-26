@@ -3630,10 +3630,13 @@ lookup_item() { # kind, path as in the report, sha256 of the file, path of the f
 # bytes came, or at Ctrl-C, whatever its own limits are: one retries, one waits between
 # bytes without end, one goes on reading after its output was closed (review of 2.60).
 # 0: the tool ended well, or it sent too much (that answer came, and lookup_read sets it
-# aside). 1: no answer. 3: stopped by Ctrl-C.
+# aside). 1: no answer. 3: stopped by Ctrl-C. 5: Ctrl-C came before the tool started, nothing
+# was sent. lookup sets the trap for Ctrl-C (LOOKUP_STOP) before it says that Ctrl-C stops
+# the check, so that there is no moment in which Ctrl-C still ends the whole run.
 LOOKUP_STOP=0
 lookup_get() {
 	local i=0 tp hp
+	[ "$LOOKUP_STOP" = 1 ] && return 5
 	rm -f "$TMP/lookup.rc" "$TMP/lookup.pid"
 	: >"$TMP/lookup.answer"
 	# Nothing in the background may hold this script's output open: whoever reads it would
@@ -3645,16 +3648,15 @@ lookup_get() {
 		echo $? >"$TMP/lookup.rc"
 	} 2>/dev/null 3>&- | head -c 8193 >"$TMP/lookup.answer" 3>&- &
 	hp=$!
-	LOOKUP_STOP=0
-	trap 'LOOKUP_STOP=1' INT
 	while [ "$LOOKUP_STOP" = 0 ] && [ "$i" -lt 25 ] && [ ! -f "$TMP/lookup.rc" ] &&
 		[ "$(wc -c <"$TMP/lookup.answer" | tr -d ' ')" -lt 8193 ]; do
 		sleep 1
 		i=$((i + 1))
 	done
-	trap 'exit 4' INT
 	if [ ! -f "$TMP/lookup.rc" ]; then
 		tp=$(cat "$TMP/lookup.pid" 2>/dev/null)
+		# Ctrl-C at once: the tool may not have its number written yet
+		[ -n "$tp" ] || { sleep 1; tp=$(cat "$TMP/lookup.pid" 2>/dev/null); }
 		case $tp in '' | *[!0-9]*) ;; *) kill "$tp" 2>/dev/null ;; esac
 	fi
 	wait "$hp" 2>/dev/null
@@ -3666,7 +3668,8 @@ lookup_get() {
 # hides it), so over HTTPS it is never used (review of 2.60); the tests talk plain HTTP to
 # this machine, where there is no certificate. No configuration file of the tool counts
 # (curl -q, wget --no-config): one could switch the check of the certificate off. Each tool
-# tries once. 0: an answer came. 1: sent, no answer (no connection, a certificate that does
+# tries once. curl follows no redirect (no -L), GNU wget none either (--max-redirect=0): the
+# request goes to this address and nowhere else. 0: an answer came. 1: sent, no answer (no connection, a certificate that does
 # not check out, an error of the server, nothing within 25 seconds). 2: nothing sent, no
 # tool for it. 3: stopped by Ctrl-C.
 lookup_send() {
@@ -3686,7 +3689,7 @@ lookup_send() {
 	fi
 	[ -n "$w" ] || return 2
 	set -- -q -T 20 -O -
-	[ "$gnu" = 1 ] && set -- --no-config "$@"
+	[ "$gnu" = 1 ] && set -- --no-config --max-redirect=0 "$@"
 	# uclient-fetch knows neither --header nor -t; the server does not depend on the type
 	[ "$w" = wget ] && set -- "$@" -t 1 --header='Content-Type: text/plain'
 	# --post-data only for a tool without --post-file: trying one after the other would send
@@ -3787,7 +3790,7 @@ lookup() {
 	say "   the script version and a random number for this run."
 	say "   Not sent: no path, no content of a file, no device ID, no model, no host name."
 	[ "$LOOKUP_LEFT" -gt 0 ] &&
-		say "   Not asked: $LOOKUP_LEFT more findings listed for review. The report and this check take 40, programs first."
+		say "   Left out of the report and this check: $LOOKUP_LEFT more findings listed for review (both take 40, programs first)."
 	if [ "$LOOKUP_MODE" != yes ]; then
 		if [ -t 0 ] && [ -t 3 ]; then
 			while :; do
@@ -3810,11 +3813,20 @@ lookup() {
 			return 0
 		fi
 	fi
+	# from here on Ctrl-C stops the check, not the run (review of 2.60)
+	LOOKUP_STOP=0
+	trap 'LOOKUP_STOP=1' INT
 	say "   Asking the community list (at most 25 seconds, Ctrl-C stops it) ..."
 	lookup_send; rc=$?
+	trap 'exit 4' INT
 	if [ "$rc" = 3 ]; then
 		say "   ${YEL}Stopped (Ctrl-C). Nothing changed.${N}"
 		lookup_txt "Stopped with Ctrl-C while waiting for the answer. Nothing changed." sent
+		return 0
+	fi
+	if [ "$LOOKUP_STOP" = 1 ]; then
+		say "   ${YEL}Stopped (Ctrl-C). Nothing was sent.${N}"
+		lookup_txt "Stopped with Ctrl-C before the request went out. Nothing was sent."
 		return 0
 	fi
 	if [ "$rc" = 2 ]; then

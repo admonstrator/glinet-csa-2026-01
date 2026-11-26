@@ -1771,6 +1771,12 @@ class H(http.server.BaseHTTPRequestHandler):
         with open(os.path.join(d, 'type.%d' % k), 'w') as f:
             f.write(self.headers.get('Content-Type', ''))
         mode = rd('mode', 'ok')
+        # "modes" names a mode for each of the next requests, one after the other
+        seq = rd('modes').split()
+        if seq:
+            mode = seq.pop(0)
+            with open(os.path.join(d, 'modes'), 'w') as f:
+                f.write(' '.join(seq))
         if mode == '500':
             self.send_response(500)
             self.send_header('Content-Type', 'text/plain')
@@ -1949,7 +1955,7 @@ EOF
 	cp "$KL/etc/passwd" "$K/passwd"
 	i=1; while [ $i -le 45 ]; do echo "u$i:x:0:0::/root:/bin/ash" >>"$KL/etc/passwd"; i=$((i + 1)); done
 	lk --lookup >"$K/many.txt"; rc=$?
-	expect "more than 40 listed for review: programs first and asked, and a line for the rest" '[ $rc = 1 ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/many.txt" && grep -q "Not asked: 8 more findings listed for review. The report and this check take 40, programs first." "$K/many.txt"'
+	expect "more than 40 listed for review: programs first and asked, and a line for the rest" '[ $rc = 1 ] && grep -q "KNOWN BAD      tmp-file        /tmp/.dg" "$K/many.txt" && grep -q "Left out of the report and this check: 8 more findings listed for review (both take 40, programs first)." "$K/many.txt"'
 	cp "$K/passwd" "$KL/etc/passwd"
 	# 45 hidden files in the overlay sort before new-binary and tmp-file by kind: programs and
 	# /tmp come first all the same (review of 2.60)
@@ -1958,7 +1964,7 @@ EOF
 	{ printf '\177ELF'; head -c 200 /dev/urandom; } >"$KL/usr/bin/zz"; chmod +x "$KL/usr/bin/zz"; cp -p "$KL/usr/bin/zz" "$KL/overlay/upper/usr/bin/zz"
 	cp "$KS/table" "$K/table.keep"; echo "$(sha256sum <"$KL/usr/bin/zz" | cut -c1-64) known_bad" >>"$KS/table"
 	lk --lookup >"$K/rank.txt"; rc=$?
-	expect "more than 40, hidden files sorting first by kind: the new program and the file in /tmp are still asked" '[ $rc = 1 ] && grep -Eq "KNOWN BAD +new-binary +/usr/bin/zz" "$K/rank.txt" && grep -Eq "KNOWN BAD +tmp-file +/tmp/.dg" "$K/rank.txt" && grep -Eq "Not asked: [0-9]+ more findings listed for review" "$K/rank.txt"'
+	expect "more than 40, hidden files sorting first by kind: the new program and the file in /tmp are still asked" '[ $rc = 1 ] && grep -Eq "KNOWN BAD +new-binary +/usr/bin/zz" "$K/rank.txt" && grep -Eq "KNOWN BAD +tmp-file +/tmp/.dg" "$K/rank.txt" && grep -Eq "Left out of the report and this check: [0-9]+ more findings listed for review" "$K/rank.txt"'
 	cp "$K/table.keep" "$KS/table"; rm -rf "${KL:?}"/etc/.h* "${KL:?}/usr" "${KL:?}/overlay"
 	# over HTTPS busybox's own wget is never used: it takes any certificate (review of 2.60)
 	# app.gl-i.net is this machine here, where nothing listens on 443: a broken test sends nothing out
@@ -2018,7 +2024,19 @@ EOF
 	chmod +x "$K/fakessh/ssh"
 	PATH="$K/fakessh:$PATH" bash "$(dirname "$T")/triage-remote.sh" --fix --lookup -o "$K/ev" root@dev >"$K/remote.txt" 2>&1; rc=$?
 	expect "triage-remote.sh --fix --lookup: known malware from the check ends as incomplete, with what to do" '[ $rc = 3 ] && grep -q "Verdict: INFECTED - a file listed for review is known malware" "$K/remote.txt" && grep -q "fix does not remove the file the community list knows as malware: reinstall the firmware" "$K/remote.txt" && grep -q "remediation incomplete" "$K/remote.txt"'
-	rm -rf "$K/ev" "$KL"/tmp/gl-triage-*
+	rm -rf "${K:?}/ev" "${KL:?}"/tmp/gl-triage-*
+	# step 1 gets no answer, step 2 (the archive's run) known malware: the device is not
+	# clean (review of 2.60)
+	echo 500 >"$KS/modes"
+	PATH="$K/fakessh:$PATH" bash "$(dirname "$T")/triage-remote.sh" --lookup -o "$K/ev" root@dev >"$K/remote2.txt" 2>&1; rc=$?
+	expect "triage-remote.sh --lookup: known malware that only step 2 finds counts: IOCs found, exit 1, with what to do" '[ $rc = 1 ] && grep -q "No answer from the community list" "$K/remote2.txt" && grep -q "IOCs found. Evidence saved." "$K/remote2.txt" && grep -q "fix does not remove the file the community list knows as malware" "$K/remote2.txt"'
+	rm -rf "${K:?}/ev" "${KL:?}"/tmp/gl-triage-*
+	# known malware next to a trace --fix leaves (the attack reached the device): incomplete,
+	# not "fix exited with 1", and the line on what to do (review of 2.60)
+	: >"$KL/etc/mp_ip_mapping_info"
+	PATH="$K/fakessh:$PATH" bash "$(dirname "$T")/triage-remote.sh" --fix --lookup -o "$K/ev" root@dev >"$K/remote3.txt" 2>&1; rc=$?
+	expect "triage-remote.sh --fix --lookup with a trace --fix leaves: incomplete, with what to do" '[ $rc = 3 ] && grep -q "Also: the attack reached this device" "$K/remote3.txt" && grep -q "fix does not remove the file the community list knows as malware: reinstall the firmware" "$K/remote3.txt" && grep -q "remediation incomplete" "$K/remote3.txt" && ! grep -q "fix exited with" "$K/remote3.txt"'
+	rm -f "$KL/etc/mp_ip_mapping_info"; rm -rf "${K:?}/ev" "${KL:?}"/tmp/gl-triage-*
 	lk --lookup --show-report >"$K/rep.txt"
 	expect "the report knows nothing of the check" 'grep -q "Verdict: INFECTED - a file listed" "$K/rep.txt" && grep -q "^   \"ioc\": 0,$" "$K/rep.txt" && ! sed -n "/^== Anonymous report/,\$p" "$K/rep.txt" | grep -q lookup'
 	# On a terminal it asks. The terminal comes from script(1), where it works here.
@@ -2053,7 +2071,7 @@ while time.time() < end:
         break
     out += d
     if not sent and trigger in out:
-        time.sleep(1.5)
+        time.sleep(float(os.environ.get('DRIVE_DELAY', '1.5')))
         os.write(fd, b'\x03')
         sent = True
 if time.time() >= end:
@@ -2068,7 +2086,11 @@ EOF
 		# Ctrl-C while it waits for the answer stops the check, and the result still comes
 		kmode dribble; n0=$(nreq); t0=$(date +%s)
 		python3 "$K/drive.py" "$KL" "$KURL" 'Ctrl-C stops it' --lookup >"$K/intr2.txt" 2>/dev/null; t1=$(date +%s)
+		# Ctrl-C at once after the line that offers it: still only the check stops
+		kmode dribble
+		DRIVE_DELAY=0 python3 "$K/drive.py" "$KL" "$KURL" 'Ctrl-C stops it' --lookup >"$K/intr3.txt" 2>/dev/null
 		kmode ok
+		expect "Ctrl-C at once after the line that offers it: the check stops, not the run" 'grep -q "Stopped (Ctrl-C). Nothing" "$K/intr3.txt" && grep -q "Verdict:" "$K/intr3.txt" && grep -q "^RC=0$" "$K/intr3.txt"'
 		expect "Ctrl-C while waiting for the answer: stopped at once, nothing changed, the run goes on to its result" '[ "$(nreq)" = "$((n0 + 1))" ] && [ $((t1 - t0)) -lt 20 ] && grep -q "Stopped (Ctrl-C). Nothing changed." "$K/intr2.txt" && ! grep -q "No answer from the community list" "$K/intr2.txt" && grep -q "Verdict:" "$K/intr2.txt" && grep -q "^RC=0$" "$K/intr2.txt"'
 	else
 		echo "  SKIP: the question on a terminal (script(1) gives no terminal here)"

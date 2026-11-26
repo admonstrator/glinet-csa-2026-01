@@ -87,6 +87,10 @@ for target in "$@"; do
 	echo "-- pulling evidence to $name"
 	run --archive --stdout ${lookup[@]+"${lookup[@]}"} >"$name" 2>"$name.log"
 	arc=$?
+	# with --lookup step 2 asks again: known malware it finds counts as well, even when step 1
+	# had no answer (review of 2.60)
+	grep -q 'lookup-bad: a file listed for review' "$name.log" 2>/dev/null && lb=1
+	(( arc == 1 && rc == 0 )) && rc=1
 	if (( arc >= 4 )) || ! gzip -t "$name" 2>/dev/null || ! tar -tzf "$name" >/dev/null 2>&1; then
 		echo "!! $target: evidence archive missing or corrupt (exit $arc, see $name.log)"
 		note 4
@@ -113,7 +117,8 @@ for target in "$@"; do
 	echo "-- remediating $target"
 	run --fix $color
 	frc=$?
-	if (( lb && (frc == 0 || frc == 2) )); then echo "$lbmsg"; frc=3; fi
+	# --fix does not know the file the list knows as malware: never "remediated" then
+	if (( lb )); then echo "$lbmsg"; (( frc < 3 )) && frc=3; fi
 	note "$frc"
 	case $frc in
 	2) echo "== $target: remediated, no IOC left" ;;

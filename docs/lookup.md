@@ -111,10 +111,14 @@ the three words. Anything else and the whole answer is set aside, with one line 
 the result is what it would have been without the check. The same when there is no
 connection, the certificate does not check out, or no answer came within 25 seconds: the
 script cuts the answer at 8193 bytes while it arrives, and after 25 seconds it stops the
-tool and gives up, whatever the tool's own limits are. Ctrl-C while it waits does the same
-at once, with one line saying so, and the run goes on to its result.
+tool and gives up, whatever the tool's own limits are. From the line that says it is
+asking, Ctrl-C does the same at once: it stops the check, not the run, says so in one line,
+and the run goes on to its result.
 
 It asks over HTTPS only and never falls back to plain HTTP or to an unchecked certificate.
+`curl` and GNU `wget` follow no redirect (`curl` without `-L`, `wget` with
+`--max-redirect=0`), so the request goes to this address only. OpenWrt's `uclient-fetch`
+follows one; over HTTPS only the server or its host could send it.
 It sends with `curl`, else OpenWrt's `uclient-fetch`, else GNU `wget`. busybox's own `wget`
 is never used for it: that one takes any certificate. Without such a tool it sends nothing
 and says so. `curl` runs with `-q` and GNU `wget` with `--no-config`, so that no settings
