@@ -200,16 +200,18 @@ const NAMES = {
   fw: 'IOC  fw-rule', cc: 'IOC  cloud-command  /etc/mp_ip_mapping_info', it: 'IOC  installer-trace',
   bi: 'IOC  backdoor-init', bf: 'IOC  backdoor-file', bk: 'IOC  backdoor-keep', bh: 'IOC  backdoor-host', bp: 'IOC  backdoor-proc',
   pe: 'PERSIST  persistence', vc: 'INFO  vendor-cleanup', none: 'Summary: IOC=0', rs: 'Running since …', rv: 'REVIEW  …',
+  // not a kind in the code: the field for review says it (2)
+  lb: 'IOC  lookup-bad',
 };
 const MALWARE = ['mk', 'ah', 'pr', 'kr', 'cr', 'sk', 'rt', 'pq', 'pi', 'cm'], SHELL = ['ps', 'pp', 'cs'];
 // which steps go with which result; "gc" stands for the GoodCloud step that fits the setting
 const PLAN = {
   // saving the evidence comes first wherever something was found: a restart, a reset and
   // even a clean-up wipe traces, and nothing else here is that urgent
-  router: { c: ['gc', 'update', 'keys', 'again'], cr: ['gc', 'update', 'keys', 'sure', 'again'], a: ['archive', 'gc', 'reflash', 'creds', 'clients'], i: ['archive', 'gc', 'reflash', 'creds', 'clients'], s: ['archive', 'gc', 'reflash', 'creds', 'clients'], m: ['archive', 'gc', 'reflash', 'creds', 'clients'], b: ['archive', 'offline', 'reflash', 'credsold', 'clients'] },
-  kvm: { c: ['gc', 'kvmupdate', 'keys', 'again'], cr: ['gc', 'kvmupdate', 'keys', 'sure', 'again'], a: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], i: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], s: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], m: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], b: ['archive', 'offline', 'kvmfw', 'credsold', 'kvmhost'] },
+  router: { c: ['gc', 'update', 'keys', 'again'], cr: ['gc', 'update', 'keys', 'sure', 'again'], a: ['archive', 'gc', 'reflash', 'creds', 'clients'], i: ['archive', 'gc', 'reflash', 'creds', 'clients'], s: ['archive', 'gc', 'reflash', 'creds', 'clients'], m: ['archive', 'gc', 'reflash', 'creds', 'clients'], b: ['archive', 'offline', 'reflash', 'credsold', 'clients'], l: ['archive', 'gc', 'reflash', 'creds', 'clients'] },
+  kvm: { c: ['gc', 'kvmupdate', 'keys', 'again'], cr: ['gc', 'kvmupdate', 'keys', 'sure', 'again'], a: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], i: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], s: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], m: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'], b: ['archive', 'offline', 'kvmfw', 'credsold', 'kvmhost'], l: ['archive', 'gc', 'kvmfw', 'creds', 'kvmhost'] },
 };
-const TONE = { c: 'ok', cr: 'ok', a: 'bad', i: 'bad', s: 'bad', m: 'bad', b: 'bad' };
+const TONE = { c: 'ok', cr: 'ok', a: 'bad', i: 'bad', s: 'bad', m: 'bad', b: 'bad', l: 'bad' };
 
 // Every text of the page, per language. {dev} is "router", "KVM device" or "device".
 const T = {
@@ -263,6 +265,8 @@ const T = {
         ['The malware came onto the device through GL.iNet’s cloud service. It keeps itself running, hides its connections and fetches commands from the attacker’s servers.', 'Everything stored on the {dev} counts as read, and whatever is connected to it could be reached.']],
       b: ['INFECTED', 'An older backdoor is on this {dev}', 'This is not the attack of November 20. Forum users found this hidden program while they looked for traces of that attack. It may have been on the {dev} for months.',
         ['A hidden program starts with the {dev}, reports to a server and fetches a second program that runs only in memory. That one gives whoever runs the server full control of the {dev}.', 'Nobody knows how it got there. It may have been there for a long time. So everything the {dev} ever held counts as copied.']],
+      l: ['INFECTED', 'Known malware is on this {dev}', 'The script listed a file for review, and its fingerprint is on the community’s list of known malware. Treat the {dev} as infected, even if the script found nothing else.',
+        ['The community has found this exact file to be malware. The script itself does not know the file, so --fix does not remove it.', 'Whoever put it there may have had full control. Everything stored on the {dev} counts as read, and whatever is connected to it could be reached.']],
     },
     kinds: {
       mk: ['Files of the gl-helper malware', 'The malware’s files lie in a hidden folder on the device. The folder survives restarts, and updates that keep the settings.'],
@@ -291,6 +295,7 @@ const T = {
       none: ['No known trace', 'The script looked at files, autostart entries, running programs, the firewall and open connections. It compared them with everything known about this attack and the older backdoor.'],
       rs: ['The device was restarted since November 19', 'A remote access and what it leaves in memory are gone after a restart. The script can only see what is still there.'],
       rv: ['{n} other changes to look at', 'The script lists everything that differs from the firmware and that it cannot place. Almost always these are your own settings and installed programs. They are not traces of the attack.'],
+      lb: ['A file the community knows as malware', 'The script listed this file for review, and its fingerprint is on the community’s list of known malware. --fix does not remove it: it removes only the traces it knows itself. Treat the device as infected and install the firmware again without keeping settings.'],
     },
     steps: {
       gcoff: ['Switch GoodCloud and AstroWarp off now', 'The attack came in through GoodCloud, and the fault is still in the firmware of most devices. Switch GoodCloud off in the admin panel, or type this on the router:', GC_OFF],
@@ -363,6 +368,8 @@ const T = {
         ['Die Schadsoftware kam über den Cloud-Dienst von GL.iNet auf das Gerät. Sie hält sich selbst am Laufen, versteckt ihre Verbindungen und holt sich Befehle von den Servern des Angreifers.', 'Alles, was auf dem {dev} gespeichert ist, gilt als gelesen, und alles, was damit verbunden ist, war erreichbar.']],
       b: ['INFIZIERT', 'Auf diesem {dev} ist eine ältere Hintertür', 'Das ist nicht der Angriff vom 20. November. Forennutzer haben dieses versteckte Programm gefunden, als sie nach Spuren des Angriffs suchten. Es kann seit Monaten auf dem {dev} sein.',
         ['Ein verstecktes Programm startet mit dem {dev}, meldet sich bei einem Server und holt ein zweites Programm, das nur im Arbeitsspeicher läuft. Dieses gibt dem Betreiber des Servers volle Kontrolle über {acc}.', 'Wie es dorthin kam, weiß niemand. Es kann lange dort gewesen sein. Deshalb gilt alles als kopiert, was {nom} je gespeichert hat.']],
+      l: ['INFIZIERT', 'Bekannte Schadsoftware ist auf diesem {dev}', 'Das Skript hat eine Datei zum Ansehen aufgelistet, und ihr Fingerabdruck steht auf der Liste der Community mit bekannter Schadsoftware. Behandle {acc} als infiziert, auch wenn das Skript sonst nichts gefunden hat.',
+        ['Die Community hat genau diese Datei als Schadsoftware erkannt. Das Skript selbst kennt die Datei nicht, deshalb entfernt --fix sie nicht.', 'Wer sie dort abgelegt hat, kann volle Kontrolle gehabt haben. Alles, was auf dem {dev} gespeichert ist, gilt als gelesen, und alles, was damit verbunden ist, war erreichbar.']],
     },
     kinds: {
       mk: ['Dateien der gl-helper-Schadsoftware', 'Die Dateien der Schadsoftware liegen in einem versteckten Ordner auf dem Gerät. Der Ordner übersteht Neustarts, und auch Updates, bei denen die Einstellungen bleiben.'],
@@ -391,6 +398,7 @@ const T = {
       none: ['Keine bekannte Spur', 'Das Skript hat Dateien, Autostart-Einträge, laufende Programme, die Firewall und offene Verbindungen geprüft. Es hat sie mit allem verglichen, was über diesen Angriff und die ältere Hintertür bekannt ist.'],
       rs: ['Das Gerät wurde seit dem 19. November neu gestartet', 'Ein Fernzugang und was er im Arbeitsspeicher hinterlässt, sind nach einem Neustart verschwunden. Das Skript sieht nur, was noch da ist.'],
       rv: ['{n} weitere Änderungen zum Ansehen', 'Das Skript listet alles auf, was von der Firmware abweicht und was es nicht einordnen kann. Fast immer sind das deine eigenen Einstellungen und installierten Programme. Es sind keine Spuren des Angriffs.'],
+      lb: ['Eine Datei, die die Community als Schadsoftware kennt', 'Das Skript hat diese Datei zum Ansehen aufgelistet, und ihr Fingerabdruck steht auf der Liste der Community mit bekannter Schadsoftware. --fix entfernt sie nicht: Es entfernt nur die Spuren, die es selbst kennt. Behandle das Gerät als infiziert und installiere die Firmware neu, ohne die Einstellungen zu behalten.'],
     },
     steps: {
       gcoff: ['GoodCloud und AstroWarp jetzt ausschalten', 'Der Angriff kam über GoodCloud, und der Fehler steckt noch in der Firmware der meisten Geräte. Schalte GoodCloud in der Verwaltungsoberfläche aus oder gib das auf dem Router ein:', GC_OFF],
@@ -462,6 +470,8 @@ const T = {
         ['这个恶意软件是通过 GL.iNet 的云服务装上去的。它会保持自己一直运行，隐藏自己的网络连接，并从攻击者的服务器获取命令。', '{dev}上保存的一切都应视为已被读取，与它相连的一切也都可能被访问过。']],
       b: ['已被感染', '这台{dev}上有一个更早的后门', '这不是 11 月 20 日的那次攻击。它是论坛用户在排查那次攻击时发现的一个隐藏程序，可能已经在这台{dev}上存在好几个月了。',
         ['一个隐藏程序随{dev}一起启动，向一台服务器报到，并下载第二个只在内存中运行的程序。后者让控制那台服务器的人可以完全操纵这台{dev}。', '它是怎么装上去的，目前还不清楚。由于它可能已经存在很久，这台{dev}保存过的一切都应视为已被复制。']],
+      l: ['已被感染', '这台{dev}上有已知的恶意软件', '脚本列出了一个供查看的文件，而它的指纹在社区的已知恶意软件列表上。即使脚本没有发现其他痕迹，也请把这台{dev}当作已被感染来处理。',
+        ['社区已经确认，正是这个文件是恶意软件。脚本本身不认识这个文件，所以 --fix 不会删除它。', '把它放到设备上的人可能拥有完全的控制权。{dev}上保存的一切都应视为已被读取，与它相连的一切也都可能被访问过。']],
     },
     kinds: {
       mk: ['gl-helper 恶意软件的文件', '恶意软件自己的文件就在设备上，放在一个隐藏文件夹里；重启和保留设置的升级都不会清除它。'],
@@ -490,6 +500,7 @@ const T = {
       none: ['没有已知痕迹', '脚本把文件、开机自启动项、正在运行的程序、防火墙和网络连接，逐一与这次攻击以及更早的那个后门的全部已知特征做了比对。'],
       rs: ['设备在 11 月 19 日之后重启过', '远程访问通道以及它留在内存里的东西，重启后都会消失。脚本只能看到现在还在的东西。'],
       rv: ['另外还列出了 {n} 处改动，供你自己查看', '脚本会把所有与固件不同、又无法归类的地方都列出来。这些几乎总是你自己的设置和安装的程序，并不是这次攻击的痕迹。'],
+      lb: ['社区已知的恶意软件文件', '脚本把这个文件列为供查看的改动，而它的指纹在社区的已知恶意软件列表上。--fix 不会删除它：它只删除自己认识的痕迹。请把设备当作已被感染来处理，在不保留设置的情况下重新刷写固件。'],
     },
     steps: {
       gcoff: ['立即关闭 GoodCloud 和 AstroWarp', '攻击是通过 GoodCloud 进来的，而有问题的那部分代码仍然在大多数设备的固件里。请在管理界面里关闭 GoodCloud 开关，或者在路由器上执行：', GC_OFF],
@@ -533,7 +544,9 @@ if (!T[lang]) { const want = (navigator.languages || [navigator.language || 'en'
 //         2  GoodCloud: 0 not known, 1 on, 2 off
 //         1  restarted since the attacks began
 //         2  --fix: 0 not run, 1 done, 2 incomplete
-//         2  other changes listed for review: 0 none, more than 0 some
+//         2  other changes listed for review: 0 none, 1 some, 2 some, and one of them is
+//            known malware on the community list (the fingerprint check); 3 is unused and
+//            read as 1
 // The alphabet leaves out I, L, O and U; a typed I or L counts as 1, an O as 0.
 // The script holds the same order (RESULT_KINDS); the tests compare the two.
 const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -578,12 +591,12 @@ function decode(text) {
   const g = ['x', '1', '0', 'x'][take(2)], n = String(take(1)), f = ['0', '2', '3', '0'][take(2)], rv = take(2);
   const dev = all.length === 14 ? decodeExt(all.slice(9), v[8]) : {};
   if (!dev) return null;
-  return { v: '2.' + minor, p, r: '', k: ORDER.filter((c, i) => kb[i] === '1'), b: '0', g, n, f, rv: rv ? -1 : 0, dev };
+  return { v: '2.' + minor, p, r: '', k: ORDER.filter((c, i) => kb[i] === '1'), b: '0', g, n, f, rv: rv ? -1 : 0, lb: rv === 2, dev };
 }
 // The same the other way round, for what someone ticks by hand.
 function encode(c) {
   let bits = Number(c.minor).toString(2).padStart(7, '0') + ({ r: '01', k: '10' }[c.p] || '00') + ORDER.map((x) => (c.k.includes(x) ? '1' : '0')).join('').padEnd(24, '0')
-    + ({ 1: '01', 0: '10' }[c.g] || '00') + (c.n === '1' ? '1' : '0') + ({ 2: '01', 3: '10' }[c.f] || '00') + (c.rv ? '01' : '00');
+    + ({ 1: '01', 0: '10' }[c.g] || '00') + (c.n === '1' ? '1' : '0') + ({ 2: '01', 3: '10' }[c.f] || '00') + (c.lb ? '10' : c.rv ? '01' : '00');
   let out = '', sum = 0;
   for (let i = 0; i < 8; i++) { const x = parseInt(bits.slice(i * 5, i * 5 + 5), 2); sum += (i + 1) * x; out += B32[x]; }
   return out + B32[sum % 31];
@@ -618,6 +631,9 @@ function classify(c) {
   let main = 'c';
   if (c.r === 'm' || has(MALWARE) || has(SHELL)) main = has(MALWARE) ? 'm' : 's';
   else if (c.r === 'a' || has(['cc', 'fw', 'it'])) main = c.k.includes('it') ? 'i' : 'a';
+  // a file listed for review that the community list knows as malware: infected. Where a
+  // trace of the malware, of a remote shell or the older backdoor alone says more, that stays.
+  if (c.lb && (main === 'c' ? !bd : main === 'a' || main === 'i')) main = 'l';
   if (main === 'c' && bd) return { main: 'b', also: false };
   if (main === 'c' && c.n === '1') main = 'cr';
   return { main, also: bd };
@@ -639,7 +655,7 @@ function render() {
   const hero = el('header', null, 'hero'); hero.dataset.tone = TONE[cls.main];
   hero.append(el('p', fill(c.v === 'hand' ? t.eyebrowHand : t.eyebrow, o), 'eyebrow'), el('h1', fill(res[1], o)), el('p', fill(res[2], o), 'lead'), el('span', res[0], 'verdict'));
   const chips = el('div', null, 'chips'), gc = el('span', t.gcLabel + ': ', 'chip'); gc.append(el('b', t.gc[c.g])); chips.append(gc);
-  { const n = c.k.filter((k) => k !== 'pe' && k !== 'vc').length; if (n) { const x = el('span', 'IOC: ', 'chip ioc'); x.append(el('b', String(n))); chips.prepend(x); } }
+  { const n = c.k.filter((k) => k !== 'pe' && k !== 'vc').length + (c.lb ? 1 : 0); if (n) { const x = el('span', 'IOC: ', 'chip ioc'); x.append(el('b', String(n))); chips.prepend(x); } }
   if (c.v !== 'hand') chips.append(el('span', t.rs[c.n], 'chip'));
   hero.append(chips); page.append(hero);
 
@@ -671,7 +687,8 @@ function render() {
   // What was found: one row per finding. On the left what kind of thing it is, in the
   // script's own word (IOC, PERSIST, REVIEW) and in a plain one; above the list, once,
   // what those words mean.
-  const list = c.k.length ? [...c.k] : ['none'];
+  const list = c.k.length || c.lb ? [...c.k] : ['none'];
+  if (c.lb) list.push('lb');
   if (c.n === '1' && c.v !== 'hand') list.push('rs'); if (c.rv) list.push('rv');
   const typeOf = (k) => (k === 'none' ? 'ok' : k === 'rs' || k === 'vc' ? 'note' : k === 'rv' ? 'review' : k === 'pe' ? 'persist' : 'ioc'), types = [...new Set(list.map(typeOf))];
   page.append(el('h2', t.hFound));

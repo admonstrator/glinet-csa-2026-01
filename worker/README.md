@@ -163,8 +163,9 @@ when, and from there a mark can be removed.
 
 The marks are kept in the D1 table `labels`, which the worker creates on first use, or in
 one KV entry when there is no database. They can be read at `<worker>/dashboard/labels`
-with the dashboard's login. Over time they form a list of what is known to be harmless,
-which the script could one day ask for; nothing does that yet.
+with the dashboard's login. From script 2.60 the fingerprint check asks for them (see
+"Fingerprint check" below): a file a mark covers is answered `known_safe`, which adds a
+note to the script's `REVIEW` line and changes nothing else.
 
 ### Suggestions
 
@@ -186,6 +187,109 @@ npx wrangler d1 execute csa-2026-01 --remote --file=suggestions.sql
 `suggestions.json` is `[{ "key": "kind path", "note": "why", "hashes": [...] }, ...]`, each
 entry checked as the dashboard checks a mark. A key that is already there, as a suggestion
 or as a declined one, is left as it is. They are kept in the D1 table `suggestions`.
+
+## Fingerprint check
+
+From script 2.60 the script can ask the worker whether the files it listed for review are
+known: known malware, known as probably safe, or not known. It asks only after its user
+agreed (or with `--lookup`), only on the device itself, and only for files with a
+fingerprint, at most 40. For each file it sends two SHA-256 values: of the line
+`<kind> <path>` exactly as the report would carry them, and of the file. Once per request
+it sends the script's version and a random nonce. No path in clear text, no device ID, no
+model. The exchange is fixed in [`../docs/lookup.md`](../docs/lookup.md), and the worker
+does exactly what it says.
+
+The script posts to `https://app.gl-i.net/csa-2026-01-report/lookup`; the route for
+`app.gl-i.net/csa-2026-01-report*` already covers it. The answer has one line per line
+asked, in the same order, each with one word:
+
+- `known_bad`: the file is in the table `bad_hashes` with `answer = 1`.
+- `known_safe`: a mark "probably safe" whose key `<kind> <path>` has the SHA-256 asked and
+  whose fingerprints include the file's; or the file is a known release file
+  (`src/known-hashes.json`), at any path.
+- `unknown`: everything else, also open or declined suggestions and entries of
+  `bad_hashes` with `answer = 0`.
+
+The answer can only make the script's result worse: `known_bad` makes it `INFECTED`,
+`known_safe` only adds a note to a `REVIEW` line. A mark holds every fingerprint that
+reports sent for its key, made-up reports included, so the script shows `known_safe` as
+"probably safe" and keeps the file listed for review.
+
+The worker takes every request for an attack. It refuses a body over 8192 bytes, by its
+`content-length` and while reading it, so a missing or false length does not help. Before
+anything is decoded it checks every byte: only `0x0a` and `0x20` to `0x7e` may occur. Then
+every line must fit its fixed pattern. Anything else gets a fixed text (`400 bad request`,
+`413 too large`), never a part of the request; when D1 or KV fails while reading, the answer
+is `503 not available` rather than one that misses an entry. **Nothing of a request is
+stored or logged**; the only write is the counter of a `bad_hashes` entry that was asked
+for, at most once a day per entry, made after the answer, so the answer takes no longer for
+an entry that waits than for a file nobody listed. Made-up requests can therefore not run
+up D1 writes: with the 14 entries of the first fill there are at most 14 a day. Each
+worker instance reads the marks at most once a minute, so a mark removed on the dashboard
+no longer counts a minute later.
+
+### Switch it on
+
+The check is off until this line stands in the `[vars]` block of `wrangler.toml` (the block
+that holds `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`; a file may have only one) and the worker
+is deployed again:
+
+```toml
+[vars]
+LOOKUP = "on"
+```
+
+Without it, the address answers `404 not found` to every method, and the script goes on
+without the check. Removing the line and deploying switches the check off at once, for
+example if someone who should not could set marks on the dashboard.
+
+Add a rate limiting rule for it, see "Protect it".
+
+### Known malware: the table bad_hashes
+
+The D1 table `bad_hashes` lists files known as malware, by SHA-256. It is in `schema.sql`,
+and the worker creates it on first use. Without D1 there is no such table, and the check
+answers only `known_safe` and `unknown`.
+
+| Column | Meaning |
+| --- | --- |
+| `sha256` | of the file, 64 lowercase hex characters |
+| `note` | what it is, for the maintainers; never sent |
+| `answer` | `1` released: the check answers `known_bad`. `0` waiting: it counts as not known |
+| `by`, `at` | who added or last changed the entry, and when |
+| `asked` | on how many days a check asked for the file (one a day, however many requests), released or not. Anyone can send requests: a hint, not a count of devices |
+| `asked_last` | the last of those days, `YYYY-MM-DD` |
+
+The first fill takes the fingerprints the script itself carries in public (`GLH_SHAS`,
+`BD_INIT_SHA`, `BD_ULOGD_SHAS`), each released:
+
+```bash
+node tools/bad-hashes-sql.mjs --script ../gl-helper-triage.sh > bad-hashes.sql
+npx wrangler d1 execute csa-2026-01 --remote --file=bad-hashes.sql
+```
+
+Further entries come from a list that stays outside the repository:
+
+```bash
+node tools/bad-hashes-sql.mjs bad-hashes.json > bad-hashes.sql
+npx wrangler d1 execute csa-2026-01 --remote --file=bad-hashes.sql
+```
+
+`bad-hashes.json` is `[{ "sha256": "...", "note": "what it is", "answer": 0 }, ...]`,
+optionally with `"by"` and `"at"` (ISO time). The tool checks every entry (64 lowercase hex
+characters, a note of 1 to 200 printable ASCII characters, an answer of 0 or 1) and stops
+at the first that does not fit.
+
+To release an entry, load it again with `"answer": 1`; with `"answer": 0` it is withdrawn.
+Loading an entry again changes its note, answer, `by` and `at`, never its counter. An entry
+with `answer = 0` changes no answer but is counted, so a file that comes up on many devices
+shows before anyone vouches for it.
+
+The counters:
+
+```bash
+npx wrangler d1 execute csa-2026-01 --remote --command "SELECT sha256, answer, asked, asked_last, note FROM bad_hashes ORDER BY asked_last DESC, asked DESC"
+```
 
 ## Telling devices apart
 
@@ -366,12 +470,14 @@ calls from costing anything:
 
 - A rate limiting rule in the `gl-i.net` zone (Security, WAF, Rate limiting rules),
   counted per IP address, for the paths where every call reaches KV or D1:
-  `/csa-2026-01-report`, `/csa-2026-01-fix.sig` and `/csa-2026-01-fix/refresh`. On the
+  `/csa-2026-01-report`, `/csa-2026-01-report/lookup` (the fingerprint check, which the
+  script asks once per run), `/csa-2026-01-fix.sig` and `/csa-2026-01-fix/refresh`. On the
   Free plan of the zone a rule can match only the path, counts over 10 seconds and
   blocks for 10 seconds; 3 requests per 10 seconds leave room for the script and for the
   publish workflow, which calls every 35 seconds. The worker takes reports only at
-  `/csa-2026-01-report`; a POST to any other address stores nothing, so that one path
-  covers them all.
+  `/csa-2026-01-report`, and the fingerprint check only at `/csa-2026-01-report/lookup`;
+  a POST to any other address neither stores a report nor answers a check, so these
+  paths cover them all.
 - `workers_dev = false` and `preview_urls = false` in `wrangler.toml`: the rules of the
   zone apply only to its own addresses, and the `workers.dev` address would skip them.
 
@@ -395,6 +501,9 @@ characters.
   The script does not show a failed send as an error, so a wrong rule loses reports unseen.
 - It covers `POST /csa-2026-01-report` only. Leave the action for addresses that are not
   in the schema at "none": the dashboard and the export live under the same path.
+- The fingerprint check, `POST /csa-2026-01-report/lookup`, is not in `openapi.json`: its
+  body is lines of text, not JSON. It stays at "none" as well; the worker checks every
+  byte of it itself.
 - A new schema version goes into `openapi.json` and into Cloudflare before a script sends
   it, like the worker itself. The tests fail when a field is missing in the file.
 
@@ -408,8 +517,26 @@ node test/run.mjs
 node test/run.mjs serve
 ```
 
-The second command serves the worker on `127.0.0.1:8787` with storage in memory. Point the
-script at it with `GL_TRIAGE_REPORT_URL=http://127.0.0.1:8787/`.
+The second command serves the worker on `127.0.0.1:8787` with storage in memory, KV and
+a D1 database, and with the fingerprint check switched on. Point the script at it with
+`GL_TRIAGE_REPORT_URL=http://127.0.0.1:8787/csa-2026-01-report` (the worker takes reports
+only at that path) and, for the check, with
+`GL_TRIAGE_LOOKUP_URL=http://127.0.0.1:8787/csa-2026-01-report/lookup`. For each report it
+prints the status and the stored report, for each check the status and the answer.
+
+A seed file fills the check, so that a run of the script can get every answer:
+
+```bash
+node test/run.mjs serve seed.json
+```
+
+```json
+{ "labels": { "changed /etc/init.d/example": { "hashes": ["<sha256 of the file>"] } },
+  "bad_hashes": [{ "sha256": "<sha256 of a file>", "answer": 1 }] }
+```
+
+Each label is set as a mark "probably safe", checked as the dashboard checks one; each
+entry goes through `tools/bad-hashes-sql.mjs`, with the note "seed" unless it has one.
 
 ## The page that explains a result
 
@@ -434,7 +561,10 @@ one into and a short list to tick by hand.
 - Eight characters hold 40 bits: 7 the script's version (the number after `2.`), 2 the
   device (unknown, router, KVM), 24 one per kind of finding (22 used), 2 GoodCloud (not
   known, on, off), 1 restarted since the attacks began, 2 what `--fix` did (not run, done,
-  incomplete), 2 whether other changes are listed for review. Never a path, a name or an
+  incomplete), 2 whether other changes are listed for review (0 none, 1 some, 2 some, and
+  the fingerprint check found one of them to be known malware; 3 is unused and read as 1).
+  With 2 the page explains that finding as a known trace: the device counts as infected,
+  and `--fix` does not remove the file. Never a path, a name or an
   ID. The verdict is not in the code: it follows from the kinds of findings.
 - The ninth character is a check: the sum of the eight values, each times its position,
   modulo 31. A single wrong character is caught in all but one rare case, two neighbours
@@ -553,3 +683,7 @@ node build.mjs
 A release that was built again keeps only its latest checksums, so an older build of the
 same version is not in the list. The list only ever hides review findings; it never
 changes whether a device counts as hit.
+
+The fingerprint check answers `known_safe` for these files too, at any path. `build.mjs`
+writes their fingerprints into `src/known.js`, which the worker imports; the tests fail
+when that file does not match `known-hashes.json`.

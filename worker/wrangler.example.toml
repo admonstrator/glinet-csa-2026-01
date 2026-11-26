@@ -26,3 +26,9 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 # binding = "DB"
 # database_name = "csa-2026-01"
 # database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# The fingerprint check of script 2.60 is off until LOOKUP = "on" stands in your [vars]
+# block (the one with ACCESS_TEAM_DOMAIN and ACCESS_AUD). See "Fingerprint check" in
+# README.md.
+# [vars]
+# LOOKUP = "on"
