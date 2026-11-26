@@ -422,6 +422,43 @@ if (process.argv[2] === 'serve') {
     expect('a quote in a note cannot end the SQL string', (() => { env.DB.raw.exec(suggestionsSql([{ key: 'changed /etc/quote', note: "it's fine'); DROP TABLE labels; --", hashes: [] }])); return env.DB.raw.prepare('SELECT note FROM suggestions WHERE key = ?').get('changed /etc/quote').note.startsWith("it's") && env.DB.raw.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'labels'").get().n === 1; })());
     env.DB.raw.exec('DELETE FROM labels; DELETE FROM suggestions');
   }
+  // the other verdicts, a mark for every file at its path, and files put on the community list
+  {
+    const hA = 'd'.repeat(64), hB = 'e'.repeat(64);
+    const mal = { key: 'odd-file /etc/config/.gl/run.sh', verdict: 'malware', note: 'per-device variants', hashes: [hA], every: true };
+    const j1 = await (await lab(mal)).json(), l1 = j1.labels[mal.key];
+    expect('"known malware" is stored with every file at its path', l1.verdict === 'malware' && l1.every === true && l1.by === claims.email && l1.hashes[0] === hA);
+    const j2 = await (await lab({ key: 'changed /etc/sysupgrade.conf', verdict: 'unsafe', note: '', hashes: [hB] })).json();
+    expect('"probably not safe" is stored; without "every" a mark holds for its files only', j2.labels['changed /etc/sysupgrade.conf'].verdict === 'unsafe' && j2.labels['changed /etc/sysupgrade.conf'].every === false);
+    expect('"every" must be true or false', (await lab({ ...mal, every: 'yes' })).status === 400 && (await lab({ ...mal, every: 1 })).status === 400);
+    env.DB.raw.exec('DELETE FROM labels');
+    // the community list from the dashboard: POST .../dashboard/bad-hashes
+    const bh = (body, headers = { 'content-type': 'application/json', origin: 'https://example.org' }, tok = dtok) => call('POST', JSON.stringify(body), { ...(tok ? { 'cf-access-jwt-assertion': tok } : {}), ...headers }, '/csa-2026-01-report/dashboard/bad-hashes');
+    const one = { sha256: hA, verdict: 'malware', note: 'run.sh of gl-helper' };
+    expect('the list needs the dashboard login and the dashboard itself', (await bh(one, undefined, null)).status === 404 && (await bh(one, { 'content-type': 'application/json', origin: 'https://evil.example' })).status === 403 && (await bh(one, { 'content-type': 'text/plain', origin: 'https://example.org' })).status === 403);
+    expect('refuses a bad fingerprint, verdict or note', (await bh({ ...one, sha256: 'zz' })).status === 400 && (await bh({ ...one, verdict: 'safe' })).status === 400 && (await bh({ ...one, note: 'x\u0000' })).status === 400);
+    const put = await (await bh(one)).json();
+    expect('a file put on the list answers known_bad (answer 1), with who and when, and comes with the labels', put.bad[hA].answer === 1 && put.bad[hA].by === claims.email && put.bad[hA].note === one.note && /^2\d{3}-/.test(put.bad[hA].at) && (await (await d('labels')).json()).bad[hA].answer === 1);
+    env.DB.raw.exec(badHashesSql([{ sha256: hB, note: 'waiting', answer: 0 }]));
+    env.DB.raw.prepare("UPDATE bad_hashes SET asked = 3, asked_last = '2026-11-20' WHERE sha256 = ?").run(hB);
+    const rel = await (await bh({ sha256: hB, verdict: 'malware', note: '' })).json();
+    expect('an entry that waited is released and keeps its counter; an empty note gets one', rel.bad[hB].answer === 1 && rel.bad[hB].asked === 3 && rel.bad[hB].asked_last === '2026-11-20' && rel.bad[hB].note === 'marked on the dashboard');
+    const off = await (await bh({ sha256: hA, verdict: '', note: '' })).json();
+    expect('an empty verdict takes a file off the list', !off.bad[hA] && off.bad[hB]);
+    env.DB.raw.exec('DELETE FROM bad_hashes');
+    const db = env.DB; delete env.DB;
+    expect('without the database there is no list: a change is refused, the read has none', (await bh(one)).status === 400 && Object.keys((await (await d('labels')).json()).bad).length === 0);
+    env.DB = db;
+    // a table of labels from before "every": the worker adds the column, the old marks stay
+    const old = d1();
+    old.raw.exec('CREATE TABLE labels (key TEXT PRIMARY KEY, verdict TEXT NOT NULL, note TEXT NOT NULL, hashes TEXT NOT NULL, by TEXT NOT NULL, at TEXT NOT NULL)');
+    old.raw.prepare('INSERT INTO labels VALUES (?, ?, ?, ?, ?, ?)').run('changed /etc/old', 'safe', 'old mark', JSON.stringify([hA]), 'a@example.org', '2026-11-20T10:00:00Z');
+    const fresh = (await import('../src/index.js?older-labels')).default, oenv = { ...env, DB: old };
+    const ocall = (method, body, path) => fresh.fetch(new Request('https://example.org/csa-2026-01-report/dashboard/' + path, { method, body, headers: { 'cf-access-jwt-assertion': dtok, ...(body ? { 'content-type': 'application/json', origin: 'https://example.org' } : {}) } }), oenv, { waitUntil() {} });
+    const o1 = await (await ocall('GET', undefined, 'labels')).json();
+    const o2 = await (await ocall('POST', JSON.stringify({ key: 'changed /etc/sysupgrade.conf', verdict: 'safe', note: '', hashes: [], every: true }), 'labels')).json();
+    expect('an older table of labels gets the column: its marks stay, without "every", and new ones can have it', o1.labels['changed /etc/old'].note === 'old mark' && o1.labels['changed /etc/old'].every === false && o2.labels['changed /etc/sysupgrade.conf'].every === true && o2.labels['changed /etc/old'].hashes[0] === hA);
+  }
   expect('a label is not taken for a report', (await (await d('data')).json()).items.length === kvReports);
   const all1 = (await (await d('data')).json());
   expect('dashboard reads the moved reports from D1', all1.items.length === kvReports && all1.cursor === '' && all1.items[0].report.model === 'GL-AXT1800');
@@ -616,6 +653,32 @@ if (process.argv[2] === 'serve') {
     expect('the check answers only at its own address: anywhere else a POST is refused and counts nothing', elsewhere.every((r) => r.status === 405) && row(h('7')).asked === 1);
     expect('a version of up to three digits and one line are taken', (await look(ask([[sha('k'), h('6')]], ['csa-2026-01-lookup 1', 'version 2.123', 'nonce ' + NONCE]))).status === 200);
 
+    // "known malware" for its files or every file at its path, "probably not safe" never, and
+    // "probably safe" for every file at its path still only for its files
+    {
+      const putEvery = env.DB.raw.prepare('INSERT OR REPLACE INTO labels (key, verdict, note, hashes, every, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      const kM = 'odd-file /etc/config/.gl/run.sh', kE = 'tmp-file /tmp/.x', kU = 'changed /etc/rc.local', kS = 'changed /etc/sysupgrade.conf';
+      putEvery.run(kM, 'malware', 'its files', JSON.stringify([h('a')]), 0, 'a@example.org', '2026-11-26T10:00:00Z');
+      putEvery.run(kE, 'malware', 'every file', JSON.stringify([h('a')]), 1, 'a@example.org', '2026-11-26T10:00:00Z');
+      putEvery.run(kU, 'unsafe', 'odd', JSON.stringify([h('b')]), 1, 'a@example.org', '2026-11-26T10:00:00Z');
+      putEvery.run(kS, 'safe', 'every device has its own', JSON.stringify([h('c')]), 1, 'a@example.org', '2026-11-26T10:00:00Z');
+      markCache.map = null;
+      const q = [[sha(kM), h('a')], [sha(kM), h('d')], [sha(kE), h('d')], [sha(kE), release], [sha(kU), h('b')], [sha(kS), h('c')], [sha(kS), h('d')], [sha('changed /y'), h('a')]];
+      const got = (await (await look(ask(q))).text()).trim().split('\n').slice(3).map((l) => l.split(' ')[2]).join();
+      expect('known malware: its files known_bad, another file at its path unknown; for every file: any file, a release file too; probably not safe: unknown; probably safe for every file: known_safe only for its files; the same file at another path: unknown', got === 'known_bad,unknown,known_bad,known_bad,unknown,known_safe,unknown,unknown');
+      env.DB.raw.prepare('DELETE FROM labels WHERE key IN (?, ?, ?, ?)').run(kM, kE, kU, kS);
+      // set on the dashboard, a mark or a file on the list counts at once in this worker
+      markCache.map = null; const t1 = Date.now(); markCache.now = () => t1;
+      const word = async (k, f) => (await (await look(ask([[sha(k), f]]))).text()).trim().split(' ').at(-1);
+      const w0 = await word(kM, h('d'));
+      await lab({ key: kM, verdict: 'malware', note: '', hashes: [h('d')] });
+      const w1 = await word(kM, h('d'));
+      await call('POST', JSON.stringify({ sha256: h('e'), verdict: 'malware', note: '' }), { 'cf-access-jwt-assertion': dtok, 'content-type': 'application/json', origin: 'https://example.org' }, '/csa-2026-01-report/dashboard/bad-hashes');
+      const w2 = await word('changed /z', h('e'));
+      expect('a mark set on the dashboard counts at once in the same worker, not only after a minute; a file put on the list too', w0 === 'unknown' && w1 === 'known_bad' && w2 === 'known_bad');
+      markCache.now = () => Date.now(); markCache.map = null;
+      env.DB.raw.prepare('DELETE FROM labels WHERE key = ?').run(kM); env.DB.raw.prepare('DELETE FROM bad_hashes WHERE sha256 = ?').run(h('e'));
+    }
     // a mark removed on the dashboard counts no more after a minute
     const t0 = Date.now(); markCache.now = () => t0; markCache.map = null;
     const one = async () => (await (await look(ask([[sha(markKey), h('1')]]))).text()).trim().split(' ').at(-1);

@@ -141,17 +141,36 @@ goes without the firmware list. Against the limit on calls only the paid plan he
 To go back, remove the `[[d1_databases]]` block and deploy: the worker uses KV again.
 Reports that arrived in D1 in the meantime are then not shown.
 
-## Marking findings as probably safe
+## Marking findings
 
 The dashboard lists what the scripts sent for review. Everyone who may open the dashboard
-may mark such a finding as probably safe, with a short note, in the block "Unusual
-changes seen on several devices" or inside a single report. A marked finding is hidden
-for everyone unless they ask to see it. Each mark records who set it (the address
-Cloudflare Access signed in) and when.
+may mark such a finding, with a short note, in the block "Unusual changes seen on several
+devices" or inside a single report:
+
+- "Probably safe": hidden for everyone unless they ask to see it.
+- "Probably not safe": stays listed, with the mark. Only the team sees it.
+- "Known malware": stays listed, with the mark, and the fingerprint check answers
+  `known_bad` for it: a device that sends such a file turns `INFECTED` on its next check.
+  Before saving, the dashboard says how many devices in the loaded reports carry the
+  finding and how many of them show no traces.
+
+Each mark records who set it (the address Cloudflare Access signed in) and when.
 
 A mark belongs to a kind and a path and remembers the fingerprints known for that path at
 the time. A file with another fingerprint at the same path brings the finding back, as "new
-file at a path marked safe": a replaced file is exactly what should not stay hidden.
+file at a path marked safe": a replaced file is exactly what should not stay hidden. Where
+every device has its own file at a path (`/etc/sysupgrade.conf`, or a loader that differs
+from device to device), a mark can hold for every file at its path, also new ones. For
+"probably safe" that only hides them on the dashboard: the check still calls only the
+fingerprints the mark holds probably safe. For "known malware" the check answers
+`known_bad` for any file at that path.
+
+A single file can also go on the community list as malware, at any path: the button in
+the "Fingerprints" table of a finding or in "Malware files". It is then an entry of
+`bad_hashes` with `answer = 1`, as if it had been loaded as SQL; an entry that waited
+(`answer = 0`) keeps its counter. A copy of a system program has that program's
+fingerprint (the older backdoor's `monitord` is a copy of `lua`): such a file must not go
+on the list.
 
 A click on a finding opens it in the side panel: the devices that sent it, the
 fingerprints behind its path with the number of devices for each, the models and
@@ -159,13 +178,14 @@ firmware, and when the entry changed on the devices. That is what to look at bef
 marking something.
 
 The "Review" page of the dashboard lists every mark with its comment, who set it and
-when, and from there a mark can be removed.
+when, and the files on the community list, and from there a mark or a file can be removed.
 
-The marks are kept in the D1 table `labels`, which the worker creates on first use, or in
-one KV entry when there is no database. They can be read at `<worker>/dashboard/labels`
-with the dashboard's login. From script 2.60 the fingerprint check asks for them (see
-"Fingerprint check" below): a file a mark covers is answered `known_safe`, which adds a
-note to the script's `REVIEW` line and changes nothing else.
+The marks are kept in the D1 table `labels`, which the worker creates on first use (and
+to which it adds the column `every`), or in one KV entry when there is no database. They
+can be read at `<worker>/dashboard/labels` with the dashboard's login, together with the
+entries of `bad_hashes`; the dashboard changes the list at `<worker>/dashboard/bad-hashes`
+(POST, `{ "sha256", "verdict": "malware" or "", "note" }`), which needs D1. From script
+2.60 the fingerprint check asks for them (see "Fingerprint check" below).
 
 ### Suggestions
 
@@ -203,12 +223,14 @@ The script posts to `https://app.gl-i.net/csa-2026-01-report/lookup`; the route 
 `app.gl-i.net/csa-2026-01-report*` already covers it. The answer has one line per line
 asked, in the same order, each with one word:
 
-- `known_bad`: the file is in the table `bad_hashes` with `answer = 1`.
+- `known_bad`: the file is in the table `bad_hashes` with `answer = 1`; or a mark "known
+  malware" whose key `<kind> <path>` has the SHA-256 asked holds for every file at its path
+  or for this file's fingerprint.
 - `known_safe`: a mark "probably safe" whose key `<kind> <path>` has the SHA-256 asked and
-  whose fingerprints include the file's; or the file is a known release file
-  (`src/known-hashes.json`), at any path.
-- `unknown`: everything else, also open or declined suggestions and entries of
-  `bad_hashes` with `answer = 0`.
+  whose fingerprints include the file's (also when the mark holds for every file at its
+  path); or the file is a known release file (`src/known-hashes.json`), at any path.
+- `unknown`: everything else, also marks "probably not safe", open or declined suggestions
+  and entries of `bad_hashes` with `answer = 0`.
 
 The answer can only make the script's result worse: `known_bad` makes it `INFECTED`,
 `known_safe` only adds a note to a `REVIEW` line. A mark holds every fingerprint that
@@ -225,8 +247,8 @@ stored or logged**; the only write is the counter of a `bad_hashes` entry that w
 for, at most once a day per entry, made after the answer, so the answer takes no longer for
 an entry that waits than for a file nobody listed. Made-up requests can therefore not run
 up D1 writes: with the 14 entries of the first fill there are at most 14 a day. Each
-worker instance reads the marks at most once a minute, so a mark removed on the dashboard
-no longer counts a minute later.
+worker instance reads the marks at most once a minute, so a mark set or removed on the
+dashboard counts a minute later at the latest (at once in the instance that saved it).
 
 ### Switch it on
 

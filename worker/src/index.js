@@ -184,34 +184,42 @@ const row = (r) => ({ id: r.id, received: r.received, report: JSON.parse(r.repor
 const kvLoad = async (env, names) =>
   (await Promise.all(names.map(async (name) => [name, await env.REPORTS.get(name)]))).filter((x) => x[1]).map(([id, v]) => ({ id, ...JSON.parse(v) }));
 
-// What the team says about a finding that the scripts listed for review: "probably safe",
-// with a note. The dashboard then hides it unless asked. Everyone who may open the
-// dashboard may set and remove a label, and each label records who set it (the address
-// Cloudflare Access signed in). One label per kind and path; it remembers the fingerprints it
-// was given for, so a new file at a path that was called harmless shows up again.
-// Kept in D1 (the table is created on first use) or, without D1, in one KV entry.
+// What the team says about a finding that the scripts listed for review, with a note:
+// "probably safe" (verdict safe: the dashboard then hides it unless asked), "probably not
+// safe" (unsafe) or "known malware" (malware). Everyone who may open the dashboard may set
+// and remove a label, and each label records who set it (the address Cloudflare Access
+// signed in). One label per kind and path; it remembers the fingerprints it was given for,
+// so a new file at a path that was called harmless shows up again, unless the label holds
+// for every file at its path (every). Kept in D1 (the table is created on first use, the
+// column every added to an older one) or, without D1, in one KV entry.
 const LABELS_KEY = 'meta/csa-2026-01-labels';
-export const LABELS_TABLE = 'CREATE TABLE IF NOT EXISTS labels (key TEXT PRIMARY KEY, verdict TEXT NOT NULL, note TEXT NOT NULL, hashes TEXT NOT NULL, by TEXT NOT NULL, at TEXT NOT NULL)';
+export const LABELS_TABLE = 'CREATE TABLE IF NOT EXISTS labels (key TEXT PRIMARY KEY, verdict TEXT NOT NULL, note TEXT NOT NULL, hashes TEXT NOT NULL, by TEXT NOT NULL, at TEXT NOT NULL, every INTEGER NOT NULL DEFAULT 0)';
 let labelsTable = false;
 const labels = {
   async ready(env) {
     if (labelsTable) return;
     await env.DB.prepare(LABELS_TABLE).run();
+    try {
+      await env.DB.prepare('ALTER TABLE labels ADD COLUMN every INTEGER NOT NULL DEFAULT 0').run();
+    } catch {
+      // the column is there already
+    }
     labelsTable = true;
   },
   async all(env) {
     if (env.DB) {
       await labels.ready(env);
-      const { results } = await env.DB.prepare('SELECT key, verdict, note, hashes, by, at FROM labels').all();
-      return Object.fromEntries(results.map((r) => [r.key, { verdict: r.verdict, note: r.note, hashes: JSON.parse(r.hashes), by: r.by, at: r.at }]));
+      const { results } = await env.DB.prepare('SELECT key, verdict, note, hashes, every, by, at FROM labels').all();
+      return Object.fromEntries(results.map((r) => [r.key, { verdict: r.verdict, note: r.note, hashes: JSON.parse(r.hashes), every: Number(r.every) === 1, by: r.by, at: r.at }]));
     }
     return JSON.parse((await env.REPORTS.get(LABELS_KEY)) || '{}');
   },
   async set(env, key, label) {
+    markCache.map = null;
     if (env.DB) {
       await labels.ready(env);
       if (!label) await env.DB.prepare('DELETE FROM labels WHERE key = ?1').bind(key).run();
-      else await env.DB.prepare('INSERT OR REPLACE INTO labels (key, verdict, note, hashes, by, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)').bind(key, label.verdict, label.note, JSON.stringify(label.hashes), label.by, label.at).run();
+      else await env.DB.prepare('INSERT OR REPLACE INTO labels (key, verdict, note, hashes, every, by, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)').bind(key, label.verdict, label.note, JSON.stringify(label.hashes), label.every ? 1 : 0, label.by, label.at).run();
       return;
     }
     const all = JSON.parse((await env.REPORTS.get(LABELS_KEY)) || '{}');
@@ -257,9 +265,19 @@ const suggestions = {
 export function validLabel(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return 'not an object';
   if (!(typeof body.key === 'string' && body.key.length >= 3 && body.key.length <= 200 && SAFE.test(body.key))) return 'bad key';
-  if (!['safe', '', 'decline'].includes(body.verdict)) return 'bad verdict';
+  if (!['safe', 'unsafe', 'malware', '', 'decline'].includes(body.verdict)) return 'bad verdict';
   if (!(typeof body.note === 'string' && body.note.length <= 200 && /^[\x20-\x7e]*$/.test(body.note))) return 'bad note';
   if (!(Array.isArray(body.hashes) && body.hashes.length <= 60 && body.hashes.every((h) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)))) return 'bad hashes';
+  if (body.every !== undefined && typeof body.every !== 'boolean') return 'bad every';
+  return null;
+}
+
+// A file the dashboard puts on the community list as malware, at any path, or takes off it.
+export function validBadHash(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return 'not an object';
+  if (!(typeof body.sha256 === 'string' && /^[0-9a-f]{64}$/.test(body.sha256))) return 'bad sha256';
+  if (!['malware', ''].includes(body.verdict)) return 'bad verdict';
+  if (!(typeof body.note === 'string' && body.note.length <= 200 && /^[\x20-\x7e]*$/.test(body.note))) return 'bad note';
   return null;
 }
 
@@ -400,15 +418,22 @@ export async function accessUser(request, env) {
 async function dashboard(request, env, data) {
   const user = await accessUser(request, env);
   if (!user) return text('not found', 404);
-  if (data === 'labels') {
+  if (data === 'labels' || data === 'bad-hashes') {
     const out = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-    const both = async () => out({ labels: await labels.all(env), suggestions: await suggestions.all(env), you: user });
+    const both = async () => out({ labels: await labels.all(env), suggestions: await suggestions.all(env), bad: env.DB ? await badHashes.all(env) : {}, you: user });
     if (request.method === 'GET') return both();
     // a change: only from the dashboard itself. A form on another site cannot send JSON,
     // and the browser names the page a request comes from.
     if (!(request.headers.get('content-type') || '').startsWith('application/json') || request.headers.get('origin') !== new URL(request.url).origin) return text('not from the dashboard', 403);
     let body;
     try { body = JSON.parse((await request.text()).slice(0, 8192)); } catch { return text('not JSON', 400); }
+    if (data === 'bad-hashes') {
+      const wrong = validBadHash(body);
+      if (wrong) return text(wrong, 400);
+      if (!env.DB) return text('the list needs the database', 400);
+      await badHashes.set(env, body.sha256, body.verdict ? { note: body.note || 'marked on the dashboard', by: user, at: new Date().toISOString() } : null);
+      return both();
+    }
     const bad = validLabel(body);
     if (bad) return text(bad, 400);
     if (body.verdict === 'decline') {
@@ -416,7 +441,7 @@ async function dashboard(request, env, data) {
       await suggestions.decline(env, body.key, user);
       return both();
     }
-    await labels.set(env, body.key, body.verdict ? { verdict: body.verdict, note: body.note, hashes: body.hashes, by: user, at: new Date().toISOString() } : null);
+    await labels.set(env, body.key, body.verdict ? { verdict: body.verdict, note: body.note, hashes: body.hashes, every: body.every === true, by: user, at: new Date().toISOString() } : null);
     if (body.verdict) await suggestions.drop(env, body.key);
     return both();
   }
@@ -855,21 +880,34 @@ export const badHashes = {
     const up = env.DB.prepare('UPDATE bad_hashes SET asked = asked + 1, asked_last = ?2 WHERE sha256 = ?1 AND asked_last <> ?2');
     await env.DB.batch(files.map((file) => up.bind(file, day)));
   },
+  // every entry, for the dashboard: an object from fingerprint to the entry
+  async all(env) {
+    await badHashes.ready(env);
+    const { results } = await env.DB.prepare('SELECT sha256, note, answer, by, at, asked, asked_last FROM bad_hashes').all();
+    return Object.fromEntries(results.map((r) => [r.sha256, { note: r.note, answer: Number(r.answer), by: r.by, at: r.at, asked: Number(r.asked), asked_last: r.asked_last }]));
+  },
+  // from the dashboard: on the list with answer 1, keeping its counter, or off it
+  async set(env, file, entry) {
+    await badHashes.ready(env);
+    if (!entry) await env.DB.prepare('DELETE FROM bad_hashes WHERE sha256 = ?1').bind(file).run();
+    else await env.DB.prepare('INSERT INTO bad_hashes (sha256, note, answer, by, at) VALUES (?1, ?2, 1, ?3, ?4) ON CONFLICT (sha256) DO UPDATE SET note = excluded.note, answer = 1, by = excluded.by, at = excluded.at').bind(file, entry.note, entry.by, entry.at).run();
+  },
 };
 
-// The marks "probably safe" of the dashboard as the check needs them: a Map from the
-// SHA-256 of a mark's key to the fingerprints it was set for. Kept per isolate for a
-// minute, so that a check costs no query of its own and a mark removed on the dashboard
-// counts no more a minute later. Suggestions are not marks and never count. "now" can be
-// replaced, for the tests.
+// The marks "probably safe" and "known malware" of the dashboard as the check needs them: a
+// Map from the SHA-256 of a mark's key to its verdict, the fingerprints it was set for and
+// whether it holds for every file at its path. Kept per isolate for a minute, so that a
+// check costs no query of its own and a mark set or removed on the dashboard counts a
+// minute later at the latest. Marks "probably not safe" and suggestions never count. "now"
+// can be replaced, for the tests.
 export const markCache = { ttl: 60_000, now: () => Date.now(), at: 0, map: null };
-async function safeMarks(env) {
+async function checkMarks(env) {
   const now = markCache.now();
   if (markCache.map && now >= markCache.at && now - markCache.at < markCache.ttl) return markCache.map;
   const map = new Map();
   for (const [key, label] of Object.entries(await labels.all(env))) {
-    if (!label || label.verdict !== 'safe' || !Array.isArray(label.hashes)) continue;
-    map.set(await sha256hex(key), new Set(label.hashes.filter((h) => typeof h === 'string')));
+    if (!label || !['safe', 'malware'].includes(label.verdict) || !Array.isArray(label.hashes)) continue;
+    map.set(await sha256hex(key), { verdict: label.verdict, every: label.every === true, hashes: new Set(label.hashes.filter((h) => typeof h === 'string')) });
   }
   markCache.at = now;
   markCache.map = map;
@@ -879,10 +917,14 @@ async function safeMarks(env) {
 // One word per line, in the order asked: known_bad before known_safe before unknown.
 async function lookupWords(env, items, day, ctx) {
   const bad = env.DB ? await badHashes.find(env, [...new Set(items.map(([, file]) => file))]) : new Map();
-  const marks = await safeMarks(env);
+  const marks = await checkMarks(env);
   const words = items.map(([key, file]) => {
-    if (bad.get(file)?.answer === 1) return 'known_bad';
-    if ((marks.has(key) && marks.get(key).has(file)) || KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
+    const mark = marks.get(key);
+    // "known malware" for every file at its path, or for the files it was set for
+    if (bad.get(file)?.answer === 1 || (mark?.verdict === 'malware' && (mark.every || mark.hashes.has(file)))) return 'known_bad';
+    // "probably safe" only for the files it was set for, even when it hides every file at
+    // its path on the dashboard: a file nobody has seen is not called safe
+    if ((mark?.verdict === 'safe' && mark.hashes.has(file)) || KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
     return 'unknown';
   });
   // One more day for each file of this request that is in the table, released or not, and
@@ -947,6 +989,7 @@ export default {
       return migrate(request, env);
     }
     if (pathname.endsWith('/dashboard/labels') && (request.method === 'GET' || request.method === 'POST')) return dashboard(request, env, 'labels');
+    if (pathname.endsWith('/dashboard/bad-hashes') && request.method === 'POST') return dashboard(request, env, 'bad-hashes');
     // Reports are taken only at the address the script sends to. A POST anywhere else stores
     // nothing, so a rate limit on this one path (a Cloudflare rule, ahead of the worker)
     // covers every way in.
