@@ -61,9 +61,10 @@ itself, with `--check` or `--archive`, never with `--fix`, and only when at leas
 listed for review has a fingerprint (a regular file of up to 64 MiB, or the program of a
 process that runs from a deleted file).
 
-The question comes right after the findings, before the GoodCloud advice and the result,
-so that the verdict, the exit code and the address under the verdict already include the
-answer. The script says how many files it would ask about, what is sent (for each file
+The question comes right after the checks, before the list of findings, the GoodCloud
+advice and the result, so that the list, the verdict, the exit code and the address under
+the verdict already include the answer (since 2.61; in 2.60 it came after the list). The
+script says how many files it would ask about, what is sent (for each file
 the SHA-256 of its kind and path and the SHA-256 of the file, the script version and a
 random number) and what is not (no path, no content of a file, no device ID, no model, no
 host name), then asks `Check them? [y/N, v = show what would be sent]`. `v` prints the
@@ -81,10 +82,21 @@ once it says it is asking stops the check, and the run goes on to its result.
 
 ```
    Answer received and checked (2026-11-24 16:40 UTC).
+   1 known as malware, 1 probably safe, 4 not known. Each answer stands under its finding below.
    KNOWN BAD      new-binary      /usr/bin/.cache/sd
-   probably safe  new-binary      /usr/sbin/tailscaled
-   not known      4 more, as listed above: still yours to look at
 ```
+
+In the list of findings each file that was asked about carries the answer under its line:
+
+```
+   REVIEW   new-binary      /usr/sbin/tailscaled
+                            not in base image, not owned by a package
+                            community list: probably safe, not a proof
+```
+
+The line says `community list: known malware`, `community list: probably safe, not a proof`
+or `community list: not known`. A finding that was not asked about (no fingerprint, an
+account, or beyond the 40) has no such line.
 
 - A file the list knows as malware is added as `IOC lookup-bad`: the verdict is
   `INFECTED`, the exit code `1`, and the field for review in the address under the

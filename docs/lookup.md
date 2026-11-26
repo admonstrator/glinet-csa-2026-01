@@ -143,6 +143,10 @@ does the server.
 | `known_safe` | the `REVIEW` line stays and is counted as before, with a note that the community list has the file as probably safe |
 | `unknown` | nothing changes |
 
+Since 2.61 the check runs before the list of findings, and each answer stands under the
+finding it is for, in fixed words: `community list: known malware`, `community list:
+probably safe, not a proof` or `community list: not known`.
+
 `--fix` does not remove a file found this way: it only removes what it knows. With
 `--archive`, the request and the answer go into the archive as `lookup.txt`.
 

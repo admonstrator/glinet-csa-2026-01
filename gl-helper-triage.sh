@@ -53,7 +53,7 @@
 # which is listed for review too, are taken out. This is a stopgap: a reinstall of the
 # firmware without kept settings is still recommended.
 
-VERSION=2.60
+VERSION=2.61
 # When this version went out, in UTC. Changed together with VERSION. The guide on the
 # website reads both lines to show the current version and how long ago it came out.
 RELEASED='2026-11-26 19:23 UTC'
@@ -2585,13 +2585,21 @@ report_head() {
 report_body() {
 	local n_ioc lvl pat n_conn
 	n_ioc=$(count IOC)
+	# the community's answer for a finding listed for review, when the fingerprint check ran:
+	# a line of fixed words under it, found by its kind and its own path
+	[ -f "$TMP/lookup.byfinding" ] || : >"$TMP/lookup.byfinding"
 	if [ -s "$FIND" ]; then
 		section "Findings"
 		for lvl in IOC PERSIST REVIEW INFO; do
 			[ "$(count "$lvl")" -gt 0 ] || continue
 			say ""
-			grep "^$lvl${TAB}" "$FIND" | awk -F '\t' -v c="$(level_color "$lvl")" -v n="$N" -v b="$B" -v d="$D" \
-				'{printf "   %s%-8s%s %-15s %s%s%s\n   %24s %s%s%s\n", c, $1, n, $2, b, $3, n, "", d, $4, n}' >&3
+			grep "^$lvl${TAB}" "$FIND" | awk -F '\t' -v c="$(level_color "$lvl")" -v n="$N" -v b="$B" -v d="$D" -v r="$RED" \
+				'f == 1 { w[$2 "\t" $3] = $1; next }
+				{ printf "   %s%-8s%s %-15s %s%s%s\n   %24s %s%s%s\n", c, $1, n, $2, b, $3, n, "", d, $4, n
+				  a = ($1 == "REVIEW") ? w[$2 "\t" $3] : ""
+				  if (a == "known_bad") printf "   %24s %scommunity list: known malware%s\n", "", r, n
+				  else if (a == "known_safe") printf "   %24s community list: probably safe, not a proof\n", ""
+				  else if (a == "unknown") printf "   %24s %scommunity list: not known%s\n", "", d, n }' f=1 "$TMP/lookup.byfinding" f=2 - >&3
 		done
 	fi
 	if [ "$LIVE" = 1 ] && [ -r /proc/net/tcp ]; then
@@ -3391,20 +3399,22 @@ build_report() {
 				# call to a function and stop with "Call to undefined function"
 				if (b != "") x = x " base=" b
 			}
-			# "-" stands for an empty field: the shell would swallow two tabs in a row
+			# "-" stands for an empty field: the shell would swallow two tabs in a row. Last the
+			# path of the finding itself, by which the list of findings shows the answer of the
+			# community list
 			rank = 50
 			if ($2 ~ /^(new-binary|modified-binary|running|deleted-exe|changed-lib|applet-replaced|replaced-link|netstat)$/) rank = 10
 			else if ($2 ~ /^(tmp-file|lua-bytecode|odd-file|odd-name)$/) rank = 20
 			else if ($2 == "new" || $2 == "changed") rank = 30
 			else if ($2 == "hidden" || $2 == "overlay-hidden") rank = 40
-			print rank "\t" $2 "\t" (p == "" ? "-" : p) "\t" (pid == "" ? "-" : pid) "\t" (x == "" ? "-" : x)
-		}' "$FIND" | sort -u >"$TMP/revall"
+			print rank "\t" $2 "\t" (p == "" ? "-" : p) "\t" (pid == "" ? "-" : pid) "\t" (x == "" ? "-" : x) "\t" ($3 == "" ? "-" : $3)
+		}' "$FIND" | sort -t "$TAB" -u -k1,5 >"$TMP/revall"
 	LOOKUP_LEFT=$(($(wc -l <"$TMP/revall" | tr -d ' ') - 40))
 	[ "$LOOKUP_LEFT" -gt 0 ] || LOOKUP_LEFT=0
 	revs=$(head -n 40 "$TMP/revall" | cut -f2- |
-		while IFS="$TAB" read -r kind f pid x; do
+		while IFS="$TAB" read -r kind f pid x o; do
 			sha='' mt='' ct=''
-			[ "$f" = - ] && f=''; [ "$pid" = - ] && pid=''; [ "$x" = - ] && x=''
+			[ "$f" = - ] && f=''; [ "$pid" = - ] && pid=''; [ "$x" = - ] && x=''; [ "$o" = - ] && o=''
 			case $f in /*)
 				n=$(r "${f#/}")
 				if [ -n "$pid" ]; then
@@ -3423,7 +3433,7 @@ build_report() {
 				fi ;;
 			esac
 			# the fingerprint check asks for this file by the kind and path below (see lookup)
-			[ -n "$sha" ] && lookup_item "$kind" "$f${x:+ $x}" "$sha" "$f"
+			[ -n "$sha" ] && lookup_item "$kind" "$f${x:+ $x}" "$sha" "$f" "$o"
 			f="$f${x:+ $x}"
 			printf '%s  %s\n' "$kind" "$f" >>"$TMP/revlines"
 			printf '{"kind": %s, "path": %s, "sha256": %s, "mtime": %s, "ctime": %s},' "$(jstr "$kind" 24)" "$(jstr "$f" 160)" "$(jstr "$sha")" "$(jstr "$mt")" "$(jstr "$ct")"
@@ -3616,14 +3626,16 @@ LOOKUP_URL=https://app.gl-i.net/csa-2026-01-report/lookup
 loopback_url "${GL_TRIAGE_LOOKUP_URL:-}" && LOOKUP_URL=$GL_TRIAGE_LOOKUP_URL
 LOOKUP_SAFE=0 LOOKUP_NONCE= LOOKUP_LEFT=0
 # One file, from the loop of build_report that makes the report's review_items: the line it
-# is asked with, its kind, the path a finding for it names and the path as the report has it.
-lookup_item() { # kind, path as in the report, sha256 of the file, path of the file
+# is asked with, its kind, the path a finding for it names, the path as the report has it
+# and the path of its own finding (a process id for deleted-exe), by which the list of
+# findings shows the answer.
+lookup_item() { # kind, path as in the report, sha256 of the file, path of the file, path of the finding
 	local k
 	# An account stands for /etc/passwd, which differs on every device, and its line holds
 	# the account's name: a hash of it could be guessed back. Never asked.
 	case $1 in new-account | uid0-account) return 0 ;; esac
 	k=$(printf '%s %s' "$(jclean "$1" 24)" "$(jclean "$2" 160)" | sha256sum 2>/dev/null | cut -c1-64)
-	printf '%s %s\t%s\t%s\t%s\n' "$k" "$3" "$1" "$4" "$2" >>"$TMP/lookup.items"
+	printf '%s %s\t%s\t%s\t%s\t%s\n' "$k" "$3" "$1" "$4" "$2" "$5" >>"$TMP/lookup.items"
 }
 # Runs the command given and keeps what it prints in lookup.answer, cut at 8193 bytes while it
 # arrives (more never checks out). The tool is stopped after 25 seconds, as soon as 8193
@@ -3759,7 +3771,7 @@ lookup_txt() {
 	} >"$TMP/lookup.txt"
 }
 lookup() {
-	local n answer w k p s bad=0 safe=0 total nu rc
+	local n answer w k p s bad=0 safe=0 total nu rc sum
 	[ "$LIVE" = 1 ] && [ -s "$TMP/lookup.items" ] || return 0
 	# each line once, in the order of the report, and only in the shape the request takes
 	grep -E "^[0-9a-f]{64} [0-9a-f]{64}${TAB}" "$TMP/lookup.items" | cut -f1 | awk '!s[$0]++' >"$TMP/lookup.lines"
@@ -3783,8 +3795,8 @@ lookup() {
 		return 0
 	fi
 	{ printf 'csa-2026-01-lookup 1\nversion %s\nnonce %s\n' "$VERSION" "$LOOKUP_NONCE"; cat "$TMP/lookup.lines"; } >"$TMP/lookup.req"
-	if [ "$n" = 1 ]; then say "   The community list can say whether the file listed for review is known: as malware,"
-	else say "   The community list can say whether the $n files listed for review are known: as malware,"; fi
+	if [ "$n" = 1 ]; then say "   The community list can say whether the file listed for review below is known: as malware,"
+	else say "   The community list can say whether the $n files listed for review below are known: as malware,"; fi
 	say "   as probably safe, or not at all. The answer can only make the result worse, never better."
 	say "   Sent: for each file the SHA-256 of its kind and path and the SHA-256 of the file, and"
 	say "   the script version and a random number for this run."
@@ -3846,9 +3858,13 @@ lookup() {
 		lookup_txt "An answer came, but it did not check out and was set aside. Nothing changed." sent
 		return 0
 	fi
-	# the word for each finding, by the line it was asked with: word, kind, path, path as shown
+	# the word for each finding, by the line it was asked with: word, kind, path, path as shown;
+	# and for the list of findings the word by kind and the finding's own path, as it stands
+	# in the findings (never printed: only compared)
 	awk -F '\t' 'NR == FNR { if (FNR > 1) w[$1] = $2; next } ($1 in w) { print w[$1] "\t" $2 "\t" $3 "\t" $4 }' \
 		"$TMP/lookup.words" "$TMP/lookup.items" | clean_lines >"$TMP/lookup.result"
+	awk -F '\t' 'NR == FNR { if (FNR > 1) w[$1] = $2; next } ($1 in w) { print w[$1] "\t" $2 "\t" $5 }' \
+		"$TMP/lookup.words" "$TMP/lookup.items" >"$TMP/lookup.byfinding"
 	# only ever worse: a finding is added, none is taken away or changed
 	while IFS="$TAB" read -r w k p s; do
 		case $w in
@@ -3862,16 +3878,15 @@ lookup() {
 	total=$(wc -l <"$TMP/lookup.result" | tr -d ' ')
 	nu=$((total - bad - safe))
 	say ""
-	# the time in the shape lookup_read let through: digits, dashes, a colon, UTC
+	# the time in the shape lookup_read let through: digits, dashes, a colon, UTC. Each answer
+	# stands under its finding in the list that follows.
 	say "   Answer received and checked ($(head -n 1 "$TMP/lookup.words"))."
+	sum=''
+	[ "$bad" -gt 0 ] && sum="$bad known as malware"
+	[ "$safe" -gt 0 ] && sum="${sum:+$sum, }$safe probably safe"
+	[ "$nu" -gt 0 ] && sum="${sum:+$sum, }$nu not known"
+	say "   $sum. Each answer stands under its finding below."
 	awk -F '\t' -v r="$RED" -v n="$N" '$1 == "known_bad" { printf "   %sKNOWN BAD%s      %-15s %s\n", r, n, $2, $4 }' "$TMP/lookup.result" >&3
-	awk -F '\t' '$1 == "known_safe" { printf "   probably safe  %-15s %s\n", $2, $4 }' "$TMP/lookup.result" >&3
-	if [ "$nu" -gt 0 ] && [ "$nu" = "$total" ]; then
-		if [ "$nu" = 1 ]; then say "   not known      the file listed above: still yours to look at"
-		else say "   not known      all $nu, as listed above: still yours to look at"; fi
-	elif [ "$nu" -gt 0 ]; then
-		say "   not known      $nu more, as listed above: still yours to look at"
-	fi
 	if [ "$bad" = 1 ]; then
 		say "   ${RED}KNOWN BAD: the community list has this file as malware. It counts as IOC lookup-bad,${N}"
 		say "   ${RED}and the result is INFECTED. --fix does not remove it.${N}"
@@ -4205,16 +4220,17 @@ detect "$TMP/findings"
 [ "$LIVE" = 1 ] && build_report
 case $MODE in
 check)
-	report_body
+	# the fingerprint check first, so that its answers stand in the list of findings (2.61)
 	lookup
+	report_body
 	cloud_advice
 	result_block
 	[ "$(count IOC)" -gt 0 ] && { recommend; finish 1; }
 	finish 0
 	;;
 archive)
-	report_body
 	lookup
+	report_body
 	collect || { cloud_advice; result_block; finish 4; }
 	cloud_advice
 	result_block
