@@ -199,10 +199,15 @@ const labels = {
   async ready(env) {
     if (labelsTable) return;
     await env.DB.prepare(LABELS_TABLE).run();
-    try {
-      await env.DB.prepare('ALTER TABLE labels ADD COLUMN every INTEGER NOT NULL DEFAULT 0').run();
-    } catch {
-      // the column is there already
+    // the column every for a table from before it: added once, and any other error of the
+    // ALTER counts, so that the next request tries again (review of 2.61)
+    const has = async () => (await env.DB.prepare('PRAGMA table_info(labels)').all()).results.some((c) => c.name === 'every');
+    if (!(await has())) {
+      try {
+        await env.DB.prepare('ALTER TABLE labels ADD COLUMN every INTEGER NOT NULL DEFAULT 0').run();
+      } catch (e) {
+        if (!(await has())) throw e; // else another isolate added it at the same moment
+      }
     }
     labelsTable = true;
   },
@@ -215,16 +220,18 @@ const labels = {
     return JSON.parse((await env.REPORTS.get(LABELS_KEY)) || '{}');
   },
   async set(env, key, label) {
-    markCache.map = null;
     if (env.DB) {
       await labels.ready(env);
       if (!label) await env.DB.prepare('DELETE FROM labels WHERE key = ?1').bind(key).run();
       else await env.DB.prepare('INSERT OR REPLACE INTO labels (key, verdict, note, hashes, every, by, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)').bind(key, label.verdict, label.note, JSON.stringify(label.hashes), label.every ? 1 : 0, label.by, label.at).run();
-      return;
+    } else {
+      const all = JSON.parse((await env.REPORTS.get(LABELS_KEY)) || '{}');
+      if (label) all[key] = label; else delete all[key];
+      await env.REPORTS.put(LABELS_KEY, JSON.stringify(all));
     }
-    const all = JSON.parse((await env.REPORTS.get(LABELS_KEY)) || '{}');
-    if (label) all[key] = label; else delete all[key];
-    await env.REPORTS.put(LABELS_KEY, JSON.stringify(all));
+    // after the write: a check that read the marks before it keeps nothing (checkMarks)
+    markCache.gen++;
+    markCache.map = null;
   },
 };
 
@@ -420,7 +427,7 @@ async function dashboard(request, env, data) {
   if (!user) return text('not found', 404);
   if (data === 'labels' || data === 'bad-hashes') {
     const out = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-    const both = async () => out({ labels: await labels.all(env), suggestions: await suggestions.all(env), bad: env.DB ? await badHashes.all(env) : {}, you: user });
+    const both = async () => out({ labels: await labels.all(env), suggestions: await suggestions.all(env), bad: env.DB ? await badHashes.all(env) : null, you: user });
     if (request.method === 'GET') return both();
     // a change: only from the dashboard itself. A form on another site cannot send JSON,
     // and the browser names the page a request comes from.
@@ -898,33 +905,42 @@ export const badHashes = {
 // Map from the SHA-256 of a mark's key to its verdict, the fingerprints it was set for and
 // whether it holds for every file at its path. Kept per isolate for a minute, so that a
 // check costs no query of its own and a mark set or removed on the dashboard counts a
-// minute later at the latest. Marks "probably not safe" and suggestions never count. "now"
-// can be replaced, for the tests.
-export const markCache = { ttl: 60_000, now: () => Date.now(), at: 0, map: null };
+// minute later at the latest; one set in this isolate counts at once. Marks "probably not
+// safe" and suggestions never count. "now" can be replaced, for the tests.
+export const markCache = { ttl: 60_000, now: () => Date.now(), at: 0, map: null, gen: 0 };
 async function checkMarks(env) {
-  const now = markCache.now();
+  const now = markCache.now(), gen = markCache.gen;
   if (markCache.map && now >= markCache.at && now - markCache.at < markCache.ttl) return markCache.map;
   const map = new Map();
   for (const [key, label] of Object.entries(await labels.all(env))) {
     if (!label || !['safe', 'malware'].includes(label.verdict) || !Array.isArray(label.hashes)) continue;
     map.set(await sha256hex(key), { verdict: label.verdict, every: label.every === true, hashes: new Set(label.hashes.filter((h) => typeof h === 'string')) });
   }
-  markCache.at = now;
-  markCache.map = map;
+  // kept only when no mark was set while it was read: else it could be the old marks
+  if (markCache.gen === gen) {
+    markCache.at = now;
+    markCache.map = map;
+  }
   return map;
 }
 
-// One word per line, in the order asked: known_bad before known_safe before unknown.
+// One word per line, in the order asked: a file on the malware list, then a known release
+// file, then the marks of the dashboard.
 async function lookupWords(env, items, day, ctx) {
   const bad = env.DB ? await badHashes.find(env, [...new Set(items.map(([, file]) => file))]) : new Map();
   const marks = await checkMarks(env);
   const words = items.map(([key, file]) => {
     const mark = marks.get(key);
+    if (bad.get(file)?.answer === 1) return 'known_bad';
+    // a release file is never malware by a mark, even one for every file at its path: a
+    // mark for one odd file at the path of a release would else hit every device with the
+    // release (review of 2.61). Only the malware list can name such a file.
+    if (KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
     // "known malware" for every file at its path, or for the files it was set for
-    if (bad.get(file)?.answer === 1 || (mark?.verdict === 'malware' && (mark.every || mark.hashes.has(file)))) return 'known_bad';
+    if (mark?.verdict === 'malware' && (mark.every || mark.hashes.has(file))) return 'known_bad';
     // "probably safe" only for the files it was set for, even when it hides every file at
     // its path on the dashboard: a file nobody has seen is not called safe
-    if ((mark?.verdict === 'safe' && mark.hashes.has(file)) || KNOWN_RELEASE_HASHES.has(file)) return 'known_safe';
+    if (mark?.verdict === 'safe' && mark.hashes.has(file)) return 'known_safe';
     return 'unknown';
   });
   // One more day for each file of this request that is in the table, released or not, and

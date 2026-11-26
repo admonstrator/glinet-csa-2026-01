@@ -39,8 +39,9 @@ accounts are never asked, that a new program and a file in `/tmp` are still aske
 hidden files are listed too, that an error costs exactly one request, that busybox's own
 `wget` is never used over HTTPS, and that known malware next to a trace of the attack
 still reads `INFECTED`. Since 2.61 they check that the check comes before the list of
-findings and that each answer stands under its own finding, and that a finding that was not
-asked has no such line. Through `triage-remote.sh` with an `ssh` that runs the command in
+findings and that each answer stands under its own finding, that a finding that was not
+asked has no such line, and that two programs from one deleted file are asked, counted and
+said once, with the answer under both. Through `triage-remote.sh` with an `ssh` that runs the command in
 the chroot, known malware is never "remediated": not with `--fix --lookup`, not when only
 the archive's run gets the answer, and not when `--fix` leaves a trace of the attack. The
 question on a terminal is tested through `script` where that gives one; Ctrl-C at the

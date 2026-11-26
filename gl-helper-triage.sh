@@ -2126,7 +2126,7 @@ check_procs() {
 check_exes() {
 	local exe rel pids owner
 	cut -f1 "$TMP/exes" | sort -u | while IFS= read -r exe; do
-		pids=$(awk -F '\t' -v e="$exe" '$1==e {printf "%s%s", sep, $2; sep=","}' "$TMP/exes")
+		pids=$(E=$exe awk -F '\t' '$1 == ENVIRON["E"] { printf "%s%s", sep, $2; sep = "," }' "$TMP/exes")
 		has_at applet-hijack "$exe" && continue
 		has_at updater-file "$exe" && continue
 		case $exe in
@@ -3401,14 +3401,15 @@ build_report() {
 			}
 			# "-" stands for an empty field: the shell would swallow two tabs in a row. Last the
 			# path of the finding itself, by which the list of findings shows the answer of the
-			# community list
+			# community list. Each line once by the first five columns, as before 2.61, with
+			# sort and awk alone: sort -t and -k are not in every busybox (review of 2.61)
 			rank = 50
 			if ($2 ~ /^(new-binary|modified-binary|running|deleted-exe|changed-lib|applet-replaced|replaced-link|netstat)$/) rank = 10
 			else if ($2 ~ /^(tmp-file|lua-bytecode|odd-file|odd-name)$/) rank = 20
 			else if ($2 == "new" || $2 == "changed") rank = 30
 			else if ($2 == "hidden" || $2 == "overlay-hidden") rank = 40
 			print rank "\t" $2 "\t" (p == "" ? "-" : p) "\t" (pid == "" ? "-" : pid) "\t" (x == "" ? "-" : x) "\t" ($3 == "" ? "-" : $3)
-		}' "$FIND" | sort -t "$TAB" -u -k1,5 >"$TMP/revall"
+		}' "$FIND" | sort -u | awk -F '\t' '!s[$1 FS $2 FS $3 FS $4 FS $5]++' >"$TMP/revall"
 	LOOKUP_LEFT=$(($(wc -l <"$TMP/revall" | tr -d ' ') - 40))
 	[ "$LOOKUP_LEFT" -gt 0 ] || LOOKUP_LEFT=0
 	revs=$(head -n 40 "$TMP/revall" | cut -f2- |
@@ -3858,10 +3859,11 @@ lookup() {
 		lookup_txt "An answer came, but it did not check out and was set aside. Nothing changed." sent
 		return 0
 	fi
-	# the word for each finding, by the line it was asked with: word, kind, path, path as shown;
-	# and for the list of findings the word by kind and the finding's own path, as it stands
-	# in the findings (never printed: only compared)
-	awk -F '\t' 'NR == FNR { if (FNR > 1) w[$1] = $2; next } ($1 in w) { print w[$1] "\t" $2 "\t" $3 "\t" $4 }' \
+	# the word for each line asked, once (two programs from one deleted file are one question):
+	# word, kind, path, path as shown; and for the list of findings the word for each finding,
+	# by kind and the finding's own path, as it stands in the findings (never printed: only
+	# compared)
+	awk -F '\t' 'NR == FNR { if (FNR > 1) w[$1] = $2; next } ($1 in w) && !s[$1]++ { print w[$1] "\t" $2 "\t" $3 "\t" $4 }' \
 		"$TMP/lookup.words" "$TMP/lookup.items" | clean_lines >"$TMP/lookup.result"
 	awk -F '\t' 'NR == FNR { if (FNR > 1) w[$1] = $2; next } ($1 in w) { print w[$1] "\t" $2 "\t" $5 }' \
 		"$TMP/lookup.words" "$TMP/lookup.items" >"$TMP/lookup.byfinding"

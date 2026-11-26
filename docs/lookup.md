@@ -86,22 +86,28 @@ Each of these bodies ends in a single `\n`, as the worker's other plain-text ans
 For each line, the first that applies:
 
 1. `known_bad`: the file's SHA-256 is in the table `bad_hashes` with `answer = 1` (loaded
-   as SQL or put there on the dashboard, at any path); or a mark "known malware" set on the
-   dashboard (`labels`, verdict `malware`) whose key `<kind> <path>` has the SHA-256 asked
-   and that holds for every file at its path or whose fingerprints include the file's.
-2. `known_safe`: a mark "probably safe" set on the dashboard (`labels`, verdict `safe`)
+   as SQL or put there on the dashboard, at any path).
+2. `known_safe`: the file's SHA-256 is in `known-hashes.json` (release files of the
+   community's Tailscale and AdGuard Home builds, at any path). No mark makes such a file
+   `known_bad`, not even one for every file at its path: a mark for one odd file at the
+   path of a release would otherwise hit every device that has the release. Only
+   `bad_hashes` can name a release file.
+3. `known_bad`: a mark "known malware" set on the dashboard (`labels`, verdict `malware`)
+   whose key `<kind> <path>` has the SHA-256 asked and that holds for every file at its
+   path or whose fingerprints include the file's.
+4. `known_safe`: a mark "probably safe" set on the dashboard (`labels`, verdict `safe`)
    whose key `<kind> <path>` has the SHA-256 asked and whose fingerprints include the
-   file's; or the file's SHA-256 is in `known-hashes.json` (release files of the
-   community's Tailscale and AdGuard Home builds, at any path). A mark holds every
-   fingerprint that reports sent for its key, made-up reports included: so `known_safe` is
-   never more than "probably safe". A mark "probably safe" that holds for every file at its
-   path hides new files on the dashboard, but here it counts only for the fingerprints it
-   holds: a file nobody has looked at is not called safe.
-3. `unknown`: everything else, including open or declined suggestions, marks "probably not
+   file's. A mark holds the fingerprints that reports sent for its key, made-up reports
+   included: so `known_safe` is never more than "probably safe". A mark "probably safe"
+   that holds for every file at its path hides new files on the dashboard, but here it
+   counts only for the fingerprints it holds: a file nobody has looked at is not called
+   safe.
+5. `unknown`: everything else, including open or declined suggestions, marks "probably not
    safe" (verdict `unsafe`), a mark whose fingerprints do not include this file, and
    entries of `bad_hashes` with `answer = 0`.
 
-A mark or an entry set on the dashboard counts within a minute.
+A mark or an entry set on the dashboard counts within a minute, in the worker it was set in
+at once.
 
 The first request of a day that names an entry of `bad_hashes`, released or not, adds one
 to its `asked` and sets `asked_last` to the day; later requests that day write nothing.

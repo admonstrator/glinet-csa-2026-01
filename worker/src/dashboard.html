@@ -1088,7 +1088,7 @@ function binning(from, to) {
 // listed; known malware also makes the fingerprint check answer known_bad), for the
 // fingerprints known when it was set or for every file at its path. BAD: the files on the
 // community list as malware, at any path (the table bad_hashes; answer 0 waits).
-let LABELS = {}, SUGG = {}, BAD = {}, showSafe = false, labelErr = '', relabel = false;
+let LABELS = {}, SUGG = {}, BAD = {}, BADOK = false, showSafe = false, labelErr = '', relabel = false;
 const VERDICTS = { safe: 'Probably safe', unsafe: 'Probably not safe', malware: 'Known malware' };
 const isBad = (h) => !!(h && BAD[h] && BAD[h].answer === 1);
 const suggOf = (key) => { const s = SUGG[key]; return s && !s.declined_by ? s : null; };
@@ -1110,18 +1110,21 @@ async function post(path, body) {
   try {
     const res = await fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const j = await res.json(); LABELS = j.labels; SUGG = j.suggestions || {}; BAD = j.bad || {};
+    const j = await res.json(); LABELS = j.labels; SUGG = j.suggestions || {}; BAD = j.bad || {}; BADOK = !!j.bad;
   } catch (e) { labelErr = 'The mark was not saved (' + e.message + '). Reload the page to sign in again.'; }
   render();
 }
-const setLabel = (g, verdict, note, every = false) => post('/labels', { key: g.kind + ' ' + g.path, verdict, note, hashes: [...g.sha].slice(0, 60), every });
+// a mark holds the fingerprints at its path that are not known release files: those are
+// never malware by a mark, and need no mark to be safe (review of 2.61)
+const markFiles = (g) => [...g.sha].filter((h) => !KNOWN[h]);
+const setLabel = (g, verdict, note, every = false) => post('/labels', { key: g.kind + ' ' + g.path, verdict, note, hashes: markFiles(g).slice(0, 60), every });
 const setBad = (h, verdict, note) => post('/bad-hashes', { sha256: h, verdict, note });
 // the latest report of each device: what a mark would reach now
 function latestByDevice() { const m = new Map(); for (const r of all) if (!r.isTest) { const k = r.dev || r.id, b = m.get(k); if (!b || r.recv > b.recv) m.set(k, r); } return m; }
 const clean = (r) => !(r.ioc > 0 || r.bd);
 function findingCarriers(key, files, every) {
   const i = key.indexOf(' '), kind = key.slice(0, i), path = key.slice(i + 1); let n = 0, c = 0;
-  for (const r of latestByDevice().values()) if (r.review_items.some((x) => x.kind === kind && x.path === path && x.sha256 && (every || files.has(x.sha256)))) { n++; if (clean(r)) c++; }
+  for (const r of latestByDevice().values()) if (r.review_items.some((x) => x.kind === kind && x.path === path && x.sha256 && !KNOWN[x.sha256] && (every || files.has(x.sha256)))) { n++; if (clean(r)) c++; }
   return { n, c };
 }
 function fileCarriers(h) {
@@ -1145,13 +1148,16 @@ function markForm(g, cell, verdict) {
   for (const [v, t] of Object.entries(VERDICTS)) { const o = el('option', t); o.value = v; sel.append(o); }
   sel.value = verdict; sel.setAttribute('aria-label', 'Verdict'); every.type = 'checkbox'; every.checked = !!(lab && lab.every); evl.append(every, 'every file at this path'); evl.title = 'Also files reported here later, with another fingerprint: for a path where every device has its own file.';
   ok.type = no.type = 'button';
-  const files = new Set([...g.sha].filter((h) => !KNOWN[h]));
+  const files = new Set(markFiles(g)), account = g.kind === 'new-account' || g.kind === 'uid0-account';
   const hint = () => {
-    const v = sel.value, all = every.checked; ok.textContent = v === 'malware' ? 'Save: known malware' : 'Save';
+    const v = sel.value, all = every.checked; ok.textContent = v === 'malware' ? 'Save: known malware' : 'Save'; ok.disabled = false;
     if (v === 'malware') {
       const c = findingCarriers(key, files, all);
       warn.className = 'markWarn bad';
-      warn.textContent = !all && !files.size ? 'Nothing here has a fingerprint, so the fingerprint check is never asked about it: the mark is for the team only.' : `The fingerprint check then answers known malware for ${all ? 'any file at this path' : files.size === 1 ? 'this file' : 'these ' + files.size + ' files'}: a device that sends it turns INFECTED on its next check. Now: ${devs(c.n)} in the loaded reports, ${c.c} of them without traces.`;
+      if (account) warn.textContent = 'The script never asks the fingerprint check about an account: the mark is for the team only.';
+      else if (!all && !files.size) warn.textContent = 'No file here can be asked about: none has a fingerprint, or each is a known release file. The mark is for the team only.';
+      else if (!all && files.size > 60) { warn.textContent = `A mark holds at most 60 files, and there are ${files.size} at this path. Mark it for every file at this path, or put single files on the malware list.`; ok.disabled = true; }
+      else warn.textContent = `The fingerprint check then answers known malware for ${all ? 'any file at this path but a known release file' : files.size === 1 ? 'this file' : 'these ' + files.size + ' files'}: a device that sends it turns INFECTED on its next check. Now: ${devs(c.n)} in the loaded reports, ${c.c} of them without traces.`;
     } else {
       warn.className = 'markWarn';
       warn.textContent = v === 'unsafe' ? 'Stays listed, with the mark. Only the team sees it; the fingerprint check does not change.' : all ? 'Hidden for everyone, new files at this path too. The fingerprint check still calls only the files known now probably safe.' : 'Hidden for everyone; a file with another fingerprint brings it back.';
@@ -1166,7 +1172,7 @@ function markForm(g, cell, verdict) {
 }
 // one file on the community list as malware, at any path, or off it
 function badButton(h, cell) {
-  if (!h || KNOWN[h]) return null;
+  if (!h || KNOWN[h] || !BADOK) return null;
   if (isBad(h)) {
     const w = el('span', null, 'labelForm'), t = el('span', 'on the malware list', 'tag bad'), rm = el('button', 'Take off', 'btn sm'); rm.type = 'button';
     t.title = (BAD[h].note ? BAD[h].note + '\n' : '') + 'Added by ' + BAD[h].by + ' on ' + BAD[h].at.slice(0, 16).replace('T', ' ') + ' UTC. The fingerprint check answers known malware for it, at any path.';
@@ -2161,7 +2167,7 @@ async function poll() {
       const { latest } = await getJson('/latest');
       let added = 0;
       // marks a colleague set in the meantime
-      try { const j = await getJson('/labels'), l = JSON.stringify(j.labels), sg = JSON.stringify(j.suggestions || {}), bd = JSON.stringify(j.bad || {}); if (l !== JSON.stringify(LABELS) || sg !== JSON.stringify(SUGG) || bd !== JSON.stringify(BAD)) { LABELS = JSON.parse(l); SUGG = JSON.parse(sg); BAD = JSON.parse(bd); relabel = true; } } catch { /* an older worker without labels */ }
+      try { const j = await getJson('/labels'), l = JSON.stringify(j.labels), sg = JSON.stringify(j.suggestions || {}), bd = JSON.stringify(j.bad || {}); if (l !== JSON.stringify(LABELS) || sg !== JSON.stringify(SUGG) || bd !== JSON.stringify(BAD)) { LABELS = JSON.parse(l); SUGG = JSON.parse(sg); BAD = JSON.parse(bd); BADOK = !!j.bad; relabel = true; } } catch { /* an older worker without labels */ }
       // new reports come 40 at a time, oldest first; a full page means there may be more
       for (let n = 40, rounds = 0; latest > newest && n >= 40 && rounds < 25; rounds++) {
         const items = (await getJson('/data?since=' + encodeURIComponent(newest || '1970-01-01T00:00:00.000Z'))).items;
@@ -2190,7 +2196,7 @@ function sinceLastVisit() {
 $('liveBtn').addEventListener('click', () => { live = !live; $('liveBtn').textContent = 'Live: ' + (live ? 'on' : 'off'); $('liveBtn').setAttribute('aria-pressed', String(live)); poll(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
 (async () => {
-  try { const j = await getJson('/labels'); LABELS = j.labels; SUGG = j.suggestions || {}; BAD = j.bad || {}; } catch { /* an older worker without labels: nothing is marked */ }
+  try { const j = await getJson('/labels'); LABELS = j.labels; SUGG = j.suggestions || {}; BAD = j.bad || {}; BADOK = !!j.bad; } catch { /* an older worker without labels: nothing is marked */ }
   $('status').textContent = 'Loading …';
   try {
     let cursor = '';

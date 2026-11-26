@@ -1975,6 +1975,17 @@ EOF
 	lk --lookup >"$K/rank.txt"; rc=$?
 	expect "more than 40, hidden files sorting first by kind: the new program and the file in /tmp are still asked" '[ $rc = 1 ] && grep -Eq "KNOWN BAD +new-binary +/usr/bin/zz" "$K/rank.txt" && grep -Eq "KNOWN BAD +tmp-file +/tmp/.dg" "$K/rank.txt" && grep -Eq "Left out of the report and this check: [0-9]+ more findings listed for review" "$K/rank.txt"'
 	cp "$K/table.keep" "$KS/table"; rm -rf "${KL:?}"/etc/.h* "${KL:?}/usr" "${KL:?}/overlay"
+	# two programs from one deleted file: one question, counted once, said once, and the
+	# answer under each of the two findings (review of 2.61)
+	printf '\177ELF one more program' >"$KL/tmp/uj (deleted)"; mkdir -p "$KL/proc/1"; printf 'init\0' >"$KL/proc/1/cmdline"
+	for p in 6001 6002; do mkdir -p "$KL/proc/$p"; echo uj >"$KL/proc/$p/comm"; printf 'uj\0' >"$KL/proc/$p/cmdline"; ln -s '/tmp/uj (deleted)' "$KL/proc/$p/exe"; done
+	cp "$KS/table" "$K/table.keep"; echo "$(sha256sum <"$KL/tmp/uj (deleted)" | cut -c1-64) known_bad" >>"$KS/table"
+	lk --lookup >"$K/twice.txt"; rc=$?
+	sed -n '/^== Fingerprint check/,/^== GoodCloud/p' "$K/twice.txt" | grep -E 'files listed|known|KNOWN|deleted'
+	asked=$(grep -o "whether the [0-9]* files listed for review below" "$K/twice.txt" | grep -o "[0-9][0-9]*")
+	summed=$(grep "Each answer stands under its finding below" "$K/twice.txt" | grep -o "[0-9][0-9]* [a-z]" | awk '{ s += $1 } END { print s + 0 }')
+	expect "two programs from one deleted file: asked and counted once, KNOWN BAD once, the answer under both findings" '[ $rc = 1 ] && [ -n "$asked" ] && [ "$asked" = "$summed" ] && [ "$(grep -c "KNOWN BAD      deleted-exe" "$K/twice.txt")" = 1 ] && (for p in 6001 6002; do [ "$(under "$K/twice.txt" "$(grep "^   REVIEW   deleted-exe     $p" "$K/twice.txt" | head -n 1)")" = "community list: known malware" ] || exit 1; done)'
+	cp "$K/table.keep" "$KS/table"; rm -rf "${KL:?}/proc"; rm -f "$KL/tmp/uj (deleted)"
 	# over HTTPS busybox's own wget is never used: it takes any certificate (review of 2.60)
 	# app.gl-i.net is this machine here, where nothing listens on 443: a broken test sends nothing out
 	n0=$(nreq); echo "127.0.0.1 app.gl-i.net" >"$KL/etc/hosts"

@@ -165,6 +165,13 @@ from device to device), a mark can hold for every file at its path, also new one
 fingerprints the mark holds probably safe. For "known malware" the check answers
 `known_bad` for any file at that path.
 
+A mark holds at most 60 fingerprints, and never those of known release files: the check
+calls a release file probably safe whatever a mark says, so a mark "known malware" for one
+odd file at `/usr/sbin/tailscaled` does not hit the devices with the release. For more
+than 60 files at a path, "known malware" needs "every file at this path". A mark "known
+malware" for an account changes nothing for the check: the script never asks about
+accounts. Without D1 there is no malware list, and the dashboard offers none.
+
 A single file can also go on the community list as malware, at any path: the button in
 the "Fingerprints" table of a finding or in "Malware files". It is then an entry of
 `bad_hashes` with `answer = 1`, as if it had been loaded as SQL; an entry that waited
