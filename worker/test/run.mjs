@@ -532,8 +532,10 @@ if (process.argv[2] === 'serve') {
     {
       const live = (path = '/2026-01/live.json', init) => worker.fetch(new Request('https://csa.example.org' + path, init), env, { waitUntil() {} });
       await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'lv', body: "#!/bin/sh\nVERSION=7.80\nRELEASED='2026-11-25 08:41 UTC'\n", checked: Date.now() }));
+      // the figures are worked out behind the first answer; once they are there, the answers compared here are alike
+      { let later; await worker.fetch(new Request('https://csa.example.org/2026-01/live.json'), env, { waitUntil(p) { later = p; } }); await later; }
       const r = await live(), raw = await r.text(), j = JSON.parse(raw), table = await (await tab()).json();
-      expect('live.json gives the version, its release time and the reported table in one answer', r.status === 200 && Object.keys(j).join() === 'script,reported' && j.script.version === '7.80' && j.script.released === '2026-11-25T08:41:00Z' && JSON.stringify(j.reported) === JSON.stringify(table));
+      expect('live.json gives the version, its release time and the reported table in one answer', r.status === 200 && Object.keys(j).join() === 'script,reported,figures' && j.script.version === '7.80' && j.script.released === '2026-11-25T08:41:00Z' && JSON.stringify(j.reported) === JSON.stringify(table));
       expect('any page may read it, it is kept a minute and read as JSON only', r.headers.get('access-control-allow-origin') === '*' && r.headers.get('cache-control') === 'public, max-age=60' && r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('content-type').startsWith('application/json'));
       const odd = await (await live('/2026-01/live.json?script=<b>&reported=1', { headers: { cookie: 'x=<b>', 'x-forwarded-for': '<b>' } })).text();
       expect('live.json takes nothing from the request: parameters and headers change nothing', odd === raw);
@@ -1102,6 +1104,100 @@ if (process.argv[2] === 'serve') {
     const exported = byTime(FX).map((x) => JSON.stringify({ received: x.received, report: x.report })).join('\n') + '\n';
     const tool = exportFigures(exported, { chunk: 20, overlap: 5 });
     expect('tools/figures.mjs folds an export in overlapping chunks to the figures of the reference', tool.chunks > 5 && same(tool.figures, oracle(exported.trim().split('\n').map((l) => JSON.parse(l)))) && same(tool.figures, HAND));
+
+    // ---- through the worker: live.json with a D1 of the made-up reports
+    const { FIGURES_SQL, figuresRun } = await import('../src/index.js');
+    const fdb = d1(), fenv = { ...env, DB: fdb };
+    const fput = fdb.raw.prepare('INSERT INTO reports (id, received, report) VALUES (?, ?, ?)');
+    const insert = (rows) => { for (const x of rows) fput.run(x.id, x.received, x.report === null ? '{not json' : JSON.stringify(x.report)); };
+    insert(ALL);
+    // every read of the figures: its bounds and how many rows it gave
+    const reads = [], prep = fdb.prepare;
+    fdb.prepare = (sql) => { const s = prep(sql); return sql !== FIGURES_SQL ? s : { ...s, bind: (...a) => { const b = s.bind(...a); return { ...b, all: async () => { const r = await b.all(); reads.push({ from: a[0], upto: a[1], after: a[2], rows: r.results.length }); return r; } }; } }; };
+    const FKEY = 'figures/csa-2026-01', DKEY = 'figures/csa-2026-01-devices';
+    store.delete(FKEY); store.delete(DKEY); figuresRun.next = 0;
+    const ask = async (e = fenv, path = '/2026-01/live.json', init) => {
+      const later = [], r = await worker.fetch(new Request('https://csa.example.org' + path, init), e, { waitUntil: (p) => later.push(p) });
+      const storedAtAnswer = store.has(FKEY), raw = await r.text();
+      await Promise.all(later);
+      return { r, raw, j: raw ? JSON.parse(raw) : null, storedAtAnswer };
+    };
+    const devices = () => JSON.parse(store.get(DKEY)), stale = () => { store.set(FKEY, JSON.stringify({ ...JSON.parse(store.get(FKEY)), checked: 0 })); figuresRun.next = 0; };
+    const expectAs = (got, rows) => same({ ...got, as_of: ref(rows).as_of }, ref(rows));
+    const asOfNow = (f) => /^\d{4}-\d\d-\d\dT\d\d:\d\dZ$/.test(f.as_of) && Math.abs(Date.parse(f.as_of) - Date.now()) < 120_000;
+    const first = await ask();
+    expect('live.json: while nothing is kept, figures is null and the run starts behind the answer, not in it', first.r.status === 200 && first.j.figures === null && !first.storedAtAnswer && store.has(FKEY) && reads.length > 0 && reads[0].from === '');
+    const second = await ask();
+    expect('live.json: after the run it has script, reported and figures, the figures as the reference counts them, as of the run', Object.keys(second.j).join() === 'script,reported,figures' && expectAs(second.j.figures, FX) && asOfNow(second.j.figures));
+    expect('live.json: the figures are kept as checked and body, the devices as rules, upto, full and state', Object.keys(JSON.parse(store.get(FKEY))).join() === 'checked,body' && Object.keys(devices()).join() === 'rules,upto,full,state' && /^[0-9a-f]{64}$/.test(devices().rules) && devices().upto === at(27, '08:00:00') && devices().full === new Date(Date.now() - 4 * 3600_000).toISOString().slice(0, 10) && isFigureState(devices().state));
+    const served = /^VERSION=(.*)$/m.exec(JSON.parse(store.get('script/csa-2026-01-fix')).body)[1];
+    expect('live.json: script and reported are as before: the version served and the reported table', second.j.script.version === served && same(second.j.reported, await (await worker.fetch(new Request('https://csa.example.org/2026-01/reported.json'), fenv, { waitUntil() {} })).json()));
+    const n0 = reads.length, odd = await ask(fenv, '/2026-01/live.json?figures=0&as_of=2030-01-01T00:00Z&devices=1', { headers: { cookie: 'figures=<b>', 'x-forwarded-for': '<b>', 'if-none-match': '*' } });
+    expect('live.json: the figures take nothing from the request either, and a kept body starts no run', odd.raw === second.raw && reads.length === n0);
+    const head = await ask(fenv, '/2026-01/live.json', { method: 'HEAD' });
+    expect('live.json: HEAD answers without a body', head.r.status === 200 && head.raw === '' && head.r.headers.get('cache-control') === 'public, max-age=60');
+    // a later run reads from the last upto minus two minutes: a late report is caught, an older one waits for a full read
+    const NEW1 = { id: 'fxnew1', received: at(28, '09:00:00'), report: { ...base, device_id: D('n1'), ioc: 1, findings: MK } };
+    const LATE = { id: 'fxlate', received: at(27, '07:59:00'), report: { ...base, device_id: D('n2') } };
+    const OLD = { id: 'fxold', received: at(20, '12:00:00'), report: { ...base, device_id: D('n3'), model: 'mt3000' } };
+    insert([NEW1, LATE, OLD]);
+    const n1 = reads.length; stale(); const third = await ask();
+    expect('live.json: a later run reads only the reports received since the last upto, less two minutes', reads.length === n1 + 1 && reads[n1].from === new Date(Date.parse(at(27, '08:00:00')) - 120_000).toISOString() && reads[n1].upto === at(28, '09:00:00') && reads[n1].after === '' && reads[n1].rows === 3);
+    const fourth = await ask();
+    expect('live.json: so the new and the late report count, the one received long before does not yet', same(third.j.figures, second.j.figures) && expectAs(fourth.j.figures, [...FX, NEW1, LATE]) && !expectAs(fourth.j.figures, [...FX, NEW1, LATE, OLD]) && devices().upto === at(28, '09:00:00'));
+    store.set(DKEY, JSON.stringify({ ...devices(), rules: 'older rules' }));
+    const n2 = reads.length; stale(); await ask();
+    expect('live.json: when the rules change, all reports are read again', reads[n2].from === '' && expectAs((await ask()).j.figures, [...FX, NEW1, LATE, OLD]) && devices().rules !== 'older rules');
+    store.set(DKEY, JSON.stringify({ ...devices(), full: '2026-11-01' }));
+    const n3 = reads.length; stale(); await ask();
+    const n4 = reads.length; stale(); await ask();
+    expect('live.json: once a day, at the first run from 04:00 UTC, all reports are read again, then not until the next day', reads[n3].from === '' && devices().full === new Date(Date.now() - 4 * 3600_000).toISOString().slice(0, 10) && reads[n4].from !== '');
+    for (const [what, broken] of [['not JSON', () => '{'], ['a state of another shape', () => JSON.stringify({ ...devices(), state: { v: 1, cmd: null, dev: 'x', one: [] } })], ['no time read up to', () => JSON.stringify({ ...devices(), upto: 'later' })]]) {
+      store.set(DKEY, broken()); const n = reads.length; stale(); await ask();
+      expect(`live.json: kept devices with ${what} mean a full read`, reads[n].from === '' && isFigureState(devices().state));
+    }
+    // more than a page: by (received, id), every report once, also with equal times
+    const many = Array.from({ length: 2345 }, (_, i) => ({ id: 'fxpg' + String(i).padStart(5, '0'), received: '2026-11-28T10:00:00.' + String(i % 400).padStart(3, '0') + 'Z', report: { ...base, firmware: '4.7.5' } }));
+    insert(many);
+    const total = fdb.raw.prepare('SELECT count(*) AS n FROM reports').get().n;
+    store.set(DKEY, JSON.stringify({ ...devices(), rules: 'older rules' }));
+    const n5 = reads.length; stale(); await ask();
+    const pages = reads.slice(n5);
+    expect('live.json: a full read goes in pages of 1,000 by time and id, and reads every report once', pages.length === Math.floor(total / 1000) + 1 && pages.every((p, i) => p.rows === (i < pages.length - 1 ? 1000 : total % 1000)) && pages.slice(1).every((p) => p.after !== '') && pages.reduce((s, p) => s + p.rows, 0) === total);
+    expect('live.json: and its figures are those of the reference over all of them', expectAs((await ask()).j.figures, [...FX, NEW1, LATE, OLD, ...many]));
+    const plan = fdb.raw.prepare('EXPLAIN QUERY PLAN ' + FIGURES_SQL).all('a', 'b', 'c').map((r) => r.detail).join();
+    expect('live.json: the figures read the reports through the index on the time of receipt and id', /^SEARCH reports USING INDEX reports_received \(\(received,id\)>\(\?,\?\) AND received<\?\)$/.test(plan));
+    // when D1 fails: the last figures stay, the next try is in about three minutes
+    const kept1 = (await ask()).j, prepOk = fdb.prepare;
+    let tries = 0;
+    fdb.prepare = (sql) => { if (sql === FIGURES_SQL) { tries++; throw new Error('D1_ERROR: too many requests'); } return prepOk(sql); };
+    stale(); const t0 = Date.now(); const failed1 = await ask(), after1 = JSON.parse(store.get(FKEY));
+    expect('live.json: when D1 fails, the figures stay as they were and the next try is in about three minutes', tries === 1 && same(failed1.j, kept1) && same(after1.body, kept1.figures) && Math.abs(after1.checked - (t0 - 900_000 + 180_000)) < 5000 && figuresRun.next >= t0 + 170_000);
+    store.set(FKEY, JSON.stringify({ ...after1, checked: 0 })); await ask();
+    expect('live.json: and this copy of the worker does not try again before, even when KV could not keep the failure', tries === 1 && figuresRun.next > Date.now());
+    store.delete(FKEY); store.delete(DKEY); figuresRun.next = 0;
+    const none1 = await ask(), none2 = await ask();
+    expect('live.json: when D1 fails with nothing kept, figures is null, script and reported are as they were', tries === 2 && none1.j.figures === null && none2.j.figures === null && same(none2.j.script, kept1.script) && same(none2.j.reported, kept1.reported) && JSON.parse(store.get(FKEY)).body === null);
+    fdb.prepare = prepOk;
+    // when KV fails
+    figuresRun.next = 0; stale(); await ask(); const good1 = (await ask()).j;
+    const kvGetOk = env.REPORTS.get;
+    env.REPORTS.get = async (k) => { if (k.startsWith('figures/')) throw new Error('KV GET failed: 429 Too Many Requests'); return kvGetOk(k); };
+    kvMemo.clear(); const n7 = reads.length, kvBroken = await ask();
+    expect('live.json: when KV fails for the figures, figures is null, script and reported are as they were, and nothing is read', good1.figures !== null && kvBroken.j.figures === null && same(kvBroken.j.script, good1.script) && same(kvBroken.j.reported, good1.reported) && reads.length === n7);
+    env.REPORTS.get = async () => { throw new Error('KV GET failed: 429 Too Many Requests'); };
+    kvMemo.clear(); const allBroken = await ask();
+    expect('live.json: when KV fails altogether, it still answers, every part null as before', allBroken.r.status === 200 && allBroken.raw === '{"script":null,"reported":null,"figures":null}\n' && reads.length === n7);
+    env.REPORTS.get = kvGetOk; kvMemo.clear();
+    // a run that fails in the middle of a full read keeps the figures too
+    stale(); store.set(DKEY, JSON.stringify({ ...devices(), rules: 'older rules' }));
+    let calls = 0; fdb.prepare = (sql) => (sql === FIGURES_SQL && ++calls === 2 ? (() => { throw new Error('D1_ERROR: reset'); })() : prepOk(sql));
+    await ask();
+    expect('live.json: a full read that fails on its second page changes nothing it kept', calls === 2 && same(JSON.parse(store.get(FKEY)).body, good1.figures) && devices().rules === 'older rules');
+    fdb.prepare = prepOk; figuresRun.next = 0;
+    const noDb = await ask({ ...env, DB: undefined });
+    expect('live.json: without the database, figures is null', noDb.j.figures === null && Object.keys(noDb.j).join() === 'script,reported,figures');
+    store.delete(FKEY); store.delete(DKEY); figuresRun.next = 0;
   }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');
