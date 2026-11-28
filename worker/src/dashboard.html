@@ -48,14 +48,17 @@ button, select, input { font: inherit; color: inherit; }
 .top .grow { flex: 1; }
 .top .title .sub { margin-top: 1px; }
 /* the pages */
-.tabs { display: flex; gap: 2px; margin-top: 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.tab { display: inline-flex; align-items: center; gap: 7px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; padding: 9px 14px 10px; font-size: 14px; font-weight: 600; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 12px; box-shadow: inset 0 -1px var(--border); }
+.tab { display: inline-flex; align-items: center; gap: 7px; border: 0; border-bottom: 2px solid transparent; background: none; padding: 9px 14px 10px; font-size: 14px; font-weight: 600; color: var(--text-2); cursor: pointer; white-space: nowrap; }
 .tab:hover { color: var(--text); }
 .tab[aria-current=page] { color: var(--text); border-bottom-color: var(--accent); }
 .tab em { font-style: normal; font-size: 11.5px; font-weight: 650; padding: 0 7px; border-radius: 980px; background: var(--surface-2); color: var(--text-2); }
 .tab em:empty { display: none; }
 /* the board: twelve columns and rows of 52 px. Each card spans some of both; the cards are
-   placed in their order, and a card that fits goes into a gap left above it. */
+   placed in their order, and a card that fits goes into a gap left above it. A card's
+   rows are its least height: it grows with what it holds, so that it never scrolls for a
+   few pixels. Cards with a long table or a chart (class scroll) keep their height and
+   scroll inside. While the layout is edited, the rows are 52 px exactly. */
 .board { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 52px; gap: 12px; margin-top: 14px; container: board / inline-size; }
 .board > .card { grid-column: span var(--w, 12); grid-row: span var(--h, 4); }
 /* A board narrower than 900 px (a tablet, or a laptop with the side panel beside it): two
@@ -66,8 +69,8 @@ button, select, input { font: inherit; color: inherit; }
   .board:not(.edit) > .card.kpi:is([data-card=shell], [data-card=back]) { grid-column: span 3; }
   /* the course of an attack needs the width for its steps; the count of devices checked
      again then goes below it, as high as it needs */
-  .board:not(.edit) > .card[data-card=course] { grid-column: span 12; }
-  .board:not(.edit) > .card[data-card=healed] { grid-column: span 12; grid-row: span 3; }
+  .board:not(.edit) > .card:not(.kpi) { grid-column: span 12; }
+  .board:not(.edit) > .card[data-card=healed] { grid-row: span 3; }
 }
 .card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 14px 12px; }
 /* a card is a layer of its own; the one with an open note goes over its neighbours */
@@ -83,6 +86,12 @@ button, select, input { font: inherit; color: inherit; }
 .cb { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; margin-top: 4px; }
 .cb > * { flex: none; }
 .cb > button { align-self: flex-start; }
+@media (min-width: 761px) {
+  .board:not(.edit):not(.focus) { grid-auto-rows: minmax(52px, auto); }
+  .board:not(.edit):not(.focus) > .card.scroll > .cb { contain: size; }
+  .board:not(.edit):not(.focus) > .card:not(.scroll) > .cb { overflow: visible; }
+}
+.board.edit > .card > .cb { overflow: hidden; }
 .ib { flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--text-2); display: inline-grid; place-items: center; cursor: pointer; }
 .ib:hover:not(:disabled) { background: var(--surface-2); color: var(--text); } .ib:disabled { opacity: .3; cursor: default; }
 .ib[aria-expanded=true] { background: var(--accent-soft); color: var(--accent); }
@@ -109,12 +118,15 @@ button, select, input { font: inherit; color: inherit; }
 }
 /* in a narrow card the tools go on a line of their own */
 @container (max-width: 420px) { .board.edit .ch h2 { flex: 1 1 calc(100% - 32px); } }
+/* a card too narrow for all its tools keeps size and hide; it moves to another page when wider */
+@container (max-width: 200px) { .board.edit .mv { display: none; } }
 .board > .card.dragging { opacity: .45; outline: 2px dashed var(--accent); }
 .board > .card.sizing { outline: 2px solid var(--accent); }
 .grip { flex: none; width: 22px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: var(--surface-2); color: var(--text-2); display: inline-grid; place-items: center; cursor: grab; touch-action: none; }
 .grip:active { cursor: grabbing; }
 .size { flex: none; padding: 1px 7px; border-radius: 980px; background: var(--accent-soft); color: var(--accent); font: 600 11.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
-.mv { flex: none; max-width: 96px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12px; }
+.etools { display: inline-flex; align-items: center; gap: 4px 6px; margin-left: auto; }
+.mv { flex: none; max-width: 76px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12px; }
 .rz { position: absolute; right: 2px; bottom: 2px; z-index: 3; width: 22px; height: 22px; padding: 0; border: 0; background: none; cursor: nwse-resize; touch-action: none; }
 .rz::after { content: ''; position: absolute; right: 5px; bottom: 5px; width: 10px; height: 10px; border-right: 2.5px solid var(--accent); border-bottom: 2.5px solid var(--accent); border-radius: 0 0 3px 0; }
 .gridlines { position: absolute; inset: 0; display: none; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; pointer-events: none; }
@@ -141,6 +153,7 @@ button.val:hover { text-decoration-color: currentColor; }
 .kv1 small { font-size: 14px; font-weight: 600; color: var(--text-2); }
 .card.kpi .split { margin-top: 8px; }
 .card.kpi .legend { margin-top: 6px; gap: 0 14px; line-height: 1.35; }
+.legend li.apart i { background: none; box-shadow: inset 0 0 0 2px var(--warn); }
 .knote { margin-top: 4px; font-size: 12.5px; color: var(--text-2); line-height: 1.4; }
 /* the side panel: a report, a finding, the glossary. On a wide window it stands beside the
    page, which makes room for it, and its left edge sets the width; on a narrow one it lies over the page. */
@@ -156,14 +169,17 @@ body:not(.docked) .dgrip { display: none; }
 .drawer.full { width: 100%; box-shadow: none; border-left: 0; }
 body.fullpanel { overflow: hidden; }
 .drawer.full .dh, .drawer.full .dbody { padding-left: max(24px, calc((100% - 1240px) / 2)); padding-right: max(24px, calc((100% - 1240px) / 2)); }
-.drawer.full .dbody .body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.drawer.full .dbody > .gl { columns: 2 420px; column-gap: 40px; } .drawer.full .gl dt { break-after: avoid; } .drawer.full .gl dd { break-before: avoid; }
-/* lists side by side in two columns, striped by row */
-.drawer.full .igrp { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
-.drawer.full .igrp > :not(.iline) { grid-column: 1 / -1; } .drawer.full .igrp > .btn { justify-self: start; }
-.drawer.full .iline:nth-child(n) { background: none; }
-.drawer.full .igrp:not(.nohead) > .iline:is(:nth-child(4n), :nth-child(4n+1)), .drawer.full .igrp.nohead > .iline:is(:nth-child(4n+3), :nth-child(4n+4)) { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
-.drawer.full .iline:hover { background: var(--surface-2); }
+@media (min-width: 900px) {
+  .drawer.full .dbody .body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .drawer.full .dbody .kpis2.wide { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .drawer.full .dbody > .gl { columns: 2 420px; column-gap: 40px; } .drawer.full .gl dt { break-after: avoid; } .drawer.full .gl dd { break-before: avoid; break-inside: avoid; }
+  /* lists side by side in two columns, striped by row */
+  .drawer.full .igrp { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
+  .drawer.full .igrp > :not(.iline) { grid-column: 1 / -1; } .drawer.full .igrp > .btn { justify-self: start; }
+  .drawer.full .iline:nth-child(n) { background: none; }
+  .drawer.full .igrp:not(.nohead) > .iline:is(:nth-child(4n), :nth-child(4n+1)), .drawer.full .igrp.nohead > .iline:is(:nth-child(4n+3), :nth-child(4n+4)) { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
+  .drawer.full .iline:hover { background: var(--surface-2); }
+}
 #dFull .ico-in { display: none; } .drawer.full #dFull .ico-in { display: block; } .drawer.full #dFull .ico-out { display: none; }
 body.resizing { cursor: col-resize; user-select: none; }
 .dh { display: flex; align-items: flex-start; gap: 6px; padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--border); }
@@ -171,7 +187,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .dh h2 { font-size: 16px; overflow-wrap: anywhere; }
 .drawer[data-mode=item] .dh h2 { font: 650 14.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .dh .sub { margin-top: 2px; }
-.dbody { flex: 1; overflow: auto; padding: 6px 18px 28px; }
+.dbody { flex: 1; overflow: auto; padding: 6px 18px 28px; container-type: inline-size; }
 .dbody > h3 { margin: 18px 0 4px; font-size: 12.5px; font-weight: 650; color: var(--text-2); }
 .dbody > .sub { margin-bottom: 6px; }
 .dbody .body { grid-template-columns: minmax(0, 1fr); }
@@ -183,6 +199,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 :where(.dbody table > tr:nth-child(odd):not(:first-child)) > td { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
 :where(.dbody table tr:not(:first-child):hover) > td { background: var(--surface-2); }
 .dbody td small { display: block; font-size: 12px; color: var(--text-2); }
+.cellact { margin-top: 4px; }
 /* a list of files or findings: the path on top, the rest below it, grouped by kind */
 .ilist { margin-top: 6px; }
 .igrp + .igrp { margin-top: 12px; }
@@ -191,22 +208,36 @@ body.resizing { cursor: col-resize; user-select: none; }
 .iline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 2px 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .iline:nth-child(odd) { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
 .iline:hover { background: var(--surface-2); }
+/* an open form takes the whole line below the path */
+.iline > :has(> .markForm) { grid-column: 1 / -1; }
 .ipath { line-height: 1.45; overflow-wrap: anywhere; } .ipath .mono { line-height: inherit; }
 .imeta { display: flex; flex-wrap: wrap; align-items: center; gap: 1px 10px; margin-top: 1px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .imeta .mono { font-size: 11.5px; }
 .imeta .tag { font-size: 11px; }
 .igrp > .btn { margin: 8px 0 0 8px; }
-.dbody .kpis2.wide { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.dbody .kpis2.wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .dact { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
-.gl dt { margin-top: 14px; } .gl dt b { display: block; font-weight: 650; } .gl dd { margin: 2px 0 0; color: var(--text-2); font-size: 13.5px; }
+.gl dt { margin-top: 14px; } .gl dt:first-child { margin-top: 0; } .gl dt b { display: block; font-weight: 650; } .gl dd { margin: 2px 0 0; color: var(--text-2); font-size: 13.5px; }
 .linkish { cursor: pointer; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
 .linkish:hover { text-decoration-color: var(--accent); color: var(--accent); }
 .safeTable td { vertical-align: top; }
+/* paths wrap anywhere rather than push the table out of its card */
+#reviews td.mono, .safeTable td.mono, #hashes td.mono, .dbody td.mono { overflow-wrap: anywhere; min-width: 14ch; }
+#reviews td:first-child { white-space: nowrap; }
+@container (max-width: 900px) { .hide-m { display: none; } }
+@container (max-width: 680px) { .hide-n { display: none; } }
+@container (max-width: 560px) { .hide-xs { display: none; } .dbody :is(td, th) { padding-left: 6px; padding-right: 6px; } .dbody th, .dbody td.tnum { white-space: normal; } .dbody td.mono { min-width: 0; } .cb th, .cb td .tag, .cb td.n:last-child { white-space: normal; } .cb td.mono { min-width: 10ch; } }
+@container (max-width: 900px) { .cb :is(td, th) { padding-left: 7px; padding-right: 7px; } .safeTable td.who { white-space: normal; overflow-wrap: anywhere; } }
+.cb :is(th, td).wrap { white-space: normal; }
+#safeList > h3 { margin: 16px 0 4px; font-size: 12.5px; font-weight: 650; color: var(--text-2); } #safeList > h3:first-child { margin-top: 2px; }
+.tbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .safeTable .who { color: var(--text-2); font-size: 13px; white-space: nowrap; }
 .btn.sm { padding: 3px 9px; font-size: 12.5px; white-space: nowrap; }
-.labelForm { display: inline-flex; gap: 6px; align-items: center; }
+.labelForm { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .labelForm.markForm { flex-wrap: wrap; white-space: normal; max-width: 760px; padding: 4px 0; }
 tr.formRow > td { text-align: left; }
+/* the form under a row stays in view and as wide as the card or the panel, however wide the table */
+tr.formRow > td > .markForm { display: flex; position: sticky; left: 0; max-width: min(760px, calc(100cqi - 20px)); }
 .labelForm select { padding: 3px 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; }
 .labelForm label { display: inline-flex; gap: 4px; align-items: center; font-size: 12.5px; white-space: nowrap; }
 .markWarn { flex-basis: 100%; font-size: 12px; color: var(--text-2); text-align: left; }
@@ -234,6 +265,8 @@ tr.formRow > td { text-align: left; }
 .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--surface-2); }
 .seg button { border: 0; background: none; font-size: 13.5px; font-weight: 600; color: var(--text-2); padding: 4px 11px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
 .seg button[aria-pressed=true] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .14); }
+.seg button:not([aria-pressed=true]):hover { color: var(--text); }
+.ms > summary:hover { border-color: var(--accent); }
 .ms { position: relative; }
 .ms > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
 .ms > summary::-webkit-details-marker { display: none; }
@@ -258,6 +291,8 @@ tr.formRow > td { text-align: left; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border-radius: 980px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .chip button { border: 0; background: none; cursor: pointer; color: inherit; font-size: 15px; line-height: 1; padding: 0 5px; }
 .linkbtn { border: 0; background: none; color: var(--accent); font-weight: 600; cursor: pointer; padding: 2px 4px; font-size: 13px; }
+.linkbtn:hover { text-decoration: underline; text-underline-offset: 3px; }
+.chip button:hover { opacity: .65; }
 
 .grid { display: grid; gap: 12px; }
 
@@ -315,7 +350,7 @@ pre { margin: 6px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--
 .cb thead th, .cb table > tr:first-child > th { position: sticky; top: 0; z-index: 2; background: var(--surface); box-shadow: inset 0 -1px 0 var(--border); }
 :where(.cb table:not(.mx) > tbody > tr:nth-child(even), .cb table:not(.mx) > tr:nth-child(odd):not(:first-child)) > td { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
 :where(.cb table:not(.mx) tr:hover) > td { background: var(--surface-2); }
-.leftcols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 4px 20px; align-items: start; }
+.leftcols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 4px 20px; align-items: start; }
 .leftcols h3 { margin: 6px 0 0; font-size: 12px; font-weight: 650; color: var(--text-2); }
 
 /* the reports: a real table, sortable, paged */
@@ -325,6 +360,7 @@ pre { margin: 6px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--
 .reports th[aria-sort]::after { content: ' ▾'; } .reports th[aria-sort=ascending]::after { content: ' ▴'; }
 .reports td:first-child, .reports th:first-child { padding-left: 14px; }
 .reports tr.row { cursor: pointer; }
+.reports tr.row:focus-visible { outline-offset: -2px; }
 .reports tr.row td:last-child { color: var(--text-2); font-size: 16px; text-align: right; padding-right: 14px; }
 .reports tr.row.sel > td { background: var(--accent-soft); box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent); }
 @container (max-width: 820px) { .hide-s { display: none; } }
@@ -346,9 +382,9 @@ pre { margin: 6px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--
   .reports tr.row > td:last-child { grid-column: 3; grid-row: 1 / 4; align-self: center; padding: 0; }
 }
 .dev b { font-weight: 650; white-space: nowrap; } td.tnum { white-space: nowrap; } .dev small, .fw small { display: block; font-size: 12px; color: var(--text-2); }
-.fw { max-width: 210px; }
+.fw { max-width: 210px; } .fw small { white-space: nowrap; }
 .tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
-.tag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; padding: 0 8px; border-radius: 980px; font-size: 11.5px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
+.tag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; padding: 0 8px; border-radius: 980px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11.5px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
 .tag.warn { background: var(--warn-bg); color: var(--warn); }
 .tag.ok { background: var(--accent-soft); color: var(--accent); }
 .tag.bad { background: var(--danger-bg); color: var(--danger); }
@@ -363,8 +399,8 @@ pre { margin: 6px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--
 .body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 28px; }
 .body h3 { margin: 12px 0 0; font-size: 12px; font-weight: 650; color: var(--text-2); }
 .body .full { grid-column: 1 / -1; overflow-x: auto; }
-.kv { margin: 6px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; font-size: 13.5px; }
-.kv dt { color: var(--text-2); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv { margin: 6px 0 0; display: grid; grid-template-columns: minmax(0, 12em) minmax(0, 1fr); gap: 4px 14px; font-size: 13.5px; }
+.kv dt { color: var(--text-2); overflow-wrap: anywhere; } .kv dd { margin: 0; overflow-wrap: anywhere; }
 .evs { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
 .evs li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .ev { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px 1px 9px; border-radius: 980px; background: var(--danger-bg); color: var(--danger); font-size: 12.5px; font-weight: 600; cursor: help; }
@@ -385,7 +421,9 @@ tr.row.fresh td { background: var(--accent-soft); }
 .kpis2 .kpi { display: block; padding: 10px 12px; background: var(--surface-2); border: 0; border-radius: 11px; container-type: normal; }
 .kpis2 .kpi .value { font-size: 22px; }
 .kpis2 .kpi .note { font-size: 12px; line-height: 1.4; }
-.kpis2.wide { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.kpis2.wide { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
+/* tiles side by side: a label over two lines must not push its value below its neighbour's */
+#ongoing .kpi .label { min-height: 2.7em; }
 .rank.plain li { cursor: default; } .rank.plain li:hover .name { color: inherit; }
 .rank .num small { margin-left: 6px; font-weight: 400; color: var(--text-2); }
 .rank li.few > * { opacity: .55; }
@@ -395,25 +433,26 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
 .course { margin: 26px 0 6px; padding: 0; list-style: none; display: flex; align-items: flex-start; }
 .course li { position: relative; }
 .course li::before { content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--grid); }
-.course .step { flex: 1 1 0; min-width: 0; padding: 26px 6px 0; text-align: center; }
+.course .step { flex: 1 1 0; min-width: 90px; padding: 26px 6px 0; text-align: center; }
 .course .step:first-child::before { left: 50%; } .course .step:last-child::before { right: 50%; }
 .course .step i { position: absolute; left: 50%; top: 7px; translate: -50% -50%; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--surface); }
 .course .step b { display: block; font-size: 14px; font-weight: 650; line-height: 1.3; text-wrap: balance; }
-.course .step .t { display: block; margin-top: 3px; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.course .step .t { display: block; margin-top: 3px; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; white-space: pre; }
 .course .step small { display: block; margin-top: 1px; font-size: 12px; color: var(--text-2); }
-.course .conn { flex: 0 1 96px; min-width: 56px; height: 14px; }
+.course .conn { flex: 0 1 72px; min-width: 44px; height: 14px; }
 .course .conn span { position: absolute; left: 50%; top: -20px; translate: -50% 0; padding: 1px 8px; border-radius: 980px; background: var(--surface-2); font-size: 11.5px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
 .courseBox .kpis2 { grid-template-columns: 1fr; margin-top: 0; }
 /* the steps need about 700 px beside the two numbers, or the times run into them */
 @container (max-width: 1000px) {
-  .courseBox { grid-template-columns: 1fr; }
+  .courseBox { grid-template-columns: minmax(0, 1fr); }
   .courseBox .kpis2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 /* in a narrow card the rail runs down instead */
-@container (max-width: 540px) {
+@container (max-width: 640px) {
   .course { flex-direction: column; align-items: stretch; margin-top: 12px; }
   .course li::before { left: 6px; right: auto; top: 0; bottom: 0; width: 2px; height: auto; }
   .course .step { padding: 4px 0 4px 30px; text-align: left; }
+  .course .step .t { white-space: nowrap; }
   .course .step:first-child::before { left: 6px; top: 12px; } .course .step:last-child::before { right: auto; bottom: calc(100% - 12px); }
   .course .step i { left: 7px; top: 13px; }
   .course .conn { flex: none; height: auto; padding: 4px 0 4px 30px; }
@@ -433,7 +472,8 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
 .mx tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; font-weight: 650; padding: 5px 12px 5px 0; white-space: nowrap; }
 .mx td { padding: 3px; border: 0; text-align: center; }
 .mx td button { width: 100%; min-width: 52px; border: 0; border-radius: 7px; padding: 5px 4px; font: 600 12.5px -apple-system, 'Segoe UI', sans-serif; font-variant-numeric: tabular-nums; cursor: pointer; color: var(--text-2); background: var(--surface-2); }
-.mx td button.h { color: var(--danger); background: color-mix(in srgb, var(--danger) calc(10% + var(--w) * 26%), transparent); }
+.mx td button.h { color: var(--danger); background: color-mix(in srgb, var(--danger) calc(8% + var(--w) * 22%), transparent); }
+.mx td button:hover { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .mx td button.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mx td button small { font-weight: 500; opacity: .75; }
 .mx th.shareh { text-align: left; padding-left: 14px; font-family: inherit; color: var(--text-2); }
@@ -459,7 +499,6 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
 @media (max-width: 760px) {
   main { padding: 16px 14px 48px; }
   .filters { margin: 0 -14px; padding: 10px 14px; }
-  .tabs { flex-wrap: wrap; overflow-x: visible; }
   .tab { padding: 8px 11px 9px; }
   .filters input[type=search] { min-width: 0; flex-basis: 100%; }
   .ms { position: static; }
@@ -467,9 +506,11 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
   .pop { max-height: min(340px, 60vh); }
   .board { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
   .board > .card, .board:not(.edit) > .card[data-card], .board:not(.edit) > .card.kpi[data-card] { grid-column: 1 / -1; grid-row: auto; }
-  .cb { max-height: 75vh; }
+  .card.scroll > .cb { max-height: 75vh; }
   .cb > .plot { flex: none; height: 240px; }
-  #editBtn, .eo { display: none !important; }
+  #editBtn, .eo, #dFull { display: none !important; }
+  /* the reports run with the page, not in a box of their own */
+  .board > .card[data-card=reports] > .cb { max-height: none; overflow: visible; }
   /* in the panel a long label takes no more than its share; the value keeps room */
   .kv { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); column-gap: 12px; }
 }
@@ -532,12 +573,12 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     <div class="gridlines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
     <!-- Overview -->
-    <section class="card kpi" data-card="hit"><div class="ch"><h2>Devices with traces</h2></div><div class="about" hidden><p>Devices with known traces of the attack of 20 November, by what was found. “Command only”: a command from the cloud ran, nothing else was found. The older backdoor is counted apart, on its own page.</p><p>Click the number to see these reports.</p></div><div class="cb"></div></section>
+    <section class="card kpi" data-card="hit"><div class="ch"><h2>Devices with traces</h2></div><div class="about" hidden><p>Devices with known traces of the attack of 20 November, by what was found. “Command only”: a command from the cloud ran, nothing else was found.</p><p>The older backdoor is not in this number: its own line counts it apart. A device with the older backdoor and traces of 20 November counts here for those traces.</p><p>Click the number to see these reports.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="shell"><div class="ch"><h2>Remote shell still running</h2></div><div class="about" hidden><p>A remote shell that was running during the check: the attacker was connected at that moment.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="back"><div class="ch"><h2>Comes back after a restart</h2></div><div class="about" hidden><p>An autostart entry (rc.local, crontab, an init script) or the list of files a firmware update keeps points to the malware.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="restart"><div class="ch"><h2>Restarted since 20 Nov</h2></div><div class="about" hidden><p>A restart wipes the memory, and with it a running shell and its pipe. A device that looks clean after a restart proves little.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="gc"><div class="ch"><h2>Hit with GoodCloud on</h2></div><div class="about" hidden><p>Share of devices with traces among those with GoodCloud on, and off. The setting at the check, not during the attack: many switched it off afterwards.</p></div><div class="cb"></div></section>
-    <section class="card" data-card="when">
+    <section class="card scroll" data-card="when">
       <div class="ch"><h2>When it started</h2><span class="grow"></span><div class="seg" id="zoom" role="group" aria-label="Time range of the chart"><button type="button" data-v="attack">Attack window</button><button type="button" data-v="all">All data</button></div></div>
       <div class="about" hidden><p id="chartSub"></p></div>
       <div class="cb">
@@ -554,7 +595,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     <section class="card" data-card="course">
       <div class="ch"><h2>How an attack ran</h2></div>
       <div class="about" hidden><p id="courseSub"></p></div>
-      <div class="cb"><div class="courseBox"><ol class="course" id="course"></ol><div class="grid kpis2" id="courseStats"></div></div></div>
+      <div class="cb"><p class="peak dim" id="courseNone" hidden></p><div class="courseBox"><ol class="course" id="course"></ol><div class="grid kpis2" id="courseStats"></div></div></div>
     </section>
     <section class="card" data-card="healed">
       <div class="ch"><h2>Clean on a later check</h2></div>
@@ -563,7 +604,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     </section>
 
     <!-- Devices & firmware -->
-    <section class="card" data-card="matrix">
+    <section class="card scroll" data-card="matrix">
       <div class="ch"><h2>Models and firmware</h2><span class="grow"></span><button class="btn sm" type="button" id="gridAll" hidden>Show every version</button><button class="btn sm" type="button" id="yamlBtn">Copy as advisory YAML</button></div>
       <div class="about" hidden><p>Devices with traces out of all reports for that model and firmware version. The darker a cell, the larger the share that was hit; the last column gives it per model. Test builds count with their version. Versions and models without any trace are folded into one column and one row.</p><p>Click a cell to filter. An empty cell means no report, not “not affected”.</p></div>
       <div class="cb" id="matrix"></div>
@@ -583,7 +624,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="about" hidden><p>The version, with beta or rc where the device reports one. Build number and date are in each report. Click a bar to filter.</p></div>
       <div class="cb"><ul class="rank" id="firmwares"></ul><p class="more" id="firmwaresMore"></p></div>
     </section>
-    <section class="card" data-card="cloud">
+    <section class="card scroll" data-card="cloud">
       <div class="ch"><h2>Traces by cloud setting</h2></div>
       <div class="about" hidden><p>Share of devices with traces, by what was switched on. The setting at the time of the check, which many changed after the attack. “Bound” means linked to a GoodCloud account.</p><p>Remote SSH and web access count as on only while GoodCloud is on: the stored setting is “on” by default on many firmware versions.</p></div>
       <div class="cb" id="cloudSet"></div>
@@ -595,7 +636,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="about" hidden><p>Devices per kind of trace. One device can have several. Click a bar to filter.</p></div>
       <div class="cb"><ul class="rank" id="kinds"></ul></div>
     </section>
-    <section class="card" data-card="files">
+    <section class="card scroll" data-card="files">
       <div class="ch"><h2>Malware files</h2></div>
       <div class="about" hidden><p>Same fingerprint means the same file on every device. The file time is the time it was written; it can come with the file, so the last column counts where it did.</p><p>Click a fingerprint or a path to search for it.</p></div>
       <div class="cb" id="hashes"></div>
@@ -628,31 +669,31 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="about" hidden><p>The month /bin/ulogd was written, by its time on the device; where the change time is much later, that one.</p></div>
       <div class="cb"><ul class="rank plain" id="bdWhen"></ul></div>
     </section>
-    <section class="card" data-card="bdfiles">
+    <section class="card scroll" data-card="bdfiles">
       <div class="ch"><h2>Loader files</h2></div>
       <div class="about" hidden><p>/bin/ulogd, the backdoor’s loader: compiled Lua that reports the device to a server imitating AdGuard or OpenWrt. Its fingerprint differs from device to device, so it is grouped by size here.</p></div>
       <div class="cb" id="bdFiles"></div>
     </section>
 
     <!-- Review -->
-    <section class="card" data-card="unusual">
+    <section class="card scroll" data-card="unusual">
       <div class="ch"><h2>Unusual changes seen on several devices</h2></div>
       <div class="about" hidden><p id="reviewSub">What the script listed for review, not known traces. Most of it is harmless and the owner’s own. Look for a change that many devices with traces share and clean ones do not.</p><p>Click a row to see which devices sent it and which files stand behind it. Mark what you have looked at, here or in a single report: probably safe hides it for everyone, and a new file at the same path brings it back unless the mark holds for every file there. Probably not safe and known malware keep it listed; known malware also makes the fingerprint check answer known malware for it.</p></div>
       <div class="cb" id="reviews"></div>
     </section>
-    <section class="card" data-card="safe">
+    <section class="card scroll" data-card="safe">
       <div class="ch"><h2>Marks</h2><span class="sub tnum" id="safeCount"></span></div>
       <div class="about" hidden><p>Every finding someone on the team has marked, with who did it, when and why. Those marked probably safe are hidden elsewhere unless asked for; probably not safe and known malware stay listed. Click a finding to see which devices sent it.</p><p>Above them, suggestions from an analysis of the reports, each with its reason. A suggestion hides nothing until someone confirms it. Below them, the files on the community list as malware, at any path.</p></div>
       <div class="cb" id="safeList"></div>
     </section>
-    <section class="card" data-card="known">
+    <section class="card scroll" data-card="known">
       <div class="ch"><h2>Known release files</h2></div>
       <div class="about" hidden><p id="knownSub"></p></div>
       <div class="cb" id="knownList"></div>
     </section>
 
     <!-- Reports -->
-    <section class="card reports" data-card="reports">
+    <section class="card reports scroll" data-card="reports">
       <div class="ch"><h2>Reports</h2><span class="sub tnum" id="shown"></span></div>
       <div class="about" hidden><p>One row per report, or per device with “One row per device”. Click a row to open the report beside the table; the arrows in it step through the rows. Click a heading to sort.</p></div>
       <div class="cb"><table>
@@ -1001,8 +1042,17 @@ function facet(id, key) {
     if (keep) { while (keep.nextSibling) keep.nextSibling.remove(); pop.append(box); }
     else { const s = el('input'); s.type = 'search'; s.placeholder = 'Find …'; s.setAttribute('aria-label', 'Find in ' + LABEL[key]); s.addEventListener('input', () => { find = s.value.trim().toLowerCase(); draw(); }); pop.replaceChildren(s, box); }
   };
-  d.addEventListener('toggle', () => { if (d.open) { for (const o of document.querySelectorAll('.ms[open]')) if (o !== d) o.open = false; draw(); pop.querySelector('input').focus(); } });
+  d.addEventListener('toggle', () => { if (d.open) { for (const o of document.querySelectorAll('.ms[open]')) if (o !== d) o.open = false; draw(); placePop(pop); pop.querySelector('input').focus(); } });
   return draw;
+}
+// a menu that would run past the edge of the page (or under the docked panel) moves back
+// in; on a phone the menus are as wide as the page anyway
+function placePop(pop) {
+  pop.style.translate = '';
+  if (matchMedia('(max-width: 760px)').matches) return;
+  const main = document.querySelector('main'), cs = getComputedStyle(main), m = main.getBoundingClientRect(), r = pop.getBoundingClientRect(), lo = m.left + parseFloat(cs.paddingLeft), hi = m.right - parseFloat(cs.paddingRight);
+  const dx = r.right > hi ? Math.max(hi - r.right, lo - r.left) : r.left < lo ? lo - r.left : 0;
+  if (dx) pop.style.translate = dx + 'px 0';
 }
 const facets = [facet('fModel', 'model'), facet('fFirmware', 'firmware'), facet('fKind', 'kind')];
 // the path of the click, not "contains": a menu that redraws itself has already removed the button that was clicked
@@ -1021,7 +1071,7 @@ document.addEventListener('keydown', (e) => {
   else if (focusKey) { focusKey = ''; render(); }
   else if (editing) setEditing(false);
 });
-$('fMore').addEventListener('toggle', () => { if ($('fMore').open) for (const o of document.querySelectorAll('.ms[open]')) if (o.id !== 'fMore') o.open = false; });
+$('fMore').addEventListener('toggle', () => { if ($('fMore').open) { for (const o of document.querySelectorAll('.ms[open]')) if (o.id !== 'fMore') o.open = false; placePop($('fMore').querySelector('.pop')); } });
 function chips() {
   const box = $('chips'); box.replaceChildren();
   const add = (text, off) => { const c = el('span', text, 'chip'), x = el('button', '×'); x.type = 'button'; x.setAttribute('aria-label', 'Remove filter ' + text); x.addEventListener('click', () => { off(); page = 0; render(); }); c.append(x); box.append(c); };
@@ -1071,8 +1121,8 @@ function kpi(label, value, small, note, lead) {
   return c;
 }
 // a step that keeps the number of columns readable, whatever the data spans
-function binning(from, to) {
-  for (const step of [HOUR, 3 * HOUR, 6 * HOUR, DAY, 7 * DAY, 30 * DAY]) if ((to - from) / step <= 72) return step;
+function binning(from, to, most = 72) {
+  for (const step of [HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 7 * DAY, 30 * DAY]) if ((to - from) / step <= most) return step;
   return 30 * DAY;
 }
 // What the scripts listed for review, across devices: one row per kind and path, with
@@ -1199,7 +1249,7 @@ function badButton(h, cell) {
 // say (scripts 2.23 and 2.28 on). The older backdoor is counted apart, as everywhere.
 function cloudSettings(base) {
   const box = $('cloudSet'); box.replaceChildren();
-  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Setting', ''], ['With traces', 'n'], ['Older backdoor', 'n']]) hd.append(el('th', t, c));
+  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Setting', ''], ['With traces', 'n wrap'], ['Older backdoor', 'n wrap']]) hd.append(el('th', t, c));
   tb.append(hd); let any = false, thin = false;
   for (const [name, key] of [['GoodCloud', 'goodcloud'], ['Bound to an account', 'cloud_bound'], ['Remote SSH', 'rtty_ssh'], ['Remote web access', 'rtty_web'], ['Firmware with GL.iNet’s cleanup', 'vendor_cleanup'], ['AstroWarp', 'astrowarp']]) for (const v of ['on', 'off']) {
     const rows = base.filter((r) => r[key] === v); if (!rows.length) continue; any = true;
@@ -1256,20 +1306,22 @@ function reviews(base) {
   const full = (g) => REVALL.get(g.kind + ' ' + g.path) || g, safeN = shared.filter((g) => hiddenState(labelState(full(g)))).length, rows = shared.filter((g) => showSafe || !hiddenState(labelState(full(g)))).slice(0, 40);
   if (labelErr) box.append(el('p', labelErr, 'peak err'));
   if (!have.length) { box.append(el('p', 'No report carries this yet. It comes with script 2.23 and later.', 'peak')); return; }
-  if (onceN) { const t = el('button', showOnce ? `Only what at least two devices share` : `Also show the ${onceN} seen on one device`, 'btn'); t.type = 'button'; t.style.margin = '0 8px 8px 0'; t.addEventListener('click', () => { showOnce = !showOnce; render(); }); box.append(t); }
-  if (safeN) { const t = el('button', showSafe ? `Hide the ${safeN} marked as probably safe or known` : `Show the ${safeN} marked as probably safe or known`, 'btn'); t.type = 'button'; t.style.marginBottom = '8px'; t.addEventListener('click', () => { showSafe = !showSafe; render(); }); box.append(t); }
+  const bar = el('div', null, 'tbar');
+  if (onceN) { const t = el('button', showOnce ? `Only what at least two devices share` : `Also show the ${onceN} seen on one device`, 'btn'); t.type = 'button'; t.addEventListener('click', () => { showOnce = !showOnce; render(); }); bar.append(t); }
+  if (safeN) { const t = el('button', showSafe ? `Hide the ${safeN} marked as probably safe or known` : `Show the ${safeN} marked as probably safe or known`, 'btn'); t.type = 'button'; t.addEventListener('click', () => { showSafe = !showSafe; render(); }); bar.append(t); }
+  if (bar.children.length) box.append(bar);
   if (!rows.length) { box.append(el('p', 'Everything that at least two devices share is marked as probably safe or is a known release file.', 'peak')); return; }
-  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Devices', 'n'], ['With traces', 'n'], ['Different files', 'n'], ['Changed on the devices (UTC)', 'n'], ['', 'n']]) hd.append(el('th', t, c));
+  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Devices', 'n hide-xs'], ['With traces', 'n'], ['Different files', 'n hide-m'], ['Changed on the devices (UTC)', 'n hide-m'], ['', 'n hide-xs']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const g of rows) {
     const tr = el('tr'), lab = LABELS[g.kind + ' ' + g.path]; tr.style.cursor = 'pointer';
     const w = el('td', g.hit + ' of ' + g.n, 'n'); if (hits && g.hit >= 2 && g.hit / g.n > hits / have.length * 1.5) { w.append(' ', el('span', 'more often with traces', 'tag warn')); }
-    const d = el('td', g.sha.size || '–', 'n'); d.title = g.sha.size === 1 && g.n > 1 ? 'The same file on every device that sent a fingerprint.' : 'Number of different fingerprints behind this path.';
-    const ct = (g.ct || []).sort((a, b) => a - b), when = el('td', ct.length ? (fmt(ct[0]).slice(0, 10) === fmt(ct[ct.length - 1]).slice(0, 10) ? fmt(ct[0]).slice(0, 10) : fmt(ct[0]).slice(0, 10) + ' – ' + fmt(ct[ct.length - 1]).slice(0, 10)) : '–', 'n'); when.title = 'Earliest and latest time the kernel changed this entry, over the devices that sent one (script 2.24 and later).';
+    const d = el('td', g.sha.size || '–', 'n hide-m'); d.title = g.sha.size === 1 && g.n > 1 ? 'The same file on every device that sent a fingerprint.' : 'Number of different fingerprints behind this path.';
+    const ct = (g.ct || []).sort((a, b) => a - b), when = el('td', ct.length ? (fmt(ct[0]).slice(0, 10) === fmt(ct[ct.length - 1]).slice(0, 10) ? fmt(ct[0]).slice(0, 10) : fmt(ct[0]).slice(0, 10) + ' – ' + fmt(ct[ct.length - 1]).slice(0, 10)) : '–', 'n hide-m'); when.title = 'Earliest and latest time the kernel changed this entry, over the devices that sent one (script 2.24 and later).';
     const pathCell = el('td', g.path || '(not sent)', 'mono');
     { const t = markTag(REVALL.get(g.kind + ' ' + g.path) || g); if (t) { pathCell.append(t); if (lab && lab.note) pathCell.append(el('small', ' ' + lab.note, 'dim')); } }
-    const act = el('td', null, 'n'); act.append(markButton(REVALL.get(g.kind + ' ' + g.path) || g, act));
-    tr.append(el('td', g.kind), pathCell, el('td', g.n, 'n'), w, d, when, act);
+    const act = el('td', null, 'n hide-xs'); act.append(markButton(REVALL.get(g.kind + ' ' + g.path) || g, act));
+    tr.append(el('td', g.kind), pathCell, el('td', g.n, 'n hide-xs'), w, d, when, act);
     tr.addEventListener('click', () => openItem(g.kind + ' ' + g.path));
     tb.append(tr);
   }
@@ -1279,9 +1331,11 @@ function reviews(base) {
 function chart(hit) {
   const pts = hit.filter((r) => !isNaN(r.first)), cols = $('cols'), xa = $('xaxis'), ya = $('yaxis');
   cols.replaceChildren(); xa.replaceChildren(); ya.replaceChildren();
+  cols.closest('.plot').hidden = !pts.length;
   if (!pts.length) { $('peak').textContent = 'No report with a start time in this selection.'; $('chartSub').textContent = ''; return; }
   let from, to, step, before = [], after = [];
-  if (zoom === 'attack') { [from, to] = WIN; step = HOUR; before = pts.filter((r) => r.first < from); after = pts.filter((r) => r.first >= to); }
+  // the attack window by the hour where the card is wide enough, else by two hours or more
+  if (zoom === 'attack') { [from, to] = WIN; step = binning(from, to, Math.max(36, Math.floor((cols.clientWidth || 840) / 6))); before = pts.filter((r) => r.first < from); after = pts.filter((r) => r.first >= to); }
   else {
     // times far from the attack (a device clock at 1970, a file copied with an old date) would stretch the axis; they go to the edge columns
     const lo = Math.max(Math.min(...pts.map((r) => r.first)), ATTACK - 45 * DAY), hi = Math.max(lo + HOUR, Math.min(Math.max(...pts.map((r) => r.first)), NOW));
@@ -1289,6 +1343,7 @@ function chart(hit) {
     before = pts.filter((r) => r.first < from); after = pts.filter((r) => r.first >= to);
   }
   const n = Math.round((to - from) / step), bins = Array.from({ length: n }, (_, i) => ({ t: from + i * step, a: 0, b: 0, c: 0 }));
+  cols.style.gap = n > 100 ? '1px' : '';
   for (const r of pts) if (r.first >= from && r.first < to) bins[Math.floor((r.first - from) / step)][r.implant ? 'a' : r.cmd ? 'c' : 'b']++;
   const edge = (rows) => ({ a: rows.filter((r) => r.implant).length, b: rows.filter((r) => !r.implant && !r.cmd).length, c: rows.filter((r) => r.cmd).length });
   const eb = edge(before), ea = edge(after), max = Math.max(1, ...bins.map((b) => b.a + b.b + b.c), eb.a + eb.b + eb.c, ea.a + ea.b + ea.c);
@@ -1390,10 +1445,11 @@ function course(hit) {
   // rests on; between two events, how much later the next one came
   marks.forEach((m, i) => {
     if (i) { const g = el('li', null, 'conn'); g.append(el('span', '+ ' + dur(m.t - marks[i - 1].t))); ol.append(g); }
-    const li = el('li', null, 'step'); li.append(el('i'), el('b', m.name), el('span', fmt(m.t), 't'), el('small', m.n === 1 ? '1 device' : m.n + ' devices')); ol.append(li);
+    const li = el('li', null, 'step'); li.append(el('i'), el('b', m.name), el('span', fmt(m.t).replace(' ', '\n'), 't'), el('small', m.n === 1 ? '1 device' : m.n + ' devices')); ol.append(li);
   });
   const active = median(hit.map((r) => ts(r.pipe_time) - ts(r.shell_started)).filter((d) => d >= 0)), found = median(hit.map((r) => ts(r.checked_at) - r.first).filter((d) => d >= 0));
   $('courseSub').textContent = marks.length ? 'The middle value of each time across the devices in this selection, from left to right. Times are UTC.' : 'No report with times in this selection (needs script 2.2 or newer).';
+  $('courseNone').textContent = $('courseSub').textContent; $('courseNone').hidden = marks.length > 0; $('course').closest('.courseBox').hidden = !marks.length;
   $('courseStats').replaceChildren(kpi('Attacker active for', dur(active), null, 'From the start of the shell to the last data through it.'), kpi('Found after', dur(found), null, 'From the first trace to the check that reported it.'));
 }
 // Bars that only show a number, not a filter: [name, bar length 0..1, number, small text, thin]
@@ -1459,7 +1515,7 @@ function backdoor(base) {
   const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Size', 'n'], ['Devices', 'n'], ['Different files', 'n'], ['Written (UTC)', 'n']]) hd.append(el('th', t, c)); tb.append(hd);
   for (const [s, fs] of [...bySize].sort((a, b) => b[1].length - a[1].length)) {
     const t = fs.map(when).filter(isFinite).sort((a, b) => a - b), tr = el('tr');
-    tr.append(el('td', s ? s.toLocaleString('en') + ' B' : 'not sent', 'n'), el('td', fs.length, 'n'), el('td', new Set(fs.map((f) => f.sha256)).size, 'n'), el('td', t.length ? (day(t[0]) === day(t[t.length - 1]) ? day(t[0]) : day(t[0]) + ' – ' + day(t[t.length - 1])) : '–', 'n'));
+    tr.append(el('td', s ? s.toLocaleString('en') + ' B' : 'not sent', 'n'), el('td', fs.length, 'n'), el('td', new Set(fs.map((f) => f.sha256)).size, 'n'), el('td', t.length ? (day(t[0]) === day(t[t.length - 1]) ? day(t[0]) : day(t[0]) + ' – ' + day(t[t.length - 1])) : '–', 'n wrap'));
     tb.append(tr);
   }
   box.append(tb, el('p', `${new Set(loaders.map((f) => f.sha256)).size} different loaders on ${loaders.length} devices.`, 'peak'));
@@ -1608,11 +1664,20 @@ function fillKpi(k, value, small, note, o = {}) {
 function kpis(base, hit) {
   const shells = hit.filter((r) => r.shell), imps = hit.filter((r) => r.implant), cmds = hit.filter((r) => r.cmd), both = hit.filter((r) => r.shell && r.implant).length, restarted = base.filter((r) => r.restarted);
   const split = el('div', null, 'split'), lg = el('ul', null, 'legend');
-  for (const [name, n, c] of [['Remote shell', shells.length, 'var(--s1)'], ['gl-helper malware', imps.length, 'var(--s2)'], ['Command only', cmds.length, 'var(--s3)']]) {
+  // no bar and no legend for nothing: three stubs of colour would look like data
+  for (const [name, n, c] of hit.length ? [['Remote shell', shells.length, 'var(--s1)'], ['gl-helper malware', imps.length, 'var(--s2)'], ['Command only', cmds.length, 'var(--s3)']] : []) {
     const s = el('i'); s.style.cssText = `flex:${Math.max(n, .001)};background:${c}`; hover(s, `${name}\n${n} devices`); split.append(s);
     const li = el('li'), sw = el('i'); sw.style.background = c; li.append(sw, name, el('b', n)); lg.append(li);
   }
-  fillKpi('hit', hit.length.toLocaleString('en'), 'of ' + base.length.toLocaleString('en') + ' reports', both ? both + ' have a shell and malware.' : '', { lead: true, extra: [split, lg], go: hit.length ? () => goReports(() => {}) : null });
+  // the older backdoor, counted apart: not in the number above and not in the bar
+  const bd = F.result === 'bd' ? [] : base.filter((r) => r.bd), also = bd.filter((r) => r.ioc > 0).length;
+  if (bd.length) {
+    const li = el('li', null, 'apart'), b = el('button'); b.type = 'button';
+    b.title = `${bd.length} with the older backdoor, not in the number above.${also ? ` ${also} of them also have traces of 20 November and count there for those.` : ''}\nClick to show these reports.`;
+    b.append(el('i'), 'Older backdoor, not included', el('b', bd.length)); b.addEventListener('click', () => goReports(() => { F.result = 'bd'; }));
+    li.append(b); lg.append(li);
+  }
+  fillKpi('hit', hit.length.toLocaleString('en'), 'of ' + base.length.toLocaleString('en') + ' reports', both ? both + ' have a shell and malware.' : '', { lead: true, extra: [split, lg].filter((x) => x.children.length), go: hit.length ? () => goReports(() => {}) : null });
   const running = shells.filter((r) => r.kinds.includes('process remote-shell')).length, back = hit.filter((r) => r.kinds.includes('persist-ref') || r.kinds.includes('keep-ref')).length;
   fillKpi('shell', running, 'of ' + shells.length, 'Checked while the attacker was connected.', { go: running ? () => goReports(() => { F.kind = new Set(['process remote-shell']); }) : null });
   fillKpi('back', back, 'of ' + hit.length, 'An autostart entry starts the malware again.', { go: back ? () => goReports(() => { F.kind = new Set(['persist-ref', 'keep-ref']); }) : null });
@@ -1644,7 +1709,7 @@ function files(hit) {
   for (const g of fm.values()) g.first = g.times.sort((a, b) => a - b)[Math.floor((g.times.length - 1) / 2)];
   const hs = $('hashes'); hs.replaceChildren();
   if (fm.size) {
-    const tb = el('table'), hd = el('tr'); for (const [t, c] of [['File', ''], ['Fingerprint (SHA-256)', ''], ['Typical time (UTC)', 'n'], ['Devices', 'n'], ['Old time', 'n'], ['Community list', '']]) hd.append(el('th', t, c));
+    const tb = el('table'), hd = el('tr'); for (const [t, c] of [['File', ''], ['Fingerprint (SHA-256)', 'wrap'], ['Typical time (UTC)', 'n hide-xs'], ['Devices', 'n'], ['Old time', 'n hide-n'], ['Community list', 'hide-xs']]) hd.append(el('th', t, c));
     tb.append(hd);
     // a path where every device has its own file (the older backdoor's loader) is one line
     const perPath = new Map(); for (const g of fm.values()) (perPath.get(g.path) || perPath.set(g.path, []).get(g.path)).push(g);
@@ -1656,12 +1721,12 @@ function files(hit) {
       if (g.own) {
         const tr = el('tr'), a = el('td', g.path, 'mono'); a.style.cursor = 'pointer'; a.addEventListener('click', () => { F.q = g.path; $('q').value = g.path; page = 0; render(); });
         const day = (t) => (isFinite(t) ? new Date(t).toISOString().slice(0, 10) : '–');
-        tr.append(a, el('td', `${g.own} different files, one per device`, 'dim'), el('td', day(g.from) === day(g.to) ? day(g.from) : day(g.from) + ' – ' + day(g.to), 'n'), el('td', g.own, 'n'), el('td', '–', 'n'), el('td', '–', 'dim')); tb.append(tr); continue;
+        tr.append(a, el('td', `${g.own} different files, one per device`, 'dim'), el('td', day(g.from) === day(g.to) ? day(g.from) : day(g.from) + ' – ' + day(g.to), 'n hide-xs'), el('td', g.own, 'n'), el('td', '–', 'n hide-n'), el('td', '–', 'dim hide-xs')); tb.append(tr); continue;
       }
       const tr = el('tr'), h = el('td', g.sha256.slice(0, 10) + '…', 'mono dim'); h.title = g.sha256; h.style.cursor = 'pointer';
       h.addEventListener('click', () => { F.q = g.sha256; $('q').value = g.sha256; page = 0; render(); });
-      tr.append(el('td', g.path, 'mono'), h, el('td', fmt(g.first), 'n'), el('td', g.n, 'n')); const o = el('td', g.known ? (g.old || 0) + ' of ' + g.known : '–', 'n'); o.title = g.known ? 'Devices where the written time is more than 10 minutes older than the change on the device (ctime): the time came with the file or was set back. Counted over reports that carry a ctime (script 2.13 and later).' : 'No report with a ctime yet (script 2.13 and later).'; tr.append(o);
-      const lc = el('td'), lb = badButton(g.sha256, lc); if (lb) lc.append(lb); else lc.append(el('span', '–', 'dim')); tr.append(lc); tb.append(tr);
+      tr.append(el('td', g.path, 'mono'), h, el('td', fmt(g.first), 'n hide-xs'), el('td', g.n, 'n')); const o = el('td', g.known ? (g.old || 0) + ' of ' + g.known : '–', 'n hide-n'); o.title = g.known ? 'Devices where the written time is more than 10 minutes older than the change on the device (ctime): the time came with the file or was set back. Counted over reports that carry a ctime (script 2.13 and later).' : 'No report with a ctime yet (script 2.13 and later).'; tr.append(o);
+      const lc = el('td', null, 'hide-xs'), lb = badButton(g.sha256, lc); if (lb) lc.append(lb); else lc.append(el('span', '–', 'dim')); tr.append(lc); tb.append(tr);
     }
     hs.append(tb);
     const multi = count([...fm.values()], (g) => g.path).filter((p) => p[1] > 1);
@@ -1700,7 +1765,7 @@ function reportsTable(rows) {
   for (const r of rows.slice(page * size, (page + 1) * size)) {
     const id = String(r.id), tr = el('tr', null, 'row' + (r.fresh && Date.now() - r.fresh < 90_000 ? ' fresh' : '') + (D && D.mode === 'report' && D.id === id ? ' sel' : '')); tr.tabIndex = 0; tr.dataset.id = id;
     const dev = el('td', null, 'dev'); dev.append(el('b', r.model), el('small', r.type));
-    const fw = el('td', null, 'fw'); fw.append(r.fw, el('small', r.firmware === r.fw || r.firmware === 'unknown' ? '' : r.firmware.split(' ').slice(1).join(' ')));
+    const fw = el('td', null, 'fw'); fw.append(r.fw, el('small', r.firmware === r.fw || r.firmware === 'unknown' ? '' : r.firmware.split(' ').slice(1).filter((w) => !r.fw.split(' ').includes(w.toLowerCase())).join(' ')));
     const res = el('td'); res.append(r.story, tagsOf(r));
     tr.append(el('td', fmt(r.recv), 'tnum'), dev, fw, res, el('td', fmt(r.first), 'tnum hide-s'), el('td', fmt(r.upSince), 'tnum hide-s'), el('td', '›'));
     const open = () => openDrawer({ mode: 'report', id });
@@ -1855,7 +1920,8 @@ function about(c, open) {
   for (const a of board.querySelectorAll('.about:not([hidden])')) { a.hidden = true; a.parentElement.classList.remove('raise'); a.parentElement.querySelector('.ib[aria-expanded]').setAttribute('aria-expanded', 'false'); }
   if (!open) return;
   const a = c.querySelector(':scope > .about'); a.hidden = false; c.classList.add('raise'); c.querySelector('.ib[aria-expanded]').setAttribute('aria-expanded', 'true');
-  a.classList.toggle('right', c.getBoundingClientRect().left + 380 > innerWidth);
+  const ch = c.querySelector('.ch'); a.style.top = ch.offsetTop + ch.offsetHeight + 4 + 'px';
+  a.classList.toggle('right', c.getBoundingClientRect().left + 380 > Math.min(innerWidth, document.querySelector('main').getBoundingClientRect().right));
 }
 // moving: the dots before the title. The card goes before or after the card under the
 // pointer: beside it when that card shares its row with others, else above or below.
@@ -1896,7 +1962,7 @@ for (const c of board.querySelectorAll(':scope > .card')) {
   if (!ch.querySelector('.grow')) ch.append(el('span', null, 'grow'));
   const size = el('span', null, 'size eo'), mv = el('select', null, 'mv eo'), hide = btn('ib eo', ICON.hide, `Hide “${t}”`), rz = btn('rz eo', '', `Resize “${t}”: drag the corner, or use the arrow keys`);
   mv.setAttribute('aria-label', `Move “${t}” to another page`); mv.append(new Option('Page …', '')); for (const [p, name] of PAGES) mv.append(new Option(name, p));
-  ch.append(size, mv, hide); c.append(rz);
+  const tools = el('span', null, 'etools eo'); tools.append(size, mv, hide); ch.append(tools); c.append(rz);
   if (!c.classList.contains('kpi')) { const f = btn('ib vo', ICON.focus, `Show “${t}” over the whole page`); ch.append(f); f.addEventListener('click', () => { focusKey = focusKey === k ? '' : k; render(); scrollTo(0, 0); }); }
   mv.addEventListener('change', () => { const it = itemOf(k); if (!mv.value || mv.value === it.p) return (mv.value = ''); L.items = L.items.filter((i) => i !== it); it.p = mv.value; L.items.push(it); sortByPage(L.items); mv.value = ''; changed(); applyLayout(); render(); });
   hide.addEventListener('click', () => { L.hidden.push(k); changed(); render(); });
@@ -2041,22 +2107,23 @@ function itemView(body) {
   const span = (c) => { const td = el('td', c.length ? fmt(c[0]).slice(0, 10) : '–', 'n'), z = c.length ? fmt(c[c.length - 1]).slice(0, 10) : ''; if (z && z !== td.textContent) td.append(el('small', 'to ' + z)); return td; };
   // fingerprints
   const byHash = new Map(); for (const x of rows) { const k = x.it.sha256 || ''; (byHash.get(k) || byHash.set(k, []).get(k)).push(x); }
-  sec('Fingerprints', 'One line per different file behind this path. The same fingerprint on many devices means the same file. A mark covers the fingerprints known when it was set, unless it holds for every file at the path. “Malware file…” puts one file on the community list as malware, at any path.', [['SHA-256', ''], ['Devices', 'n'], ['With traces', 'n'], ['Models', ''], ['Changed (UTC)', 'n'], ['Mark', '']], [...byHash].sort((a, b) => b[1].length - a[1].length).map(([h, xs]) => {
+  sec('Fingerprints', 'One line per different file behind this path. The same fingerprint on many devices means the same file. A mark covers the fingerprints known when it was set, unless it holds for every file at the path. “Malware file…” puts one file on the community list as malware, at any path.', [['SHA-256', ''], ['Devices', 'n hide-xs'], ['With traces', 'n'], ['Models', ''], ['Changed (UTC)', 'n hide-xs'], ['Mark', '']], [...byHash].sort((a, b) => b[1].length - a[1].length).map(([h, xs]) => {
     const tr = el('tr'), c = xs.map((x) => ts(x.it.ctime)).filter((n) => !isNaN(n)).sort((a, b) => a - b), hc = el('td', h ? h.slice(0, 16) + '…' : '(no fingerprint)', 'mono');
     if (h) { hc.classList.add('linkish'); hc.title = h + '\nSearch all reports for this fingerprint'; hc.addEventListener('click', () => search(h)); }
     const cov = el('td'); if (h && KNOWN[h]) cov.append(el('span', 'known: ' + KNOWN[h], 'tag ok')); else if (h && sg) cov.append(el('span', sg.hashes.includes(h) ? 'suggested' : 'not in the suggestion', 'tag ' + (sg.hashes.includes(h) ? 'sug' : ''))); else if (h && lab) { const c = lab.every || lab.hashes.includes(h); cov.append(el('span', !c ? 'no: new since the mark' : lab.verdict === 'safe' ? 'yes' : (VERDICTS[lab.verdict] || lab.verdict).toLowerCase(), 'tag ' + (!c ? 'warn' : lab.verdict === 'safe' ? 'ok' : lab.verdict === 'malware' ? 'bad' : 'warn'))); } else if (h) cov.append(el('span', 'not marked', 'tag'));
-    if (h && !KNOWN[h]) { const bc = el('span'), bb = badButton(h, bc); bc.style.marginLeft = '6px'; if (bb) { bc.append(bb); cov.append(bc); } }
-    tr.append(hc, el('td', xs.length, 'n'), el('td', xs.filter((x) => hitOf(x.r)).length + ' of ' + xs.length, 'n'), el('td', count(xs.map((x) => x.r), (r) => r.model).slice(0, 4).map(([m, n]) => m + ' ×' + n).join(', ')), span(c), cov);
+    if (h && !KNOWN[h]) { const bc = el('div', null, 'cellact'), bb = badButton(h, bc); if (bb) { bc.append(bb); cov.append(bc); } }
+    const sp = span(c); sp.classList.add('hide-xs');
+    tr.append(hc, el('td', xs.length, 'n hide-xs'), el('td', xs.filter((x) => hitOf(x.r)).length + ' of ' + xs.length, 'n'), el('td', count(xs.map((x) => x.r), (r) => r.model).slice(0, 4).map(([m, n]) => m + ' ×' + n).join(', ')), sp, cov);
     return tr;
   }));
   // models and firmware
   const mf = new Map(); for (const x of rows) { const k = x.r.model + '\t' + x.r.fw; (mf.get(k) || mf.set(k, []).get(k)).push(x); }
-  sec('Models and firmware', 'Which devices sent this finding, and how many of them show traces.', [['Model', ''], ['Firmware', ''], ['Devices', 'n'], ['With traces', 'n'], ['Different files', 'n']], [...mf].sort((a, b) => b[1].length - a[1].length).map(([k, xs]) => {
-    const [m, f] = k.split('\t'), tr = el('tr'); tr.append(el('td', m), el('td', f), el('td', xs.length, 'n'), el('td', xs.filter((x) => hitOf(x.r)).length + ' of ' + xs.length, 'n'), el('td', new Set(xs.map((x) => x.it.sha256).filter(Boolean)).size || '–', 'n')); return tr;
+  sec('Models and firmware', 'Which devices sent this finding, and how many of them show traces.', [['Model', ''], ['Firmware', ''], ['Devices', 'n hide-xs'], ['With traces', 'n'], ['Different files', 'n hide-xs']], [...mf].sort((a, b) => b[1].length - a[1].length).map(([k, xs]) => {
+    const [m, f] = k.split('\t'), tr = el('tr'); tr.append(el('td', m), el('td', f), el('td', xs.length, 'n hide-xs'), el('td', xs.filter((x) => hitOf(x.r)).length + ' of ' + xs.length, 'n'), el('td', new Set(xs.map((x) => x.it.sha256).filter(Boolean)).size || '–', 'n hide-xs')); return tr;
   }));
   // devices
-  sec(`Devices that sent it (${rows.length})`, 'The latest report of each device. Click a line to see that device’s reports.', [['Received (UTC)', ''], ['Device', ''], ['Result', ''], ['File on the device', '']], rows.sort((a, b) => b.r.recv - a.r.recv).slice(0, 300).map(({ r, it }) => {
-    const tr = el('tr'), dev = el('td'), res = el('td'), file = el('td'); tr.style.cursor = 'pointer';
+  sec(`Devices that sent it (${rows.length})`, 'The latest report of each device. Click a line to see that device’s reports.', [['Received (UTC)', ''], ['Device', ''], ['Result', ''], ['File on the device', 'hide-xs']], rows.sort((a, b) => b.r.recv - a.r.recv).slice(0, 300).map(({ r, it }) => {
+    const tr = el('tr'), dev = el('td'), res = el('td'), file = el('td', null, 'hide-xs'); tr.style.cursor = 'pointer';
     dev.append(el('b', r.model), el('small', r.fw), el('small', r.dev || 'no device ID', 'mono'));
     res.append(el('span', r.cls === 'clean' ? 'Clean' : r.cls === 'command' ? 'Command only' : r.cls === 'shell' ? 'Remote shell' : r.cls === 'malware' ? 'gl-helper malware' : r.cls === 'backdoor' ? 'Older backdoor' : 'Traces', 'tag ' + (r.cls === 'clean' ? 'ok' : 'warn')));
     if (r.bd && r.cls !== 'backdoor') res.append(' ', el('span', 'Older backdoor', 'tag warn'));
@@ -2094,16 +2161,16 @@ function safeList() {
 }
 function markList(box, rows, sugg) {
   if (sugg) box.append(el('h3', 'Marked'));
-  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Mark', ''], ['Comment', ''], ['Marked by', ''], ['When (UTC)', 'n'], ['Files', 'n'], ['Devices now', 'n'], ['', 'n']]) hd.append(el('th', t, c));
+  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Mark', ''], ['Comment', ''], ['Marked by', 'hide-xs'], ['When (UTC)', 'n hide-m'], ['Files', 'n hide-m'], ['Devices now', 'n hide-xs'], ['', 'n hide-xs']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const [key, lab] of rows) {
     const i = key.indexOf(' '), kind = key.slice(0, i), path = key.slice(i + 1), g = REVALL.get(key) || { kind, path, n: 0, hit: 0, sha: new Set(lab.hashes) };
-    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', lab.every ? 'every' : lab.hashes.length || '–', 'n'), now = el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n'), act = el('td', null, 'n'), rm = el('button', 'Remove mark', 'btn sm');
+    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', lab.every ? 'every' : lab.hashes.length || '–', 'n hide-m'), now = el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n wrap hide-xs'), act = el('td', null, 'n hide-xs'), rm = el('button', 'Remove mark', 'btn sm');
     const v = lab.verdict || 'safe', mc = el('td'); mc.append(el('span', (VERDICTS[v] || v).toLowerCase(), 'tag ' + (v === 'safe' ? 'ok' : v === 'malware' ? 'bad' : 'warn')));
     tr.style.cursor = 'pointer'; files.title = (lab.every ? 'Every file at this path, also new ones. ' : '') + (lab.hashes.length ? 'Fingerprints known when it was set:\n' + lab.hashes.slice(0, 6).join('\n') + (lab.hashes.length > 6 ? '\n…' : '') : 'Nothing with a fingerprint: a link, an account or a process.');
     if (labelState(g) === 'new') { const t = el('span', 'new file since', 'tag warn'); t.style.marginLeft = '8px'; t.title = 'A file with another fingerprint was reported at this path after it was marked. It is shown on the dashboard again.'; pc.append(t); }
     rm.type = 'button'; rm.addEventListener('click', (e) => { e.stopPropagation(); setLabel(g, '', ''); }); act.append(rm);
-    tr.append(el('td', kind), pc, mc, el('td', lab.note || '–'), el('td', lab.by, 'who'), el('td', lab.at.slice(0, 16).replace('T', ' '), 'n'), files, now, act);
+    tr.append(el('td', kind), pc, mc, el('td', lab.note || '–'), el('td', lab.by, 'who hide-xs'), el('td', lab.at.slice(0, 16).replace('T', ' '), 'n hide-m'), files, now, act);
     tr.addEventListener('click', () => openItem(key));
     tb.append(tr);
   }
@@ -2114,14 +2181,14 @@ function badList(box) {
   const rows = Object.entries(BAD).sort((a, b) => (a[1].at < b[1].at ? 1 : -1));
   box.append(el('h3', `On the malware list (${rows.length})`), el('p', 'Files the fingerprint check answers as known malware, at any path: put there on the dashboard or loaded as SQL. One that waits counts how often it is asked and answers “not known” until it is released. Days asked: on how many days a check asked about it.', 'sub'));
   if (!rows.length) { box.append(el('p', 'Nothing on the list.', 'peak dim')); return; }
-  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Fingerprint (SHA-256)', ''], ['Note', ''], ['Added by', ''], ['When (UTC)', 'n'], ['Days asked', 'n'], ['', 'n']]) hd.append(el('th', t, c));
+  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Fingerprint (SHA-256)', ''], ['Note', ''], ['Added by', 'hide-xs'], ['When (UTC)', 'n hide-m'], ['Days asked', 'n hide-xs'], ['', 'n']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const [h, e] of rows.slice(0, 200)) {
     const tr = el('tr'), hc = el('td', h.slice(0, 16) + '…', 'mono linkish'), act = el('td', null, 'n'), w = el('span', null, 'labelForm');
     hc.title = h + '\nSearch all reports for this fingerprint'; hc.addEventListener('click', () => goReports(() => { F.q = h; $('q').value = h; F.result = 'all'; }));
     if (e.answer !== 1) { hc.append(' ', el('span', 'waits', 'tag')); const go = el('button', 'Release', 'btn sm'); go.type = 'button'; go.title = 'From now on the fingerprint check answers known malware for it'; go.addEventListener('click', (x) => { x.stopPropagation(); setBad(h, 'malware', e.note); }); w.append(go); }
     const rm = el('button', 'Take off', 'btn sm'); rm.type = 'button'; rm.addEventListener('click', (x) => { x.stopPropagation(); setBad(h, '', ''); }); w.append(rm); act.append(w);
-    tr.append(hc, el('td', e.note || '–'), el('td', e.by, 'who'), el('td', e.at.slice(0, 16).replace('T', ' '), 'n'), el('td', e.asked || '–', 'n'), act); tb.append(tr);
+    tr.append(hc, el('td', e.note || '–'), el('td', e.by, 'who hide-xs'), el('td', e.at.slice(0, 16).replace('T', ' '), 'n hide-m'), el('td', e.asked || '–', 'n hide-xs'), act); tb.append(tr);
   }
   box.append(tb);
 }
@@ -2130,14 +2197,14 @@ function badList(box) {
 function suggList(box, keys, declined) {
   box.append(el('h3', `Suggested, waiting for a yes (${keys.length})`), el('p', 'Found by an analysis of the reports: a file that matches a published release or tool byte for byte, or the same file on many devices with traces no more often than their firmware predicts. Nothing here is hidden until someone confirms it. Confirm marks only the fingerprints of the suggestion.' + (declined ? ` ${declined} declined.` : ''), 'sub'));
   const rows = keys.map((key) => { const i = key.indexOf(' '), kind = key.slice(0, i), path = key.slice(i + 1); return { key, kind, path, s: SUGG[key], g: REVALL.get(key) || { kind, path, n: 0, hit: 0, sha: new Set(SUGG[key].hashes) } }; }).sort((a, b) => b.g.n - a.g.n || a.key.localeCompare(b.key));
-  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Why', ''], ['Files', 'n'], ['Devices now', 'n'], ['', 'n']]) hd.append(el('th', t, c));
+  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', 'hide-xs'], ['Path or program', ''], ['Why', ''], ['Files', 'n hide-m'], ['Devices now', 'n wrap hide-xs'], ['', 'n']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const { key, kind, path, s, g } of rows) {
-    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', s.hashes.length || '–', 'n'), act = el('td', null, 'n');
+    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', s.hashes.length || '–', 'n hide-m'), act = el('td', null, 'n');
     files.title = s.hashes.length ? 'Fingerprints this suggestion covers:\n' + s.hashes.slice(0, 6).join('\n') + (s.hashes.length > 6 ? '\n…' : '') : 'Nothing with a fingerprint: a link or a directory.';
     if ([...g.sha].some((h) => !s.hashes.includes(h) && !KNOWN[h])) { const t = el('span', 'other files too', 'tag'); t.style.marginLeft = '8px'; t.title = 'Other files at this path are not part of the suggestion. They stay listed after a yes.'; pc.append(t); }
     act.append(markButton(g, act)); tr.style.cursor = 'pointer';
-    tr.append(el('td', kind), pc, el('td', s.note), files, el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n'), act);
+    tr.append(el('td', kind, 'hide-xs'), pc, el('td', s.note), files, el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n wrap hide-xs'), act);
     tr.addEventListener('click', () => openItem(key));
     tb.append(tr);
   }
