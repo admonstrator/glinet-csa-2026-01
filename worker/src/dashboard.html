@@ -147,6 +147,7 @@ button.val:hover { text-decoration-color: currentColor; }
 .val.ok { color: var(--accent); }
 /* a legend whose entries lead to the reports behind them */
 .legend button { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font-size: inherit; cursor: pointer; }
+.legend li > span { display: inline-flex; align-items: center; gap: 6px; }
 .legend button:hover b { text-decoration: underline; text-underline-offset: 3px; }
 .kv1 small { font-size: 14px; font-weight: 600; color: var(--text-2); }
 .card.kpi .split { margin-top: 8px; }
@@ -308,6 +309,7 @@ tr.formRow > td > .markForm { display: flex; position: sticky; left: 0; max-widt
 .legend li { display: flex; align-items: center; gap: 6px; }
 .legend i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .legend b { font-variant-numeric: tabular-nums; }
+.legend small { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 /* when it started: stacked columns on a time axis that never has more than ~72 columns */
 /* the chart takes the height its card has */
@@ -574,6 +576,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     <div class="gridlines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
     <!-- Overview -->
+    <section class="card" data-card="total"><div class="ch"><h2>All checked devices</h2></div><div class="about" hidden><p>Every device in this selection, split four ways: traces of the attack of 20 November only, the older backdoor only, both, or no known trace. The four parts add up to the whole.</p><p>“No known traces” is not proof that a device was never hit: a restart ends a running shell, and firmware with GL.iNet’s cleanup removes the known traces at its first start.</p><p>Follows every filter but the result filter. Click a part to see its reports.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="hit"><div class="ch"><h2>Devices with traces</h2></div><div class="about" hidden><p>Devices with known traces of the attack of 20 November, by what was found. “Command only”: a command from the cloud ran, nothing else was found.</p><p>The older backdoor adds nothing to this number: its own line counts it apart. A device with the older backdoor and traces of 20 November counts here for those traces. With the result filter on “Older backdoor”, the card counts the devices with the backdoor instead.</p><p>Click the number to see these reports.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="shell"><div class="ch"><h2>Remote shell still running</h2></div><div class="about" hidden><p>A remote shell that was running during the check: the attacker was connected at that moment.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="back"><div class="ch"><h2>Comes back after a restart</h2></div><div class="about" hidden><p>An autostart entry (rc.local, crontab, an init script) or the list of files a firmware update keeps points to the malware.</p></div><div class="cb"></div></section>
@@ -886,7 +889,7 @@ const KPIS = [['hit', 4, 3], ['shell', 2, 3], ['back', 2, 3], ['restart', 2, 3],
 const BDK = [['bdn', 3, 2], ['bdrun', 3, 2], ['bdkeep', 3, 2], ['bdboth', 3, 2]];
 const TPL = {
   standard: {
-    overview: [...KPIS, ['when', 8, 6], ['going', 4, 6], ['course', 8, 5], ['healed', 4, 5]],
+    overview: [['total', 12, 2], ...KPIS, ['when', 8, 6], ['going', 4, 6], ['course', 8, 5], ['healed', 4, 5]],
     devices: [['matrix', 8, 7], ['series', 4, 7], ['devices', 4, 5], ['firmware', 4, 5], ['cloud', 4, 6]],
     attack: [['evidence', 5, 5], ['files', 7, 5], ['ports', 12, 3], ['left', 12, 5]],
     backdoor: [...BDK, ['bdkinds', 6, 5], ['bdmodel', 3, 5], ['bdfw', 3, 5], ['bdwhen', 6, 5], ['bdfiles', 6, 5]],
@@ -894,7 +897,7 @@ const TPL = {
     reports: [['reports', 12, 11]],
   },
   compact: {
-    overview: [...KPIS, ['when', 7, 5], ['going', 5, 5], ['course', 8, 5], ['healed', 4, 5]],
+    overview: [['total', 12, 2], ...KPIS, ['when', 7, 5], ['going', 5, 5], ['course', 8, 5], ['healed', 4, 5]],
     devices: [['matrix', 8, 7], ['series', 4, 7], ['devices', 4, 4], ['firmware', 4, 4], ['cloud', 4, 5]],
     attack: [['evidence', 4, 6], ['files', 8, 3], ['ports', 8, 3], ['left', 12, 4]],
     backdoor: [...BDK, ['bdkinds', 4, 5], ['bdmodel', 4, 5], ['bdfw', 4, 5], ['bdwhen', 6, 4], ['bdfiles', 6, 4]],
@@ -902,7 +905,7 @@ const TPL = {
     reports: [['reports', 12, 9]],
   },
   large: {
-    overview: [...KPIS, ['when', 12, 8], ['going', 12, 3], ['course', 12, 5], ['healed', 12, 3]],
+    overview: [['total', 12, 2], ...KPIS, ['when', 12, 8], ['going', 12, 3], ['course', 12, 5], ['healed', 12, 3]],
     devices: [['matrix', 12, 8], ['series', 6, 6], ['cloud', 6, 6], ['devices', 6, 5], ['firmware', 6, 5]],
     attack: [['evidence', 6, 7], ['ports', 6, 7], ['files', 12, 4], ['left', 12, 5]],
     backdoor: [...BDK, ['bdkinds', 12, 5], ['bdwhen', 12, 4], ['bdmodel', 6, 5], ['bdfw', 6, 5], ['bdfiles', 12, 4]],
@@ -1629,6 +1632,7 @@ const DRAW = {};
 {
   const kp = ({ base, hit }) => kpis(base, hit), bd = ({ base }) => backdoor(base);
   for (const k of ['hit', 'shell', 'back', 'restart', 'gc']) DRAW[k] = kp;
+  DRAW.total = ({ base }) => totals(base);
   for (const k of ['bdn', 'bdrun', 'bdkeep', 'bdboth', 'bdkinds', 'bdmodel', 'bdfw', 'bdwhen', 'bdfiles']) DRAW[k] = bd;
   Object.assign(DRAW, {
     when: ({ isHit }) => chart(pool.filter((r) => pass(r, 'bin') && isHit(r))),
@@ -1686,6 +1690,27 @@ function kpis(base, hit) {
   fillKpi('restart', restarted.length, 'of ' + base.length, restarted.filter((r) => r.ioc === 0).length + ' of them look clean.', { go: restarted.length ? () => goReports(() => { F.restart = 'yes'; }) : null });
   const k = base.filter((r) => r.goodcloud === 'on' || r.goodcloud === 'off'), on = k.filter((r) => r.goodcloud === 'on'), off = k.filter((r) => r.goodcloud === 'off'), h = (x) => x.filter((r) => r.ioc > 0).length, pc = (x) => (x.length ? Math.round(h(x) / x.length * 100) + '%' : '–');
   fillKpi('gc', pc(on), k.length ? 'off: ' + pc(off) : '', k.length ? `${h(on)} of ${on.length} with it on, ${h(off)} of ${off.length} with it off.` : 'No report says yet. That comes with script 2.23 and later.');
+}
+// All devices of this selection in four parts that add up to the whole: the attack of
+// 20 November only, both, the older backdoor only, no known trace.
+function totals(base) {
+  const n = base.length, atk = base.filter((r) => r.ioc > 0 && !r.bd).length, both = base.filter((r) => r.ioc > 0 && r.bd).length, bd = base.filter((r) => r.ioc === 0 && r.bd).length, none = n - atk - both - bd;
+  const pc = (x) => (!n ? '–' : x && x / n < .01 ? '<1%' : Math.round(x / n * 100) + '%');
+  const split = el('div', null, 'split'), lg = el('ul', null, 'legend');
+  const go = (v) => () => goReports(() => { F.result = v; });
+  for (const [name, x, bg, v, tip] of n ? [
+    ['Attack of 20 November only', atk, 'var(--danger)', 'hit', 'Shows every report with traces of 20 November, those with the older backdoor as well.'],
+    ['Both', both, 'repeating-linear-gradient(135deg, var(--danger) 0 3px, var(--warn) 3px 6px)', '', ''],
+    ['Older backdoor only', bd, 'var(--warn)', 'bd', 'Shows every report with the older backdoor, those with traces of 20 November as well.'],
+    ['No known traces', none, 'var(--accent)', 'clean', 'Shows these reports.'],
+  ] : []) {
+    const s = el('i'); s.style.cssText = `flex:${Math.max(x, .001)};background:${bg}`; hover(s, `${name}\n${x} · ${pc(x)}`); split.append(s);
+    const li = el('li'), b = el(x && v ? 'button' : 'span'), sw = el('i'); sw.style.background = bg; b.append(sw, name, el('b', x.toLocaleString('en')), el('small', pc(x)));
+    if (x && v) { b.type = 'button'; b.title = tip; b.addEventListener('click', go(v)); }
+    li.append(b); lg.append(li);
+  }
+  const note = n ? `Attack of 20 November in all: ${(atk + both).toLocaleString('en')} (${pc(atk + both)}). Older backdoor in all: ${(both + bd).toLocaleString('en')} (${pc(both + bd)}).` : 'No report in this selection.';
+  fillKpi('total', n.toLocaleString('en'), $('perDevice').checked ? 'devices' : 'reports', note, { extra: n ? [split, lg] : [] });
 }
 // devices with traces that checked again: the devices of this selection, whatever the
 // result filter and this card's own filter say
