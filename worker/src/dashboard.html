@@ -70,7 +70,7 @@ button, select, input { font: inherit; color: inherit; }
   /* the course of an attack needs the width for its steps; the count of devices checked
      again then goes below it, as high as it needs */
   .board:not(.edit) > .card:not(.kpi) { grid-column: span 12; }
-  .board:not(.edit) > .card[data-card=healed] { grid-row: span 3; }
+  .board:not(.edit) > .card:is([data-card=healed], [data-card=again]) { grid-row: span 3; }
 }
 .card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 14px 12px; }
 /* a card is a layer of its own; the one with an open note goes over its neighbours */
@@ -329,6 +329,26 @@ tr.formRow > td > .markForm { display: flex; position: sticky; left: 0; max-widt
 .xaxis span b { display: block; color: var(--text); font-weight: 600; }
 .xaxis span.l { translate: 0 0; text-align: left; } .xaxis span.r { translate: -100% 0; text-align: right; }
 .peak { margin-top: 8px; font-size: 13.5px; }
+/* checked per day: the checks of each day above, two shares of each day below, one date axis */
+.dayplot { flex: 1; min-height: 250px; margin-top: 8px; display: grid; grid-template-columns: 38px minmax(0, 1fr) 26px; grid-template-rows: minmax(100px, 3fr) minmax(70px, 2fr) 34px; row-gap: 14px; column-gap: 8px; }
+.dayplot .y1 { grid-area: 1 / 1; } .dayplot .cols { grid-area: 1 / 2; }
+.dayplot .y2 { grid-area: 2 / 1; } .dayplot .dline { grid-area: 2 / 2; }
+.dayplot .xaxis { grid-area: 3 / 2; margin-top: -9px; }
+.dayplot .col { cursor: default; }
+.col i.dt { background: var(--danger); } .col i.db { background: var(--warn); } .col i.dn { background: var(--accent); }
+.dline { position: relative; border-bottom: 1px solid var(--grid); background: linear-gradient(var(--grid), var(--grid)) 0 0 / 100% 1px no-repeat, linear-gradient(var(--grid), var(--grid)) 0 50% / 100% 1px no-repeat; }
+.dline svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.dline polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.dline .dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; translate: -50% -50%; box-shadow: 0 0 0 2px var(--surface); pointer-events: none; }
+.dline .dot.few { opacity: .35; }
+.dline .vlab { position: absolute; translate: 8px -50%; font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); pointer-events: none; white-space: nowrap; }
+.dline .hits { position: absolute; inset: 0; display: flex; gap: 2px; } .dline .hits > div { flex: 1; }
+.dline .hits > div:hover { background: var(--accent-soft); }
+.nw { white-space: nowrap; }
+.legend i.line { height: 2px; width: 14px; border-radius: 1px; }
+/* the second part of a card with two numbers */
+.kpart { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.kpart .val { font-size: 24px; }
 
 .rank { margin: 12px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: minmax(0, max-content) minmax(50px, 1fr) max-content; gap: 7px 10px; align-items: center; font-size: 13.5px; }
 .rank li { display: contents; cursor: pointer; }
@@ -511,6 +531,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
   .board > .card, .board:not(.edit) > .card[data-card], .board:not(.edit) > .card.kpi[data-card] { grid-column: 1 / -1; grid-row: auto; }
   .card.scroll > .cb { max-height: 75vh; }
   .cb > .plot { flex: none; height: 240px; }
+  .cb > .dayplot { flex: none; height: 320px; }
   #editBtn, .eo, #dFull { display: none !important; }
   /* the reports run with the page, not in a box of their own */
   .board:not(.focus) > .card[data-card=reports] > .cb { max-height: none; overflow: visible; }
@@ -550,6 +571,8 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
         <div class="seg" id="fRestart" role="group" aria-label="Restarted since the attack"><button type="button" data-v="any">Restarted or not</button><button type="button" data-v="yes">Restarted</button><button type="button" data-v="no">Not restarted</button></div>
         <p class="ph">Checked again after traces (same device ID)</p>
         <div class="seg" id="fRecheck" role="group" aria-label="Checked again after traces"><button type="button" data-v="any">Any</button><button type="button" data-v="clean">Clean now</button><button type="button" data-v="still">Traces still there</button></div>
+        <p class="ph">Traces after cleaning</p>
+        <div class="seg" id="fAfter" role="group" aria-label="Traces after cleaning"><button type="button" data-v="any">Any</button><button type="button" data-v="back" title="A clean report from the device came first (same device ID)">After a clean check</button><button type="button" data-v="fixed" title="A report with traces from firmware with GL.iNet’s cleanup">On firmware with the cleanup</button></div>
         <p class="ph">View</p>
         <div class="toggles" role="group" aria-label="View">
           <label class="tg"><input type="checkbox" id="onlyUnusual"><span>Unusual only</span></label>
@@ -605,6 +628,16 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="ch"><h2>Clean on a later check</h2></div>
       <div class="about" hidden><p>Devices that sent a report with traces of the attack and checked again later, told apart by their device ID (script 2.9 and later). The newest report of each device decides: clean, or traces still there.</p><p>“After a firmware change”: the newest report comes from other firmware than the last one with traces, mostly an update. Firmware with GL.iNet’s cleanup removes the known traces at its first start. “Same firmware”: cleaned some other way, for example with the script’s --fix. The older backdoor is not counted here.</p><p>Click a number to see these devices.</p></div>
       <div class="cb"></div>
+    </section>
+    <section class="card" data-card="again">
+      <div class="ch"><h2>Traces after cleaning</h2></div>
+      <div class="about" hidden><p>Does cleaning hold? Two ways to see it. The older backdoor is not counted here.</p><p>“After a clean check”: a device sent a clean report and later one with traces, told apart by its device ID (script 2.9 and later). If a trace carries a time after the clean check, something wrote it since: the device was hit again, or the malware started again. If all its times lie before the clean check, that check missed them, mostly because a newer script finds more; the note counts those.</p><p>“On firmware with GL.iNet’s cleanup”: a report with traces from firmware that removes the known traces at its first start. Malware or a remote shell there means the cleanup missed them, or the device was hit again. The cleanup deletes the malware’s folder and its lines in rc.local and crontab; the state file of the cloud command is not on its list, so that trace from before the update can stay.</p><p>Click a number to see these devices.</p></div>
+      <div class="cb"></div>
+    </section>
+    <section class="card scroll" data-card="days">
+      <div class="ch"><h2>Checked per day</h2></div>
+      <div class="about" hidden><p>The reports by the day they came in, UTC. With “One row per device”, a device counts once a day, with its report that has the most traces; a device that checks on several days counts on each of them.</p><p>The lower chart gives two shares of each day: the devices with traces of 20 November, and those that run firmware with GL.iNet’s cleanup. A falling first line and a rising second one say the update arrives. Read the first days with care: whoever suspects something checks first, so the share hit is highest there. Days with fewer than 20 checks are drawn pale.</p><p>Follows every filter but the result filter.</p></div>
+      <div class="cb"><ul class="legend" id="daysLegend" style="margin:0"></ul><div class="dayplot" id="dayPlot"></div><p class="peak" id="daysNote"></p></div>
     </section>
 
     <!-- Devices & firmware -->
@@ -858,6 +891,12 @@ function shape(x) {
   // time along or had it set back (the installer can do that); then the change time counts
   const ftime = (f) => (f.ctime && lag(f) > LAG ? ts(f.ctime) : ts(f.mtime));
   const times = [ts(r.shell_started), r.cmd ? ts(r.state_file_time) : NaN, ...r.files.filter((f) => r.ioc === 0 || !BD_FILE.test(f.path)).map(ftime)].filter((n) => !isNaN(n));
+  // the newest time on a trace, the state file of a cloud command included. latestW takes the
+  // written time of files only: a firmware update that keeps the settings puts the files back
+  // and gives them a new change time.
+  const sf = r.findings.some((f) => f.startsWith('cloud-command')) ? ts(r.state_file_time) : NaN, newest = (l) => { l = l.filter((n) => !isNaN(n)); return l.length ? Math.max(...l) : NaN; };
+  r.latest = newest([...times, sf]);
+  r.latestW = newest([ts(r.shell_started), sf, ...r.files.filter((f) => r.ioc === 0 || !BD_FILE.test(f.path)).map((f) => ts(f.mtime))]);
   r.first = times.length ? Math.min(...times) : NaN;
   r.story = story(r);
   r.hay = [r.model, r.platform, r.firmware, r.tool, r.dev, r.findings.join(' '), r.shell_ports.join(' '), r.files.map((f) => f.path + ' ' + f.sha256).join(' '), r.commands.join(' '), r.fw_rules.join(' '), r.review_items.map((i) => i.kind + ' ' + i.path + ' ' + i.sha256).join(' '), r.persistence.map((p) => p.path + ' ' + p.lines.join(' ')).join(' ')].join(' ').toLowerCase();
@@ -889,7 +928,7 @@ const KPIS = [['hit', 4, 3], ['shell', 2, 3], ['back', 2, 3], ['restart', 2, 3],
 const BDK = [['bdn', 3, 2], ['bdrun', 3, 2], ['bdkeep', 3, 2], ['bdboth', 3, 2]];
 const TPL = {
   standard: {
-    overview: [['total', 12, 2], ...KPIS, ['when', 8, 6], ['going', 4, 6], ['course', 8, 5], ['healed', 4, 5]],
+    overview: [['total', 12, 2], ...KPIS, ['when', 8, 6], ['going', 4, 6], ['course', 8, 5], ['healed', 4, 5], ['days', 8, 7], ['again', 4, 7]],
     devices: [['matrix', 8, 7], ['series', 4, 7], ['devices', 4, 5], ['firmware', 4, 5], ['cloud', 4, 6]],
     attack: [['evidence', 5, 5], ['files', 7, 5], ['ports', 12, 3], ['left', 12, 5]],
     backdoor: [...BDK, ['bdkinds', 6, 5], ['bdmodel', 3, 5], ['bdfw', 3, 5], ['bdwhen', 6, 5], ['bdfiles', 6, 5]],
@@ -897,7 +936,7 @@ const TPL = {
     reports: [['reports', 12, 11]],
   },
   compact: {
-    overview: [['total', 12, 2], ...KPIS, ['when', 7, 5], ['going', 5, 5], ['course', 8, 5], ['healed', 4, 5]],
+    overview: [['total', 12, 2], ...KPIS, ['when', 7, 5], ['going', 5, 5], ['course', 8, 5], ['healed', 4, 5], ['days', 8, 6], ['again', 4, 6]],
     devices: [['matrix', 8, 7], ['series', 4, 7], ['devices', 4, 4], ['firmware', 4, 4], ['cloud', 4, 5]],
     attack: [['evidence', 4, 6], ['files', 8, 3], ['ports', 8, 3], ['left', 12, 4]],
     backdoor: [...BDK, ['bdkinds', 4, 5], ['bdmodel', 4, 5], ['bdfw', 4, 5], ['bdwhen', 6, 4], ['bdfiles', 6, 4]],
@@ -905,7 +944,7 @@ const TPL = {
     reports: [['reports', 12, 9]],
   },
   large: {
-    overview: [['total', 12, 2], ...KPIS, ['when', 12, 8], ['going', 12, 3], ['course', 12, 5], ['healed', 12, 3]],
+    overview: [['total', 12, 2], ...KPIS, ['when', 12, 8], ['going', 12, 3], ['course', 12, 5], ['healed', 12, 3], ['again', 12, 4], ['days', 12, 8]],
     devices: [['matrix', 12, 8], ['series', 6, 6], ['cloud', 6, 6], ['devices', 6, 5], ['firmware', 6, 5]],
     attack: [['evidence', 6, 7], ['ports', 6, 7], ['files', 12, 4], ['left', 12, 5]],
     backdoor: [...BDK, ['bdkinds', 12, 5], ['bdwhen', 12, 4], ['bdmodel', 6, 5], ['bdfw', 6, 5], ['bdfiles', 12, 4]],
@@ -959,7 +998,7 @@ const pageName = (p) => (PAGES[pageAt(p)] || PAGES[0])[1];
 /* ---------- filters ---------- */
 let all = [], pool = [], NOW = Date.now();
 let zoom = 'attack', page = 0, sortKey = 'received', asc = false;
-const F = { q: '', result: 'hit', type: 'all', model: new Set(), firmware: new Set(), kind: new Set(), recv: 'all', restart: 'any', recheck: 'any', hideTests: true, bin: null, unusual: false, since: null };
+const F = { q: '', result: 'hit', type: 'all', model: new Set(), firmware: new Set(), kind: new Set(), recv: 'all', restart: 'any', recheck: 'any', after: 'any', hideTests: true, bin: null, unusual: false, since: null };
 const FACET = { model: (r) => r.model, firmware: (r) => r.fw, kind: (r) => r.kinds };
 const LABEL = { model: 'Device', firmware: 'Firmware', kind: 'Evidence' };
 function pass(r, skip) {
@@ -971,6 +1010,7 @@ function pass(r, skip) {
   if (F.recv !== 'all' && r.recv < NOW - (F.recv === '24h' ? DAY : 7 * DAY)) return false;
   if (F.restart !== 'any' && (F.restart === 'yes') !== r.restarted) return false;
   if (!sk.includes('recheck') && F.recheck !== 'any') { const h = HEAL.get(r.dev); if (!h || !(F.recheck === 'clean' ? h.state !== 'still' : h.state === F.recheck)) return false; }
+  if (!sk.includes('after') && F.after !== 'any' && !afterOf(r, F.after)) return false;
   for (const k of ['model', 'firmware', 'kind']) if (!sk.includes(k) && F[k].size && ![].concat(FACET[k](r)).some((v) => F[k].has(v))) return false;
   if (!sk.includes('bin') && F.bin && !(r.first >= F.bin[0] && r.first < F.bin[1])) return false;
   if (F.unusual && !r.odd.length) return false;
@@ -984,7 +1024,7 @@ function seg(id, key) {
   sync(); return sync;
 }
 /* ---------- the filters in the address, so a view can be shared ---------- */
-const SIMPLE = { result: 'hit', type: 'all', recv: 'all', restart: 'any', recheck: 'any' };
+const SIMPLE = { result: 'hit', type: 'all', recv: 'all', restart: 'any', recheck: 'any', after: 'any' };
 // the page in view, what the side panel shows, and the card shown over the whole page
 let curPage = 'overview', D = null, focusKey = '';
 // the panel's width per kind of content, once its edge was dragged (see dock())
@@ -1026,7 +1066,7 @@ function fromHash() {
 }
 
 fromHash();
-const syncs = [seg('fResult', 'result'), seg('fType', 'type'), seg('fRecv', 'recv'), seg('fRestart', 'restart'), seg('fRecheck', 'recheck')];
+const syncs = [seg('fResult', 'result'), seg('fType', 'type'), seg('fRecv', 'recv'), seg('fRestart', 'restart'), seg('fRecheck', 'recheck'), seg('fAfter', 'after')];
 function facet(id, key) {
   const d = $(id), pop = d.querySelector('.pop'), val = d.querySelector('summary b');
   let find = '';
@@ -1088,12 +1128,13 @@ function chips() {
   if (F.recv !== 'all') add('Received: ' + (F.recv === '24h' ? 'last 24 h' : 'last 7 days'), () => (F.recv = 'all'));
   if (F.restart !== 'any') add(F.restart === 'yes' ? 'Restarted since the attack' : 'Not restarted since the attack', () => (F.restart = 'any'));
   if (F.recheck !== 'any') add(RECHECK[F.recheck] || 'Checked again: ' + F.recheck, () => (F.recheck = 'any'));
+  if (F.after !== 'any') add(AFTER[F.after] || 'After cleaning: ' + F.after, () => (F.after = 'any'));
   if (F.unusual) add('Unusual only', () => { F.unusual = false; $('onlyUnusual').checked = false; });
-  const more = [F.recv !== 'all', F.restart !== 'any', F.recheck !== 'any', F.unusual, !$('perDevice').checked, !F.hideTests].filter(Boolean).length;
+  const more = [F.recv !== 'all', F.restart !== 'any', F.recheck !== 'any', F.after !== 'any', F.unusual, !$('perDevice').checked, !F.hideTests].filter(Boolean).length;
   $('fMore').querySelector('summary b').textContent = more || ''; $('fMore').classList.toggle('on', more > 0);
   syncs.forEach((s) => s());
   box.hidden = !box.children.length;
-  if (!box.hidden) { const r = el('button', 'Reset all filters', 'linkbtn'); r.type = 'button'; r.addEventListener('click', () => { Object.assign(F, { q: '', result: 'hit', type: 'all', recv: 'all', restart: 'any', recheck: 'any', bin: null, unusual: false, since: null }); $('onlyUnusual').checked = false; for (const k of ['model', 'firmware', 'kind']) F[k].clear(); $('q').value = ''; syncs.forEach((s) => s()); page = 0; render(); }); box.append(r); }
+  if (!box.hidden) { const r = el('button', 'Reset all filters', 'linkbtn'); r.type = 'button'; r.addEventListener('click', () => { Object.assign(F, { q: '', result: 'hit', type: 'all', recv: 'all', restart: 'any', recheck: 'any', after: 'any', bin: null, unusual: false, since: null }); $('onlyUnusual').checked = false; for (const k of ['model', 'firmware', 'kind']) F[k].clear(); $('q').value = ''; syncs.forEach((s) => s()); page = 0; render(); }); box.append(r); }
 }
 
 /* ---------- pieces ---------- */
@@ -1387,6 +1428,7 @@ function chart(hit) {
 // Reports that carry the same device id come from one device. With "One row per device"
 // such a device counts once: its report with the most known traces stands for it (the
 // newest one if they are equal), so a device that was hit and later cleaned stays a hit.
+// While the filter "traces after cleaning" is set, the report it is about stands for it.
 // Reports without an id (older scripts, or no id sent) each count on their own.
 function repool() {
   for (const r of all) r.reports = 1;
@@ -1398,6 +1440,8 @@ function repool() {
     const b = best.get(r.dev);
     if (!b || r.ioc > b.ioc || (r.ioc === b.ioc && r.recv > b.recv)) best.set(r.dev, r);
   }
+  const about = F.after.startsWith('back') ? (d) => AGAIN.get(d)?.back : F.after.startsWith('fixed') ? (d) => FIXED.get(d) : null;
+  if (about) for (const d of best.keys()) { const x = about(d); if (x) best.set(d, x); }
   pool = all.filter((r) => !r.dev || best.get(r.dev) === r);
   for (const r of pool) if (r.dev) r.reports = n.get(r.dev);
 }
@@ -1406,19 +1450,45 @@ function repool() {
 // traces (mostly an update). By device id only. HEAL: device id -> { hit, last, state }
 // with state 'update' (clean on other firmware), 'same' (clean on the same) or 'still'.
 // DEVREP: device id -> all its reports, oldest first.
-let HEAL = new Map(), DEVREP = new Map(), healN = -1;
+// The other way round, AGAIN: device id -> { clean, back, state, newer, before } for a device
+// that sent a clean report and later one with traces. state 'new': a trace on the later
+// report carries a time after the clean check, so something wrote it since; 'missed': all
+// its times lie before the clean check, which missed them; 'untimed': it carries no time.
+// newer: the later report comes from a newer script, which may only find more. before: the
+// device had traces before the clean report too.
+// FIXED: device id -> its newest report with traces from firmware with GL.iNet's cleanup.
+let HEAL = new Map(), DEVREP = new Map(), AGAIN = new Map(), FIXED = new Map(), healN = -1;
 const RECHECK = { clean: 'Clean on a later check', update: 'Clean after a firmware change', same: 'Clean on the same firmware', still: 'Traces still there on a later check' };
+const AFTER = { back: 'Traces after a clean check', 'back-new': 'Trace newer than the clean check', 'back-missed': 'Trace older than the clean check', 'back-untimed': 'Trace after a clean check, no time on it', fixed: 'Traces on firmware with GL.iNet’s cleanup', 'fixed-mal': 'Malware or remote shell on firmware with GL.iNet’s cleanup', 'fixed-cmd': 'Other traces on firmware with GL.iNet’s cleanup' };
+const verCmp = (a, b) => { const x = String(a || '').split('.').map(Number), y = String(b || '').split('.').map(Number); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d; } return 0; };
+const onFixed = (r) => r.vendor_cleanup === 'on' && r.ioc > 0;
 function healing() {
   if (healN === all.length) return; healN = all.length;
-  DEVREP = new Map(); HEAL = new Map();
+  DEVREP = new Map(); HEAL = new Map(); AGAIN = new Map(); FIXED = new Map();
   for (const r of all) if (r.dev && !r.isTest) (DEVREP.get(r.dev) || DEVREP.set(r.dev, []).get(r.dev)).push(r);
   for (const [dev, list] of DEVREP) {
     list.sort((a, b) => a.recv - b.recv);
+    const fx = list.findLast(onFixed); if (fx) FIXED.set(dev, fx);
+    let clean = -1, back = null;
+    for (const [j, r] of list.entries()) { if (r.ioc === 0) clean = j; else if (clean >= 0) { back = r; break; } }
+    if (back) {
+      // after a firmware change between the two reports the change time of a file says nothing
+      const c = list[clean], t = ts(c.checked_at), at = isNaN(t) ? c.recv : t, lt = back.firmware === c.firmware ? back.latest : back.latestW;
+      AGAIN.set(dev, { clean: c, back, state: isNaN(lt) ? 'untimed' : lt > at ? 'new' : 'missed', newer: verCmp(back.tool, c.tool) > 0, before: list.slice(0, clean).some((r) => r.ioc > 0) });
+    }
     const last = list[list.length - 1], i = list.findIndex((r) => r.ioc > 0);
     if (i < 0 || i === list.length - 1) continue;
     const hit = list.findLast((r) => r.ioc > 0);
     HEAL.set(dev, { hit, last, state: last.ioc > 0 ? 'still' : last.firmware !== hit.firmware ? 'update' : 'same' });
   }
+}
+// the filter "after cleaning" for one report: by its device, or by the report itself when it
+// carries no device id (then it can only show traces on firmware with the cleanup)
+function afterOf(r, v) {
+  if (!AFTER[v]) return true;
+  if (v.startsWith('back')) { const a = r.dev && AGAIN.get(r.dev); return !!a && (v === 'back' || v === 'back-' + a.state); }
+  const x = r.dev ? FIXED.get(r.dev) : onFixed(r) ? r : null;
+  return !!x && (v === 'fixed' || (v === 'fixed-mal') === (x.shell || x.implant));
 }
 
 // What a device with traces has that no other device has: a file fingerprint, a command,
@@ -1610,7 +1680,7 @@ $('yamlBtn').addEventListener('click', async () => {
 // Only the cards of the page in view are drawn; the rest is drawn when its page is opened.
 let revN = -1, current = [];
 function render() {
-  dock(); repool(); healing(); markUnusual();
+  dock(); healing(); repool(); markUnusual();
   if (revN !== all.length) { REVALL = revGroups(all.filter((r) => r.schema >= 6)); revN = all.length; }
   const rows = pool.filter((r) => pass(r)), base = pool.filter((r) => pass(r, 'result')), isHit = (r) => (F.result === 'bd' ? r.bd : r.ioc > 0), hit = base.filter(isHit);
   facets.forEach((f) => f()); chips();
@@ -1639,6 +1709,8 @@ const DRAW = {};
     going: ({ base, hit }) => ongoing(base, hit),
     course: ({ hit }) => course(hit),
     healed: () => healed(),
+    again: () => again(),
+    days: () => days(),
     matrix: () => matrix(),
     series: ({ base }) => series(base),
     devices: ({ isHit }) => rank($('devices'), $('devicesMore'), count(pool.filter((r) => pass(r, 'model') && isHit(r)), FACET.model), 0, 'model'),
@@ -1729,6 +1801,115 @@ function healed() {
   const note = hs.length ? (clean ? `${vc} of the ${clean} clean ones run firmware with GL.iNet’s cleanup. ` : '') + 'The newest report of each device counts.' : 'No device with traces has checked again yet, or none in this selection. Needs the device ID (script 2.9 and later).';
   fillKpi('healed', clean.toLocaleString('en'), 'of ' + hs.length.toLocaleString('en') + ' devices that checked again', note, { ok: true, extra: hs.length ? [split, lg] : [], go: clean ? go('clean') : null });
 }
+// a bar and its legend for parts of a whole: [name, count, colour, filter or null, hover]
+function parts(list) {
+  const split = el('div', null, 'split'), lg = el('ul', null, 'legend');
+  for (const [name, n, c, go, more] of list) {
+    const s = el('i'); s.style.cssText = `flex:${Math.max(n, .001)};background:${c}`; hover(s, `${name}\n${n} devices${more ? '\n' + more : ''}`); split.append(s);
+    const li = el('li'), b = el(n && go ? 'button' : 'span'), sw = el('i'); sw.style.background = c; b.append(sw, name, el('b', n));
+    if (n && go) { b.type = 'button'; b.title = 'Show these devices'; b.addEventListener('click', go); }
+    li.append(b); lg.append(li);
+  }
+  return [split, lg];
+}
+// does cleaning hold: traces after a clean report of the same device, and traces on firmware
+// with GL.iNet's cleanup. The devices of this selection, whatever the result filter and this
+// card's own filter say.
+function again() {
+  const box = cardBody('again'); if (!box) return;
+  const sel = pool.filter((r) => pass(r, ['result', 'after'])), devs = new Set(sel.filter((r) => r.dev).map((r) => r.dev));
+  const twice = [...devs].filter((d) => (DEVREP.get(d) || []).length > 1).length, ag = [...devs].map((d) => AGAIN.get(d)).filter(Boolean);
+  const go = (v) => () => goReports(() => { F.after = v; F.result = 'all'; });
+  const by = (st) => ag.filter((a) => a.state === st).length, newer = ag.filter((a) => a.newer).length, before = ag.filter((a) => a.before).length;
+  const note = ag.length ? `${newer} of them ${newer === 1 ? 'comes' : 'come'} from a newer script than the clean report. ${before} had traces before the clean report too.` : twice ? 'No device with a clean report has sent one with traces since.' : 'No device has checked more than once yet, or none in this selection. Needs the device ID (script 2.9 and later).';
+  fillKpi('again', ag.length.toLocaleString('en'), `with traces after a clean check, of ${twice.toLocaleString('en')} devices that checked more than once`, note, {
+    extra: ag.length ? parts([['Trace newer than the clean check', by('new'), 'var(--danger)', go('back-new'), 'Hit again, or the malware started again'], ['Trace older: the clean check missed it', by('missed'), 'var(--warn)', go('back-missed'), 'Mostly a newer script that finds more'], ['No time on the trace', by('untimed'), 'var(--s3)', go('back-untimed')]]) : [], go: ag.length ? go('back') : null });
+  // on firmware with the cleanup: by device, any of its reports; without a device id, the report
+  const fx = new Map(), on = new Set();
+  for (const r of sel) {
+    const k = r.dev || r.id, x = r.dev ? FIXED.get(r.dev) : onFixed(r) ? r : null; if (x) fx.set(k, x);
+    if (r.dev ? (DEVREP.get(r.dev) || []).some((y) => y.vendor_cleanup === 'on') : r.vendor_cleanup === 'on') on.add(k);
+  }
+  const xs = [...fx.values()], mal = xs.filter((x) => x.shell || x.implant).length;
+  const w = el('div', null, 'kpart'), row = el('div', null, 'kv1'), v = el(xs.length ? 'button' : 'span', xs.length.toLocaleString('en'), 'val');
+  if (xs.length) { v.type = 'button'; v.title = 'Show these devices'; v.addEventListener('click', go('fixed')); }
+  row.append(v, el('small', `with traces on firmware with GL.iNet’s cleanup, of ${on.size.toLocaleString('en')} devices that sent a report from it`));
+  w.append(row);
+  if (xs.length) w.append(...parts([['Malware or remote shell', mal, 'var(--danger)', go('fixed-mal'), 'The cleanup missed it, or the device was hit again'], ['Other traces only', xs.length - mal, 'var(--s3)', go('fixed-cmd'), 'For example the state file of the cloud command, which the cleanup leaves']]));
+  w.append(el('p', on.size ? 'Script 2.51 and later say whether the firmware has the cleanup.' : 'No report from firmware with the cleanup in this selection. Script 2.51 and later say whether the firmware has it.', 'knote'));
+  box.append(w);
+}
+// the reports by the day they came in, UTC: the checks of each day split as in "All checked
+// devices", and below two shares of each day on one axis. With one row per device, a device
+// counts once a day, with its report that has the most traces.
+function days() {
+  const plot = $('dayPlot'), lg = $('daysLegend'), note = $('daysNote'); plot.replaceChildren(); lg.replaceChildren();
+  const per = $('perDevice').checked, m = new Map();
+  for (const r of all) {
+    if (!pass(r, 'result')) continue;
+    const k = per && r.dev ? Math.floor(r.recv / DAY) + ' ' + r.dev : r.id, b = m.get(k);
+    if (!b || r.ioc > b.ioc || (r.ioc === b.ioc && r.recv > b.recv)) m.set(k, r);
+  }
+  const rs = [...m.values()].filter((r) => isFinite(r.recv));
+  if (!rs.length) { note.textContent = 'No report in this selection.'; return; }
+  const d0 = Math.floor(Math.min(...rs.map((r) => r.recv)) / DAY), d1 = Math.floor(Math.max(...rs.map((r) => r.recv)) / DAY), n = d1 - d0 + 1;
+  const bins = Array.from({ length: n }, (_, i) => ({ t: (d0 + i) * DAY, n: 0, atk: 0, bd: 0, on: 0, say: 0 }));
+  for (const r of rs) { const b = bins[Math.floor(r.recv / DAY) - d0]; b.n++; if (r.ioc > 0) b.atk++; else if (r.bd) b.bd++; if (r.vendor_cleanup === 'on' || r.vendor_cleanup === 'off') { b.say++; if (r.vendor_cleanup === 'on') b.on++; } }
+  const pc = (a, b) => (b ? Math.round(a / b * 100) : NaN), FEW = 20, today = Math.floor(NOW / DAY);
+  for (const b of bins) { b.hit = pc(b.atk, b.n); b.fix = pc(b.on, b.say); }
+  const day = (t) => new Date(t).toISOString().slice(0, 10);
+  const tipOf = (b) => `${day(b.t)}${Math.floor(b.t / DAY) === today ? ', so far' : ''}\n${b.n} ${per ? 'devices' : 'reports'}: ${b.atk} with traces of 20 November · ${b.bd} older backdoor only · ${b.n - b.atk - b.bd} no known traces\nWith traces: ${isNaN(b.hit) ? '–' : b.hit + '%'} · on firmware with the cleanup: ${isNaN(b.fix) ? 'no report says' : b.fix + '% of ' + b.say}${b.n < FEW ? '\nFewer than ' + FEW + ' checks: the shares say little' : ''}`;
+  for (const [name, c, line] of [['Traces of 20 November', 'var(--danger)'], ['Older backdoor only', 'var(--warn)'], ['No known traces', 'var(--accent)'], ['Share with traces', 'var(--danger)', 1], ['Share on firmware with the cleanup', 'var(--text)', 1]]) { const li = el('li'), sw = el('i', null, line ? 'line' : ''); sw.style.background = c; li.append(sw, name); lg.append(li); }
+  // the checks of each day
+  const max = Math.max(1, ...bins.map((b) => b.n)), nice = max <= 4 ? 4 : Math.ceil(max / (max > 40 ? 20 : max > 10 ? 10 : 2)) * (max > 40 ? 20 : max > 10 ? 10 : 2);
+  const y1 = el('div', null, 'yaxis y1'), cols = el('div', null, 'cols'), y2 = el('div', null, 'yaxis y2'), ln = el('div', null, 'dline'), xa = el('div', null, 'xaxis');
+  for (const [v, pos] of [[nice, 0], [nice / 2, 50], [0, 100]]) { const s = el('span', v); s.style.top = pos + '%'; y1.append(s); }
+  for (const [v, pos] of [['100%', 0], ['50%', 50], ['0', 100]]) { const s = el('span', v); s.style.top = pos + '%'; y2.append(s); }
+  cols.style.gap = n > 100 ? '1px' : '';
+  for (const b of bins) {
+    const c = el('div', null, 'col');
+    for (const [k, v] of [['dt', b.atk], ['db', b.bd], ['dn', b.n - b.atk - b.bd]]) if (v) { const i = el('i', null, k); i.style.height = (v / nice) * 100 + '%'; c.append(i); }
+    hover(c, tipOf(b)); cols.append(c);
+  }
+  // two shares on one axis, a point for each day; a day without a value breaks the line
+  const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg'), hits = el('div', null, 'hits');
+  svg.setAttribute('viewBox', `0 0 ${n * 10} 100`); svg.setAttribute('preserveAspectRatio', 'none'); svg.setAttribute('aria-hidden', 'true');
+  for (const [key, c] of [['fix', 'var(--text)'], ['hit', 'var(--danger)']]) {
+    let pts = [];
+    const flush = () => { if (pts.length > 1) { const pl = document.createElementNS(NS, 'polyline'); pl.setAttribute('points', pts.join(' ')); pl.style.stroke = c; svg.append(pl); } pts = []; };
+    bins.forEach((b, i) => {
+      if (isNaN(b[key])) return flush();
+      pts.push(`${i * 10 + 5},${100 - b[key]}`);
+      const d = el('span', null, 'dot' + (b.n < FEW ? ' few' : '')); d.style.cssText = `left:${(i + .5) / n * 100}%;top:${100 - b[key]}%;background:${c}`; ln.append(d);
+    });
+    flush();
+  }
+  // the newest value of each line beside its last point, unless the two would touch
+  const lastOf = (key) => { for (let i = n - 1; i >= 0; i--) if (!isNaN(bins[i][key])) return [i, bins[i][key]]; return null; };
+  const lh = lastOf('hit'), lf = lastOf('fix');
+  for (const [l, other, up] of [[lh, lf, lh && lf && lh[1] >= lf[1]], [lf, lh, lf && lh && lf[1] > lh[1]]]) {
+    if (!l) continue; const s = el('span', l[1] + '%', 'vlab'); s.style.left = (l[0] + .5) / n * 100 + '%'; s.style.top = 100 - l[1] + '%';
+    // beside the point (the plot keeps room for it on the right); up or down when the other is close
+    const dx = '8px', dy = other && other[0] === l[0] && Math.abs(other[1] - l[1]) < 14 ? (up ? '-110%' : '10%') : '-50%';
+    s.style.translate = dx + ' ' + dy; ln.append(s);
+  }
+  for (const b of bins) { const h = el('div'); hover(h, tipOf(b)); hits.append(h); }
+  ln.prepend(svg); ln.append(hits);
+  plot.append(y1, cols, y2, ln, xa);
+  // at most about eight dates, fewer in a narrow card, under the middle of their day
+  requestAnimationFrame(() => {
+    const every = Math.max(1, Math.ceil(n / Math.max(2, Math.min(8, Math.floor((cols.clientWidth || 600) / 70)))));
+    const W = cols.clientWidth, cw = W / n;
+    for (let i = n - 1; i >= 0; i -= every) {
+      const s = el('span'), x = (i + .5) * cw; s.append(el('b', day(bins[i].t).slice(5)), day(bins[i].t).slice(0, 4));
+      if (x + 34 > W) { s.className = 'r'; s.style.left = Math.min(W, x + cw / 2) + 'px'; } else if (x < 34) { s.className = 'l'; s.style.left = Math.max(0, x - cw / 2) + 'px'; } else s.style.left = x + 'px';
+      xa.append(s);
+    }
+  });
+  // the first and the last day with enough checks; a date never breaks at its hyphens
+  const sure = bins.filter((b) => b.n >= FEW), a = sure[0] || bins[0], z = sure[sure.length - 1] || bins[n - 1], p = (v) => (isNaN(v) ? '–' : v + '%'), d = (b) => el('span', day(b.t), 'nw');
+  note.replaceChildren(...(a === z ? [d(a), `: ${p(a.hit)} with traces, ${p(a.fix)} on firmware with the cleanup.`] : [`With traces: ${p(a.hit)} on `, d(a), `, ${p(z.hit)} on `, d(z), `. On firmware with the cleanup: ${p(a.fix)} and ${p(z.fix)}.`]), sure.length < bins.length ? ` Days with fewer than ${FEW} checks left out here.` : '');
+}
 function files(hit) {
   const fm = new Map();
   for (const r of hit) for (const f of r.files) { const k = f.sha256 + ' ' + f.path, g = fm.get(k) || { ...f, n: 0, times: [] }; g.n++; g.times.push(ts(f.mtime)); if (f.ctime) { g.known = (g.known || 0) + 1; if (lag(f) > LAG) g.old = (g.old || 0) + 1; } fm.set(k, g); }
@@ -1778,10 +1959,13 @@ function tagsOf(r) {
   if (r.bd) tags.append(el('span', 'Older backdoor', 'tag warn'));
   if (r.ioc === 0 && !r.bd) tags.append(el('span', 'Clean', 'tag ok'));
   if (r.restarted) tags.append(el('span', 'Restarted since the attack', 'tag warn'));
+  if (onFixed(r)) { const t = el('span', 'Traces on firmware with the cleanup', 'tag bad'); hover(t, 'This firmware removes the known traces at its first start (GL.iNet’s cleanup).\nMalware or a shell here: the cleanup missed it, or the device was hit again.'); tags.append(t); }
   if (r.persist) tags.append(el('span', 'rc.local or crontab changed', 'tag'));
   if (r.reports > 1) tags.append(el('span', r.reports + ' reports from this device', 'tag'));
   const h = r.dev && HEAL.get(r.dev);
   if (h && r !== h.last && r.ioc > 0) { const t = el('span', h.state === 'still' ? 'Traces still there on a later check' : 'Clean on a later check', 'tag ' + (h.state === 'still' ? 'bad' : 'ok')); hover(t, `Newest report from this device: ${fmt(h.last.recv)} UTC\nfirmware ${h.last.firmware}`); tags.append(t); }
+  const ag = r.dev && AGAIN.get(r.dev);
+  if (ag && r === ag.back) { const t = el('span', 'Traces after a clean check', 'tag bad'); hover(t, `Clean report: ${fmt(ag.clean.recv)} UTC, script ${ag.clean.tool}\n${{ new: 'A trace here is newer than that check', missed: 'All times here lie before that check: it missed them', untimed: 'No time on the traces here' }[ag.state]}${ag.newer ? '\nThis report comes from a newer script' : ''}`); tags.append(t); }
   if (h && r === h.last && h.state !== 'still') { const t = el('span', 'Had traces before', 'tag warn'); hover(t, `Last report with traces: ${fmt(h.hit.recv)} UTC\nfirmware ${h.hit.firmware}`); tags.append(t); }
   if (r.odd.length) { const t = el('span', 'Unusual', 'tag odd'); hover(t, 'Only on this device:\n' + r.odd.slice(0, 4).map((o) => o[0] + ': ' + o[1].slice(0, 90)).join('\n')); tags.append(t); }
   return tags;
@@ -1889,7 +2073,7 @@ $('prev').addEventListener('click', () => { page--; render(); }); $('next').addE
 for (const b of $('zoom').children) { b.setAttribute('aria-pressed', String(b.dataset.v === zoom)); b.addEventListener('click', () => { zoom = b.dataset.v; F.bin = null; for (const o of $('zoom').children) o.setAttribute('aria-pressed', String(o === b)); render(); }); }
 addEventListener('resize', () => { clearTimeout(qt); qt = setTimeout(render, 150); });
 $('csv').addEventListener('click', () => {
-  const cols = [['received_utc', (r) => fmt(r.recv)], ['device_id', (r) => r.dev], ['reports_from_device', (r) => r.reports], ['later_check', (r) => { const h = HEAL.get(r.dev); return h ? { update: 'clean_other_firmware', same: 'clean_same_firmware', still: 'traces_still' }[h.state] : ''; }],['model', (r) => r.model], ['platform', (r) => r.platform], ['firmware', (r) => r.fw], ['firmware_as_reported', (r) => r.firmware], ['unusual', (r) => r.odd.map((o) => o[0]).join(' ')], ['script', (r) => r.tool], ['class', (r) => r.cls], ['known_traces', (r) => r.ioc], ['persistence', (r) => r.persist], ['review', (r) => r.review],
+  const cols = [['received_utc', (r) => fmt(r.recv)], ['device_id', (r) => r.dev], ['reports_from_device', (r) => r.reports], ['later_check', (r) => { const h = HEAL.get(r.dev); return h ? { update: 'clean_other_firmware', same: 'clean_same_firmware', still: 'traces_still' }[h.state] : ''; }], ['after_clean_check', (r) => { const a = AGAIN.get(r.dev); return a ? 'trace_' + a.state : ''; }], ['vendor_cleanup', (r) => r.vendor_cleanup],['model', (r) => r.model], ['platform', (r) => r.platform], ['firmware', (r) => r.fw], ['firmware_as_reported', (r) => r.firmware], ['unusual', (r) => r.odd.map((o) => o[0]).join(' ')], ['script', (r) => r.tool], ['class', (r) => r.cls], ['known_traces', (r) => r.ioc], ['persistence', (r) => r.persist], ['review', (r) => r.review],
     ['remote_shell', (r) => r.shell], ['gl_helper', (r) => r.implant], ['first_trace_utc', (r) => fmt(r.first)], ['shell_ports', (r) => r.shell_ports.join(' ')], ['up_since_utc', (r) => fmt(r.upSince)], ['restarted_since_attack', (r) => r.restarted], ['state_file_time_utc', (r) => r.state_file_time.replace(' UTC', '')], ['state_file_size', (r) => (r.state_file_size === null ? '' : r.state_file_size)], ['astrowarp', (r) => r.astrowarp], ['goodcloud', (r) => r.goodcloud], ['cloud_bound', (r) => r.cloud_bound], ['remote_ssh', (r) => r.rtty_ssh], ['remote_web', (r) => r.rtty_web], ['cloud_client', (r) => r.cloud_client], ['review_items', (r) => r.review_items.map((i) => i.kind + ' ' + i.path).join('; ')], ['findings', (r) => r.findings.join('; ')], ['file_hashes', (r) => r.files.map((f) => f.path + '=' + f.sha256).join('; ')]];
   // a leading = + - @ would be run as a formula by a spreadsheet
   const cell = (v) => { let s = String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
