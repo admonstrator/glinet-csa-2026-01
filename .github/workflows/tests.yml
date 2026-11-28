@@ -58,6 +58,6 @@ jobs:
         run: |
           cd worker
           node build.mjs
-          git diff --exit-code -- src/dashboard.js
+          git diff --exit-code -- src/dashboard.js src/shape.js
       - name: Run the tests
         run: node worker/test/run.mjs
