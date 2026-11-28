@@ -118,15 +118,13 @@ button, select, input { font: inherit; color: inherit; }
 }
 /* in a narrow card the tools go on a line of their own */
 @container (max-width: 420px) { .board.edit .ch h2 { flex: 1 1 calc(100% - 32px); } }
-/* a card too narrow for all its tools keeps size and hide; it moves to another page when wider */
-@container (max-width: 200px) { .board.edit .mv { display: none; } }
 .board > .card.dragging { opacity: .45; outline: 2px dashed var(--accent); }
 .board > .card.sizing { outline: 2px solid var(--accent); }
 .grip { flex: none; width: 22px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: var(--surface-2); color: var(--text-2); display: inline-grid; place-items: center; cursor: grab; touch-action: none; }
 .grip:active { cursor: grabbing; }
 .size { flex: none; padding: 1px 7px; border-radius: 980px; background: var(--accent-soft); color: var(--accent); font: 600 11.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
-.etools { display: inline-flex; align-items: center; gap: 4px 6px; margin-left: auto; }
-.mv { flex: none; max-width: 76px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12px; }
+.etools { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 6px; margin-left: auto; min-width: 0; }
+.mv { flex: none; max-width: 68px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12px; }
 .rz { position: absolute; right: 2px; bottom: 2px; z-index: 3; width: 22px; height: 22px; padding: 0; border: 0; background: none; cursor: nwse-resize; touch-action: none; }
 .rz::after { content: ''; position: absolute; right: 5px; bottom: 5px; width: 10px; height: 10px; border-right: 2.5px solid var(--accent); border-bottom: 2.5px solid var(--accent); border-radius: 0 0 3px 0; }
 .gridlines { position: absolute; inset: 0; display: none; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; pointer-events: none; }
@@ -153,6 +151,7 @@ button.val:hover { text-decoration-color: currentColor; }
 .kv1 small { font-size: 14px; font-weight: 600; color: var(--text-2); }
 .card.kpi .split { margin-top: 8px; }
 .card.kpi .legend { margin-top: 6px; gap: 0 14px; line-height: 1.35; }
+.legend li.apart { flex-basis: 100%; }
 .legend li.apart i { background: none; box-shadow: inset 0 0 0 2px var(--warn); }
 .knote { margin-top: 4px; font-size: 12.5px; color: var(--text-2); line-height: 1.4; }
 /* the side panel: a report, a finding, the glossary. On a wide window it stands beside the
@@ -222,16 +221,18 @@ body.resizing { cursor: col-resize; user-select: none; }
 .linkish:hover { text-decoration-color: var(--accent); color: var(--accent); }
 .safeTable td { vertical-align: top; }
 /* paths wrap anywhere rather than push the table out of its card */
-#reviews td.mono, .safeTable td.mono, #hashes td.mono, .dbody td.mono { overflow-wrap: anywhere; min-width: 14ch; }
+#reviews td.mono, .safeTable td.mono, #hashes td.mono, #knownList td.mono, .dbody td.mono { overflow-wrap: anywhere; min-width: 14ch; }
 #reviews td:first-child { white-space: nowrap; }
-@container (max-width: 900px) { .hide-m { display: none; } }
+td.mono small.xs-only { font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; margin-top: 2px; }
+@container (max-width: 1000px) { .hide-m { display: none; } }
 @container (max-width: 680px) { .hide-n { display: none; } }
-@container (max-width: 560px) { .hide-xs { display: none; } .dbody :is(td, th) { padding-left: 6px; padding-right: 6px; } .dbody th, .dbody td.tnum { white-space: normal; } .dbody td.mono { min-width: 0; } .cb th, .cb td .tag, .cb td.n:last-child { white-space: normal; } .cb td.mono { min-width: 10ch; } }
-@container (max-width: 900px) { .cb :is(td, th) { padding-left: 7px; padding-right: 7px; } .safeTable td.who { white-space: normal; overflow-wrap: anywhere; } }
+.xs-only { display: none; }
+@container (max-width: 560px) { .hide-xs { display: none; } td small.xs-only { display: block; } .dbody :is(td, th) { padding-left: 6px; padding-right: 6px; } .dbody th, .dbody td.tnum { white-space: normal; } .dbody td.mono { min-width: 0; } .cb th, .cb td .tag, .cb td.n:last-child { white-space: normal; } .cb td .tag { border-radius: 8px; } .cb td.mono { min-width: 10ch; } }
+@container (max-width: 900px) { .cb :is(td, th) { padding-left: 7px; padding-right: 7px; } }
 .cb :is(th, td).wrap { white-space: normal; }
 #safeList > h3 { margin: 16px 0 4px; font-size: 12.5px; font-weight: 650; color: var(--text-2); } #safeList > h3:first-child { margin-top: 2px; }
 .tbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.safeTable .who { color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.safeTable .who { color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }
 .btn.sm { padding: 3px 9px; font-size: 12.5px; white-space: nowrap; }
 .labelForm { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .labelForm.markForm { flex-wrap: wrap; white-space: normal; max-width: 760px; padding: 4px 0; }
@@ -423,7 +424,7 @@ tr.row.fresh td { background: var(--accent-soft); }
 .kpis2 .kpi .note { font-size: 12px; line-height: 1.4; }
 .kpis2.wide { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
 /* tiles side by side: a label over two lines must not push its value below its neighbour's */
-#ongoing .kpi .label { min-height: 2.7em; }
+@container (min-width: 400px) { #ongoing .kpi .label { min-height: 2.7em; } }
 .rank.plain li { cursor: default; } .rank.plain li:hover .name { color: inherit; }
 .rank .num small { margin-left: 6px; font-weight: 400; color: var(--text-2); }
 .rank li.few > * { opacity: .55; }
@@ -510,7 +511,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
   .cb > .plot { flex: none; height: 240px; }
   #editBtn, .eo, #dFull { display: none !important; }
   /* the reports run with the page, not in a box of their own */
-  .board > .card[data-card=reports] > .cb { max-height: none; overflow: visible; }
+  .board:not(.focus) > .card[data-card=reports] > .cb { max-height: none; overflow: visible; }
   /* in the panel a long label takes no more than its share; the value keeps room */
   .kv { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); column-gap: 12px; }
 }
@@ -573,7 +574,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     <div class="gridlines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
     <!-- Overview -->
-    <section class="card kpi" data-card="hit"><div class="ch"><h2>Devices with traces</h2></div><div class="about" hidden><p>Devices with known traces of the attack of 20 November, by what was found. “Command only”: a command from the cloud ran, nothing else was found.</p><p>The older backdoor is not in this number: its own line counts it apart. A device with the older backdoor and traces of 20 November counts here for those traces.</p><p>Click the number to see these reports.</p></div><div class="cb"></div></section>
+    <section class="card kpi" data-card="hit"><div class="ch"><h2>Devices with traces</h2></div><div class="about" hidden><p>Devices with known traces of the attack of 20 November, by what was found. “Command only”: a command from the cloud ran, nothing else was found.</p><p>The older backdoor adds nothing to this number: its own line counts it apart. A device with the older backdoor and traces of 20 November counts here for those traces. With the result filter on “Older backdoor”, the card counts the devices with the backdoor instead.</p><p>Click the number to see these reports.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="shell"><div class="ch"><h2>Remote shell still running</h2></div><div class="about" hidden><p>A remote shell that was running during the check: the attacker was connected at that moment.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="back"><div class="ch"><h2>Comes back after a restart</h2></div><div class="about" hidden><p>An autostart entry (rc.local, crontab, an init script) or the list of files a firmware update keeps points to the malware.</p></div><div class="cb"></div></section>
     <section class="card kpi" data-card="restart"><div class="ch"><h2>Restarted since 20 Nov</h2></div><div class="about" hidden><p>A restart wipes the memory, and with it a running shell and its pipe. A device that looks clean after a restart proves little.</p></div><div class="cb"></div></section>
@@ -609,7 +610,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="about" hidden><p>Devices with traces out of all reports for that model and firmware version. The darker a cell, the larger the share that was hit; the last column gives it per model. Test builds count with their version. Versions and models without any trace are folded into one column and one row.</p><p>Click a cell to filter. An empty cell means no report, not “not affected”.</p></div>
       <div class="cb" id="matrix"></div>
     </section>
-    <section class="card" data-card="series">
+    <section class="card scroll" data-card="series">
       <div class="ch"><h2>Share hit by firmware series</h2></div>
       <div class="about" hidden><p>Routers with traces out of all routers that reported, per release series. Test builds count with their series.</p></div>
       <div class="cb"><ul class="rank plain" id="series"></ul><p class="peak dim" id="seriesNote"></p></div>
@@ -624,7 +625,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
       <div class="about" hidden><p>The version, with beta or rc where the device reports one. Build number and date are in each report. Click a bar to filter.</p></div>
       <div class="cb"><ul class="rank" id="firmwares"></ul><p class="more" id="firmwaresMore"></p></div>
     </section>
-    <section class="card scroll" data-card="cloud">
+    <section class="card" data-card="cloud">
       <div class="ch"><h2>Traces by cloud setting</h2></div>
       <div class="about" hidden><p>Share of devices with traces, by what was switched on. The setting at the time of the check, which many changed after the attack. “Bound” means linked to a GoodCloud account.</p><p>Remote SSH and web access count as on only while GoodCloud is on: the stored setting is “on” by default on many firmware versions.</p></div>
       <div class="cb" id="cloudSet"></div>
@@ -664,7 +665,7 @@ tr.few td { color: var(--text-2); } tr.few td b { font-weight: 600; }
     </section>
     <section class="card" data-card="bdmodel"><div class="ch"><h2>Backdoor by model</h2></div><div class="cb"><ul class="rank" id="bdModel"></ul><p class="more" id="bdModelMore"></p></div></section>
     <section class="card" data-card="bdfw"><div class="ch"><h2>Backdoor by firmware</h2></div><div class="cb"><ul class="rank" id="bdFw"></ul><p class="more" id="bdFwMore"></p></div></section>
-    <section class="card" data-card="bdwhen">
+    <section class="card scroll" data-card="bdwhen">
       <div class="ch"><h2>Loader written in</h2></div>
       <div class="about" hidden><p>The month /bin/ulogd was written, by its time on the device; where the change time is much later, that one.</p></div>
       <div class="cb"><ul class="rank plain" id="bdWhen"></ul></div>
@@ -1041,8 +1042,9 @@ function facet(id, key) {
     if (!box.children.length) box.append(el('div', 'Nothing matches.', 'none'));
     if (keep) { while (keep.nextSibling) keep.nextSibling.remove(); pop.append(box); }
     else { const s = el('input'); s.type = 'search'; s.placeholder = 'Find …'; s.setAttribute('aria-label', 'Find in ' + LABEL[key]); s.addEventListener('input', () => { find = s.value.trim().toLowerCase(); draw(); }); pop.replaceChildren(s, box); }
+    placePop(pop);   // a pick changes the button's label and may move the button
   };
-  d.addEventListener('toggle', () => { if (d.open) { for (const o of document.querySelectorAll('.ms[open]')) if (o !== d) o.open = false; draw(); placePop(pop); pop.querySelector('input').focus(); } });
+  d.addEventListener('toggle', () => { if (d.open) { for (const o of document.querySelectorAll('.ms[open]')) if (o !== d) o.open = false; draw(); pop.querySelector('input').focus(); } });
   return draw;
 }
 // a menu that would run past the edge of the page (or under the docked panel) moves back
@@ -1311,17 +1313,17 @@ function reviews(base) {
   if (safeN) { const t = el('button', showSafe ? `Hide the ${safeN} marked as probably safe or known` : `Show the ${safeN} marked as probably safe or known`, 'btn'); t.type = 'button'; t.addEventListener('click', () => { showSafe = !showSafe; render(); }); bar.append(t); }
   if (bar.children.length) box.append(bar);
   if (!rows.length) { box.append(el('p', 'Everything that at least two devices share is marked as probably safe or is a known release file.', 'peak')); return; }
-  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Devices', 'n hide-xs'], ['With traces', 'n'], ['Different files', 'n hide-m'], ['Changed on the devices (UTC)', 'n hide-m'], ['', 'n hide-xs']]) hd.append(el('th', t, c));
+  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Kind', 'hide-xs'], ['Path or program', ''], ['Devices', 'n hide-xs'], ['With traces', 'n'], ['Different files', 'n hide-m'], ['Changed on the devices (UTC)', 'n hide-m'], ['', 'n']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const g of rows) {
     const tr = el('tr'), lab = LABELS[g.kind + ' ' + g.path]; tr.style.cursor = 'pointer';
     const w = el('td', g.hit + ' of ' + g.n, 'n'); if (hits && g.hit >= 2 && g.hit / g.n > hits / have.length * 1.5) { w.append(' ', el('span', 'more often with traces', 'tag warn')); }
     const d = el('td', g.sha.size || '–', 'n hide-m'); d.title = g.sha.size === 1 && g.n > 1 ? 'The same file on every device that sent a fingerprint.' : 'Number of different fingerprints behind this path.';
     const ct = (g.ct || []).sort((a, b) => a - b), when = el('td', ct.length ? (fmt(ct[0]).slice(0, 10) === fmt(ct[ct.length - 1]).slice(0, 10) ? fmt(ct[0]).slice(0, 10) : fmt(ct[0]).slice(0, 10) + ' – ' + fmt(ct[ct.length - 1]).slice(0, 10)) : '–', 'n hide-m'); when.title = 'Earliest and latest time the kernel changed this entry, over the devices that sent one (script 2.24 and later).';
-    const pathCell = el('td', g.path || '(not sent)', 'mono');
+    const pathCell = el('td', g.path || '(not sent)', 'mono'); pathCell.append(el('small', g.kind, 'xs-only dim'));
     { const t = markTag(REVALL.get(g.kind + ' ' + g.path) || g); if (t) { pathCell.append(t); if (lab && lab.note) pathCell.append(el('small', ' ' + lab.note, 'dim')); } }
-    const act = el('td', null, 'n hide-xs'); act.append(markButton(REVALL.get(g.kind + ' ' + g.path) || g, act));
-    tr.append(el('td', g.kind), pathCell, el('td', g.n, 'n hide-xs'), w, d, when, act);
+    const act = el('td', null, 'n'); act.append(markButton(REVALL.get(g.kind + ' ' + g.path) || g, act));
+    tr.append(el('td', g.kind, 'hide-xs'), pathCell, el('td', g.n, 'n hide-xs'), w, d, when, act);
     tr.addEventListener('click', () => openItem(g.kind + ' ' + g.path));
     tb.append(tr);
   }
@@ -1335,7 +1337,7 @@ function chart(hit) {
   if (!pts.length) { $('peak').textContent = 'No report with a start time in this selection.'; $('chartSub').textContent = ''; return; }
   let from, to, step, before = [], after = [];
   // the attack window by the hour where the card is wide enough, else by two hours or more
-  if (zoom === 'attack') { [from, to] = WIN; step = binning(from, to, Math.max(36, Math.floor((cols.clientWidth || 840) / 6))); before = pts.filter((r) => r.first < from); after = pts.filter((r) => r.first >= to); }
+  if (zoom === 'attack') { [from, to] = WIN; step = binning(from, to, Math.max(12, Math.floor(((cols.clientWidth || 840) - 84) / 8))); before = pts.filter((r) => r.first < from); after = pts.filter((r) => r.first >= to); }
   else {
     // times far from the attack (a device clock at 1970, a file copied with an old date) would stretch the axis; they go to the edge columns
     const lo = Math.max(Math.min(...pts.map((r) => r.first)), ATTACK - 45 * DAY), hi = Math.max(lo + HOUR, Math.min(Math.max(...pts.map((r) => r.first)), NOW));
@@ -1350,7 +1352,7 @@ function chart(hit) {
   const nice = max <= 4 ? 4 : Math.ceil(max / (max > 40 ? 20 : max > 10 ? 10 : 2)) * (max > 40 ? 20 : max > 10 ? 10 : 2);
   for (const [v, pos] of [[nice, 0], [nice / 2, 50], [0, 100]]) { const s = el('span', v); s.style.top = pos + '%'; ya.append(s); }
   const col = (b, range, label, cls) => {
-    const c = el('div', null, 'col' + (cls ? ' ' + cls : '') + (F.bin && F.bin[0] === range[0] && F.bin[1] === range[1] ? ' sel' : ''));
+    const c = el('div', null, 'col' + (cls ? ' ' + cls : '') + (F.bin && range[0] < F.bin[1] && range[1] > F.bin[0] ? ' sel' : ''));
     for (const k of ['a', 'b', 'c']) if (b[k]) { const i = el('i', null, k); i.style.height = (b[k] / nice) * 100 + '%'; c.append(i); }
     hover(c, `${label}\n${b.b} remote shell · ${b.a} gl-helper malware · ${b.c} command only`);
     c.addEventListener('click', () => { F.bin = F.bin && F.bin[0] === range[0] && F.bin[1] === range[1] ? null : range; page = 0; render(); });
@@ -1512,7 +1514,7 @@ function backdoor(base) {
   const box = $('bdFiles'); box.replaceChildren();
   if (!loaders.length) { box.append(el('p', n ? 'No report sent the loader’s file.' : none, 'peak dim')); return; }
   const bySize = new Map(); for (const f of loaders) { const k = f.size || 0; (bySize.get(k) || bySize.set(k, []).get(k)).push(f); }
-  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Size', 'n'], ['Devices', 'n'], ['Different files', 'n'], ['Written (UTC)', 'n']]) hd.append(el('th', t, c)); tb.append(hd);
+  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Size', 'n'], ['Devices', 'n'], ['Different files', 'n wrap'], ['Written (UTC)', 'n']]) hd.append(el('th', t, c)); tb.append(hd);
   for (const [s, fs] of [...bySize].sort((a, b) => b[1].length - a[1].length)) {
     const t = fs.map(when).filter(isFinite).sort((a, b) => a - b), tr = el('tr');
     tr.append(el('td', s ? s.toLocaleString('en') + ' B' : 'not sent', 'n'), el('td', fs.length, 'n'), el('td', new Set(fs.map((f) => f.sha256)).size, 'n'), el('td', t.length ? (day(t[0]) === day(t[t.length - 1]) ? day(t[0]) : day(t[0]) + ' – ' + day(t[t.length - 1])) : '–', 'n wrap'));
@@ -1673,8 +1675,8 @@ function kpis(base, hit) {
   const bd = F.result === 'bd' ? [] : base.filter((r) => r.bd), also = bd.filter((r) => r.ioc > 0).length;
   if (bd.length) {
     const li = el('li', null, 'apart'), b = el('button'); b.type = 'button';
-    b.title = `${bd.length} with the older backdoor, not in the number above.${also ? ` ${also} of them also have traces of 20 November and count there for those.` : ''}\nClick to show these reports.`;
-    b.append(el('i'), 'Older backdoor, not included', el('b', bd.length)); b.addEventListener('click', () => goReports(() => { F.result = 'bd'; }));
+    b.title = `${bd.length} with the older backdoor. It adds nothing to the number above.${also ? ` ${also} of them also have traces of 20 November and count there for those.` : ''}\nClick to show these reports.`;
+    b.append(el('i'), 'Older backdoor, counted apart', el('b', bd.length)); b.addEventListener('click', () => goReports(() => { F.result = 'bd'; }));
     li.append(b); lg.append(li);
   }
   fillKpi('hit', hit.length.toLocaleString('en'), 'of ' + base.length.toLocaleString('en') + ' reports', both ? both + ' have a shell and malware.' : '', { lead: true, extra: [split, lg].filter((x) => x.children.length), go: hit.length ? () => goReports(() => {}) : null });
@@ -2139,11 +2141,11 @@ function knownList() {
   const m = new Map(); for (const r of pool) { const seen = new Set(); for (const i of [...r.review_items, ...r.files]) if (KNOWN[i.sha256] && !seen.has(i.sha256)) { seen.add(i.sha256); const g = m.get(i.sha256) || m.set(i.sha256, { n: 0, hit: 0, paths: new Set() }).get(i.sha256); g.n++; if (r.ioc > 0 || r.bd) g.hit++; g.paths.add(i.path.split(' ')[0]); } }
   $('knownSub').textContent = `Hidden without a mark: files whose fingerprint is in the release checksums of the community’s Tailscale and AdGuard Home builds. The list holds ${Object.keys(KNOWN).length} fingerprints; ${m.size} of them are in the loaded reports. Another file at the same path is still listed for review.`;
   if (!m.size) { box.append(el('p', 'No loaded report holds one of these files.', 'peak dim')); return; }
-  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Release file', ''], ['Path on the device', ''], ['SHA-256', ''], ['Devices', 'n'], ['With traces', 'n']]) hd.append(el('th', t, c));
+  const tb = el('table'), hd = el('tr'); for (const [t, c] of [['Release file', ''], ['Path on the device', ''], ['SHA-256', 'hide-xs'], ['Devices', 'n hide-xs'], ['With traces', 'n']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const [h, g] of [...m].sort((a, b) => b[1].n - a[1].n || KNOWN[a[0]].localeCompare(KNOWN[b[0]]))) {
-    const tr = el('tr'), hc = el('td', h.slice(0, 16) + '…', 'mono dim linkish'); hc.title = h; hc.addEventListener('click', () => goReports(() => { F.q = h; $('q').value = h; F.result = 'all'; }));
-    tr.append(el('td', KNOWN[h]), el('td', [...g.paths].join(', '), 'mono'), hc, el('td', g.n, 'n'), el('td', g.hit + ' of ' + g.n, 'n')); tb.append(tr);
+    const tr = el('tr'), hc = el('td', h.slice(0, 16) + '…', 'mono dim linkish hide-xs'); hc.title = h; hc.addEventListener('click', () => goReports(() => { F.q = h; $('q').value = h; F.result = 'all'; }));
+    tr.append(el('td', KNOWN[h]), el('td', [...g.paths].join(', '), 'mono'), hc, el('td', g.n, 'n hide-xs'), el('td', g.hit + ' of ' + g.n, 'n')); tb.append(tr);
   }
   box.append(tb);
 }
@@ -2161,16 +2163,17 @@ function safeList() {
 }
 function markList(box, rows, sugg) {
   if (sugg) box.append(el('h3', 'Marked'));
-  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', ''], ['Path or program', ''], ['Mark', ''], ['Comment', ''], ['Marked by', 'hide-xs'], ['When (UTC)', 'n hide-m'], ['Files', 'n hide-m'], ['Devices now', 'n hide-xs'], ['', 'n hide-xs']]) hd.append(el('th', t, c));
+  const tb = el('table', null, 'safeTable'), hd = el('tr'); for (const [t, c] of [['Kind', 'hide-xs'], ['Path or program', ''], ['Mark', ''], ['Comment', 'hide-xs'], ['Marked by', 'hide-n'], ['When (UTC)', 'n hide-m'], ['Files', 'n hide-m'], ['Devices now', 'n hide-xs'], ['', 'n']]) hd.append(el('th', t, c));
   tb.append(hd);
   for (const [key, lab] of rows) {
     const i = key.indexOf(' '), kind = key.slice(0, i), path = key.slice(i + 1), g = REVALL.get(key) || { kind, path, n: 0, hit: 0, sha: new Set(lab.hashes) };
-    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', lab.every ? 'every' : lab.hashes.length || '–', 'n hide-m'), now = el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n wrap hide-xs'), act = el('td', null, 'n hide-xs'), rm = el('button', 'Remove mark', 'btn sm');
+    const tr = el('tr'), pc = el('td', path || '(not sent)', 'mono'), files = el('td', lab.every ? 'every' : lab.hashes.length || '–', 'n hide-m'), now = el('td', g.n ? g.n + (g.hit ? ' · ' + g.hit + ' with traces' : '') : 'none in the loaded reports', 'n wrap hide-xs'), act = el('td', null, 'n'), rm = el('button', 'Remove mark', 'btn sm');
     const v = lab.verdict || 'safe', mc = el('td'); mc.append(el('span', (VERDICTS[v] || v).toLowerCase(), 'tag ' + (v === 'safe' ? 'ok' : v === 'malware' ? 'bad' : 'warn')));
     tr.style.cursor = 'pointer'; files.title = (lab.every ? 'Every file at this path, also new ones. ' : '') + (lab.hashes.length ? 'Fingerprints known when it was set:\n' + lab.hashes.slice(0, 6).join('\n') + (lab.hashes.length > 6 ? '\n…' : '') : 'Nothing with a fingerprint: a link, an account or a process.');
     if (labelState(g) === 'new') { const t = el('span', 'new file since', 'tag warn'); t.style.marginLeft = '8px'; t.title = 'A file with another fingerprint was reported at this path after it was marked. It is shown on the dashboard again.'; pc.append(t); }
     rm.type = 'button'; rm.addEventListener('click', (e) => { e.stopPropagation(); setLabel(g, '', ''); }); act.append(rm);
-    tr.append(el('td', kind), pc, mc, el('td', lab.note || '–'), el('td', lab.by, 'who hide-xs'), el('td', lab.at.slice(0, 16).replace('T', ' '), 'n hide-m'), files, now, act);
+    pc.append(el('small', kind, 'xs-only dim'));
+    tr.append(el('td', kind, 'hide-xs'), pc, mc, el('td', lab.note || '–', 'hide-xs'), el('td', lab.by, 'who hide-n'), el('td', lab.at.slice(0, 16).replace('T', ' '), 'n hide-m'), files, now, act);
     tr.addEventListener('click', () => openItem(key));
     tb.append(tr);
   }
