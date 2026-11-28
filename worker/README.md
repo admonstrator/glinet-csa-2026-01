@@ -680,17 +680,38 @@ missing, the next run reads all reports once. To force that, delete the entry:
 
 `https://csa.gl-i.net/2026-01/live.json` gives what the advisory and the fix guide show
 between two builds, in one small answer: the version of the script served now with its
-release time, and the table above. A reader's browser asks for it once per page, instead
-of fetching the whole script for its version and the table in a second call.
+release time, the table above, and the figures of the advisory. A reader's browser asks
+for it once per page, instead of fetching the whole script for its version and the table
+in a second call.
 
 ```json
 { "script": { "version": "2.55", "released": "2026-11-24T14:41:00Z" },
-  "reported": { "advisory": "CSA-2026-01", "as_of": "2026-11-25T08:22Z", "min_devices": 5, "models": [] } }
+  "reported": { "advisory": "CSA-2026-01", "as_of": "2026-11-25T08:22Z", "min_devices": 5, "models": [] },
+  "figures": { "as_of": "2026-11-28T12:56Z", "devices": 3747, "routers": 3169, "kvm": 578, "updated": { "routers": [1, 1115], "kvm": [0, 239] } } }
 ```
 
 It takes nothing in: GET and HEAD only, parameters, headers and bodies are not read, and
 it answers the same to everyone. A part that is not known is `null`. Browsers may keep it
 for a minute. Deploy the worker before the website uses the address.
+
+The figures are those the advisory shows: how many devices sent a report, how many of
+them show traces, the three charts and a few more (shortened above).
+[docs/figures.md](../docs/figures.md) defines every field and how it is counted. They are
+counted in `src/figures.js` with the dashboard's own `shape()` (`src/shape.js`, which
+`build.mjs` writes from `dashboard.html`), so that the page and the dashboard never count
+differently. Like the table, they are worked out at most every 15 minutes, behind an
+answer and never in it, from the reports received since the last run (with two minutes of
+overlap). `figures` is `null` until the first run is done; when a run fails, the last
+figures stay and the next try is a few minutes later. They are kept in KV under
+`figures/csa-2026-01`, and what they need of every device, with how far the reports have
+been read and the day of the last full read, under `figures/csa-2026-01-devices`. All
+reports are read again when that entry is missing, when the counting in `shape.js` or
+`figures.js` changes, and once a day at the first run from 04:00 UTC, before the
+advisory's daily build. To force that, delete the entry:
+`npx wrangler kv key delete --remote --binding REPORTS figures/csa-2026-01-devices`.
+
+`node tools/figures.mjs reports.ndjson` works out the same figures from an export, through
+the same code, to check the worker against a count by other means.
 
 ## Known release files
 

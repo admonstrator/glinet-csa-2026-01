@@ -532,8 +532,10 @@ if (process.argv[2] === 'serve') {
     {
       const live = (path = '/2026-01/live.json', init) => worker.fetch(new Request('https://csa.example.org' + path, init), env, { waitUntil() {} });
       await env.REPORTS.put('script/csa-2026-01-fix', JSON.stringify({ commit: 'lv', body: "#!/bin/sh\nVERSION=7.80\nRELEASED='2026-11-25 08:41 UTC'\n", checked: Date.now() }));
+      // the figures are worked out behind the first answer; once they are there, the answers compared here are alike
+      { let later; await worker.fetch(new Request('https://csa.example.org/2026-01/live.json'), env, { waitUntil(p) { later = p; } }); await later; }
       const r = await live(), raw = await r.text(), j = JSON.parse(raw), table = await (await tab()).json();
-      expect('live.json gives the version, its release time and the reported table in one answer', r.status === 200 && Object.keys(j).join() === 'script,reported' && j.script.version === '7.80' && j.script.released === '2026-11-25T08:41:00Z' && JSON.stringify(j.reported) === JSON.stringify(table));
+      expect('live.json gives the version, its release time and the reported table in one answer', r.status === 200 && Object.keys(j).join() === 'script,reported,figures' && j.script.version === '7.80' && j.script.released === '2026-11-25T08:41:00Z' && JSON.stringify(j.reported) === JSON.stringify(table));
       expect('any page may read it, it is kept a minute and read as JSON only', r.headers.get('access-control-allow-origin') === '*' && r.headers.get('cache-control') === 'public, max-age=60' && r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('content-type').startsWith('application/json'));
       const odd = await (await live('/2026-01/live.json?script=<b>&reported=1', { headers: { cookie: 'x=<b>', 'x-forwarded-for': '<b>' } })).text();
       expect('live.json takes nothing from the request: parameters and headers change nothing', odd === raw);
@@ -870,6 +872,332 @@ if (process.argv[2] === 'serve') {
     expect('the reported table answers 503 rather than reading all reports on every call', tab.status === 503 && dbCalls === 0);
     expect('the result page is still served, without a firmware list', page.status === 200 && (await page.text()).includes('const FIRMWARE = null;'));
     env.DB.prepare = scans; env.REPORTS.get = kvRead;
+  }
+  // ---- the figures of the advisory (docs/figures.md): src/figures.js, and in live.json
+  {
+    const { foldFigures, figuresOf, isFigureState } = await import('../src/figures.js');
+    const { shape, ts, SHAPE_SHA256 } = await import('../src/shape.js');
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const page = readFileSync(new URL('../src/dashboard.html', import.meta.url), 'utf8'), shapeSrc = readFileSync(new URL('../src/shape.js', import.meta.url), 'utf8');
+    const block = page.slice(page.indexOf('\nconst ts = (s) =>') + 1, page.indexOf('\nconst count = (rows, key) =>') + 1);
+    expect('shape.js is the code of dashboard.html that shapes a report, as it is, with its SHA-256 (run "node build.mjs")', block.startsWith('const ts = (s) =>') && block.includes('\nfunction shape(x) {') && shapeSrc.includes('\n' + block + 'export { shape, ts };\n') && SHAPE_SHA256 === nodeCrypto.createHash('sha256').update(block).digest('hex'));
+
+    // The plain count over all reports at once, the way the figures were worked out by hand
+    // until 28 November: the reference of the lead, with only its input (rows instead of an
+    // export file) and its output (a value instead of stdout) changed. It is the oracle.
+    const oracle = (rows) => {
+      const M = { shape, ts };
+      const all = rows.map((x) => M.shape(x));
+      const built = (r) => (/(\d{4}-\d\d-\d\d)\s*$/.exec(r.firmware || '') || [])[1] || '';
+      const secFw = (r) => r.kvm ? (/V?1\.10\.3 release1\b/i.test(r.firmware) || (/^V?1\.8\.7/i.test(r.firmware) && /rmq1/i.test(r.model))) : r.type === 'Router' && built(r) >= '2026-11-22';
+      const minute = (ms) => new Date(ms).toISOString().slice(0, 16) + 'Z';
+      const pair = (a) => [a.filter((r) => r.ioc > 0).length, a.length];
+      const best = new Map();
+      for (const r of all) { if (!r.dev) continue; const b = best.get(r.dev); if (!b || r.ioc > b.ioc || (r.ioc === b.ioc && r.recv > b.recv)) best.set(r.dev, r); }
+      const pool = all.filter((r) => (!r.dev || best.get(r.dev) === r) && !r.isTest);
+      const nt = all.filter((r) => !r.isTest);
+      const R = pool.filter((r) => r.type === 'Router'), K = pool.filter((r) => r.kvm);
+      const Rn = R.filter((r) => !secFw(r)), Kn = K.filter((r) => !secFw(r));
+      const f = { as_of: minute(Math.max(...all.map((r) => r.recv))) };
+      f.devices = R.length + K.length; f.routers = R.length; f.kvm = K.length;
+      f.updated = { routers: pair(R.filter(secFw)), kvm: pair(K.filter(secFw)) };
+      f.open = { routers: pair(Rn), kvm: pair(Kn) };
+      const byDev = new Map();
+      for (const r of nt) if (r.dev) (byDev.get(r.dev) || byDev.set(r.dev, []).get(r.dev)).push(r);
+      let cr = 0, ck = 0, still = 0;
+      for (const list of byDev.values()) {
+        list.sort((a, b) => a.recv - b.recv);
+        const i = list.findIndex((r) => r.ioc > 0 && !secFw(r)); if (i < 0) continue;
+        const later = list.slice(i + 1).filter(secFw); if (!later.length) continue;
+        if (later[later.length - 1].kvm) ck++; else cr++;
+        if (later.some((r) => r.ioc > 0)) still++;
+      }
+      f.cleaned = { routers: cr, kvm: ck, still };
+      f.shell = pool.filter((r) => r.shell).length;
+      f.goodcloud = { on: pair(Rn.filter((r) => r.goodcloud === 'on')), off: pair(Rn.filter((r) => r.goodcloud === 'off')) };
+      const pipe = new Map();
+      for (const r of nt) { if (secFw(r)) continue; const t = M.ts(r.pipe_time); if (t >= Date.parse('2026-11-22T00:00Z')) { const k = r.dev || r.id; pipe.set(k, Math.max(pipe.get(k) || 0, t)); } }
+      f.pipe = { since22: pipe.size, since24: [...pipe.values()].filter((t) => t >= Date.parse('2026-11-24T00:00Z')).length, last: pipe.size ? minute(Math.max(...pipe.values())) : null };
+      const cc = nt.filter((r) => !secFw(r) && r.kinds.includes('cloud-command')).map((r) => M.ts(r.state_file_time)).filter(isFinite);
+      f.newest_command = cc.length ? minute(Math.max(...cc)) : null;
+      const bd = new Map();
+      for (const r of nt) if (r.bd) { const k = r.dev || r.id; (bd.get(k) || bd.set(k, []).get(k)).push(r); }
+      f.backdoor = { devices: bd.size, mt2500: [...bd.values()].filter((v) => v[0].model === 'mt2500').length, after_update: [...bd.values()].filter((v) => v.some(secFw)).length };
+      const rel = (re) => { const a = K.filter((r) => re.test(r.firmware)); return [...pair(a), a.filter((r) => r.kinds.includes('marker')).length]; };
+      f.kvm_release = { rm10_release8: rel(/V1\.10\.3 release8/), rm10rc_release3: rel(/V1\.10\.3 release3/) };
+      const ser = new Map();
+      for (const r of Rn) { const m = /^(\d+)\.(\d+)/.exec(r.fw); if (!m) continue; const old = +m[1] < 4 || (+m[1] === 4 && +m[2] <= 6); const k = old ? '4.6 and older' : m[1] + '.' + m[2]; const s = ser.get(k) || { name: k, hit: 0, of: 0, o: old ? [0, 0] : [+m[1], +m[2]] }; s.of++; if (r.ioc > 0) s.hit++; ser.set(k, s); }
+      f.series = [...ser.values()].sort((a, b) => a.o[0] - b.o[0] || a.o[1] - b.o[1]).map(({ name, hit, of }) => ({ name, hit, of }));
+      const withT = Rn.filter((r) => r.ioc > 0 && isFinite(M.ts(r.state_file_time)));
+      const W0 = Date.parse('2026-11-20T22:00Z'), W1 = Date.parse('2026-11-21T08:00Z');
+      const byModel = {};
+      for (const r of withT) (byModel[r.model] = byModel[r.model] || []).push(Math.floor(M.ts(r.state_file_time) / 60000));
+      const sw = [];
+      for (const [model, mins] of Object.entries(byModel)) {
+        const inW = mins.filter((m) => m * 60000 >= W0 && m * 60000 < W1); if (!inW.length || mins.length < 5) continue;
+        const c = {}; for (const m of inW) c[m] = (c[m] || 0) + 1;
+        const top = +Object.entries(c).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
+        sw.push({ model: 'GL-' + model.toUpperCase(), at: minute(top * 60000), n: mins.filter((m) => Math.abs(m - top) <= 1).length, of: mins.length });
+      }
+      f.sweep = sw.sort((a, b) => a.at.localeCompare(b.at) || a.model.localeCompare(b.model));
+      const hours = {}; let used = 0;
+      for (const r of withT) { const t = M.ts(r.state_file_time); if (t < Date.parse('2026-11-19T00:00Z') || t >= Date.parse('2026-11-22T00:00Z')) continue; used++; const h = new Date(t).toISOString().slice(0, 13); hours[h] = (hours[h] || 0) + 1; }
+      f.hours = Object.entries(hours).sort().map(([hour, n]) => ({ hour, n }));
+      f.hours_routers = used;
+      return f;
+    };
+    // the reference reads an export, which is ordered by the time of receipt
+    const byTime = (rows) => [...rows].sort((a, b) => (a.received < b.received ? -1 : a.received > b.received ? 1 : a.id < b.id ? -1 : 1));
+    const ref = (rows) => oracle(byTime(rows));
+
+    // Made-up reports, a few for every rule of docs/figures.md. Device IDs as the worker
+    // stores them: 16 hex characters.
+    const D = (name) => nodeCrypto.createHash('sha256').update('figures ' + name).digest('hex').slice(0, 16);
+    const base = {
+      schema: 10, tool: '2.60', platform: 'openwrt', model: 'axt1800', firmware: '4.8.3 release2 build 540 2026-10-02', checked_at: '2026-11-25 10:00:00 UTC', uptime_s: 3600,
+      ioc: 0, persist: 0, review: 0, findings: [], quick_check: false, shell_started: '', shell_ports: [], pipe_time: '', state_file_time: '', files: [], persistence: [], fw_rules: [], commands: [],
+      device_id: '', goodcloud: 'unknown', cloud_client: '', astrowarp: 'off', state_file_size: -1, review_items: [], cloud_bound: 'unknown', rtty_ssh: 'off', rtty_web: 'off', note: '', state_file_first: '', vendor_cleanup: 'off',
+    };
+    const FX = [];
+    const add = (dev, received, o = {}) => FX.push({ id: 'fx' + String(FX.length).padStart(4, '0'), received, report: { ...base, device_id: dev ? D(dev) : '', ...o } });
+    const at = (day, hms) => `2026-11-${day}T${hms}.000Z`;
+    const MK = ['marker /etc/config/.gl/gl-helper'], WATCH = ['marker /etc/glinet/.cache/watch.sh'], PIPE = ['pipe /tmp/f'], BDF = ['backdoor-file /bin/ulogd'];
+    const FIXED = '4.8.4 release1 build 600 2026-11-22', TEST = { model: 'unknown', platform: 'unknown', firmware: 'unknown' };
+    const kvm = (o) => ({ platform: 'glkvm-rm1', model: 'rm1', firmware: 'V1.10.2 release2', ...o });
+    // the pool: most traces, then the newest; a device whose chosen report is a test drops out; each report without an ID counts
+    add('a1', at(21, '10:00:00'), { ioc: 2, findings: [...MK, 'persist-ref /etc/rc.local'], goodcloud: 'on' });
+    add('a1', at(23, '10:00:00'), { firmware: '4.9.1 release1 build 600 2026-10-20' });
+    add('a1', at(22, '10:00:00'), { ioc: 2, findings: [...MK, 'persist-ref /etc/rc.local'], goodcloud: 'off' });
+    add('a2', at(21, '10:00:00'));
+    add('a2', at(23, '10:00:00'), { ...TEST, findings: PIPE });
+    add('a3', at(21, '09:00:00'), TEST);
+    add('a3', at(22, '09:00:00'), { firmware: '4.7.5' });
+    add('', at(22, '11:00:00'), { firmware: '4.7.5' });
+    add('', at(22, '11:05:00'), { firmware: '4.7.5' });
+    add('', at(22, '11:10:00'), { ...TEST, findings: PIPE });
+    // security firmware: routers by build date, KVMs on V1.10.3 release1, a GL-RMQ1 on 1.8.7
+    add('b1', at(23, '08:00:00'), { firmware: FIXED });
+    add('b2', at(23, '08:05:00'), { firmware: '4.8.4 release1 build 590 2026-11-21' });
+    add('b3', at(23, '08:10:00'), kvm({ firmware: 'V1.10.3 release1' }));
+    add('b4', at(23, '08:15:00'), kvm({ platform: 'glkvm-rmq1', model: 'rmq1', firmware: '1.8.7 release1' }));
+    add('b5', at(23, '08:20:00'), kvm({ model: 'rm10', firmware: 'V1.8.7 release1' }));
+    add('b6', at(23, '08:25:00'), kvm({ firmware: 'V1.10.3 release10' }));
+    add('b7', at(23, '08:30:00'), { firmware: FIXED, ioc: 1, findings: MK });
+    add('b8', at(23, '08:35:00'), kvm({ firmware: 'V1.10.3 release1', ioc: 1, findings: WATCH }));
+    // cleaned: traces, then security firmware; security firmware before the traces does not count; still; by the last later report
+    add('c1', at(21, '12:00:00'), { ioc: 1, findings: MK });
+    add('c1', at(23, '12:00:00'), { firmware: FIXED });
+    add('c2', at(21, '12:00:00'), kvm({ ioc: 1, findings: WATCH }));
+    add('c2', at(23, '12:00:00'), kvm({ firmware: 'V1.10.3 release1' }));
+    add('c3', at(22, '12:00:00'), { firmware: FIXED });
+    add('c3', at(23, '12:00:00'), { ioc: 1, findings: MK });
+    add('c4', at(21, '12:00:00'), { ioc: 1, findings: MK });
+    add('c4', at(24, '12:00:00'), { firmware: FIXED, ioc: 1, findings: MK });
+    add('c5', at(21, '13:00:00'), { ioc: 1, findings: MK });
+    add('c5', at(22, '13:00:00'), kvm({ firmware: 'V1.10.3 release1' }));
+    add('c5', at(24, '13:00:00'), { firmware: FIXED });
+    add('c6', at(22, '14:00:00'), { firmware: FIXED, ioc: 1, findings: MK });
+    add('c6', at(23, '14:00:00'), { ioc: 1, findings: MK });
+    add('c6', at(24, '14:00:00'), { firmware: FIXED });
+    add('c7', at(21, '15:00:00'), { ioc: 1, findings: MK });
+    add('c7', at(22, '15:00:00'), { firmware: FIXED });
+    add('c7', at(23, '15:00:00'), { ioc: 1, findings: MK });
+    // the shell's pipe: from 22 November, from 24 November, by device, security firmware and tests left out, cut to the minute
+    add('d1', at(22, '01:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-21 23:59:59 UTC' });
+    add('d2', at(24, '00:30:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-23 23:59:59 UTC' });
+    add('d2', at(24, '06:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-24 00:00:00 UTC' });
+    add('d3', at(22, '02:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-22 00:00:00 UTC' });
+    add('d4', at(25, '01:00:00'), { firmware: FIXED, ioc: 1, findings: PIPE, pipe_time: '2026-11-25 00:00:00 UTC' });
+    add('', at(26, '08:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-26 07:30:45 UTC' });
+    add('d6', at(27, '08:00:00'), { ...TEST, pipe_time: '2026-11-27 00:00:00 UTC' });
+    // the newest command from the cloud: shape() makes one of an empty state file with AstroWarp off, not with it on; security firmware left out
+    add('e1', at(22, '03:00:00'), { state_file_size: 0, state_file_time: '2026-11-21 18:58:30 UTC' });
+    add('e2', at(23, '03:00:00'), { astrowarp: 'on', state_file_size: 0, state_file_time: '2026-11-23 10:00:00 UTC' });
+    add('e3', at(23, '04:00:00'), { firmware: FIXED, ioc: 1, findings: ['cloud-command /etc/mp_ip_mapping_info'], state_file_size: 0, state_file_time: '2026-11-21 20:00:00 UTC' });
+    // the older backdoor: by the model of the first such report, on security firmware, a test left out
+    add('f1', at(21, '14:00:00'), { model: 'mt2500', ioc: 1, findings: BDF });
+    add('f1', at(24, '14:00:00'), { model: 'mt2500', firmware: FIXED, ioc: 1, findings: BDF });
+    add('f2', at(21, '15:00:00'), { model: 'ax1800', ioc: 1, findings: BDF });
+    add('f2', at(22, '15:00:00'), { model: 'mt2500', ioc: 1, findings: BDF });
+    add('', at(22, '16:00:00'), { model: 'mt2500', ioc: 1, findings: BDF });
+    add('f4', at(22, '17:00:00'), { ...TEST, ioc: 1, findings: BDF });
+    // the KVM releases that keep the malware
+    add('g1', at(24, '09:00:00'), kvm({ model: 'rm10', firmware: 'V1.10.3 release8', ioc: 1, findings: WATCH }));
+    add('g2', at(24, '09:05:00'), kvm({ model: 'rm10', firmware: 'V1.10.3 release8' }));
+    add('g3', at(24, '09:10:00'), kvm({ model: 'rm10', firmware: 'V1.10.3 release3', ioc: 1, findings: ['installer-trace /bin/netstat'] }));
+    // the series: 4.6 and older as one, a firmware without a version left out, 4.12 after 4.8
+    add('h1', at(24, '10:00:00'), { firmware: '4.5.8', ioc: 1, findings: MK });
+    add('h2', at(24, '10:05:00'), { firmware: '4.6.2 release1' });
+    add('h3', at(24, '10:10:00'), { firmware: '4.12.1 release1 build 700 2026-11-21', ioc: 1, findings: MK });
+    add('h4', at(24, '10:15:00'), { firmware: 'unknown', ioc: 1, findings: MK });
+    add('h5', at(24, '10:20:00'), { firmware: '3.215' });
+    // GoodCloud on open routers only, and a remote shell on a device that is neither router nor KVM
+    add('i1', at(24, '11:00:00'), { goodcloud: 'on', ioc: 1, findings: MK });
+    add('i2', at(24, '11:05:00'), { goodcloud: 'on' });
+    add('i3', at(24, '11:10:00'), { goodcloud: 'on', firmware: FIXED });
+    add('i4', at(24, '11:15:00'), { platform: 'mystery', model: 'x1', firmware: '1.0', ioc: 1, findings: ['connection 170.39.226.0/24'] });
+    // the sweep and the hours: routers with traces and a state file, by model
+    const swept = (model, times, o = {}) => times.forEach((t, i) => add(`s ${model} ${i} ${o.firmware || ''}`, new Date(Date.parse('2026-11-25T12:00:00Z') + FX.length * 1000).toISOString(), { model, ioc: 1, findings: MK, state_file_time: t, ...o }));
+    swept('mt3000', ['2026-11-20 22:15:10 UTC', '2026-11-20 22:15:40 UTC', '2026-11-20 22:16:05 UTC', '2026-11-20 22:14:59 UTC', '2026-11-20 23:30:00 UTC', '2026-11-21 09:00:00 UTC']);
+    swept('be3600', ['2026-11-20 22:15:00 UTC', '2026-11-20 22:15:30 UTC', '2026-11-20 23:00:00 UTC', '2026-11-20 23:00:30 UTC', '2026-11-20 21:59:59 UTC']);
+    swept('x3000', ['2026-11-20 22:00:00 UTC', '2026-11-21 08:00:00 UTC', '2026-11-21 08:00:00 UTC', '2026-11-21 08:00:00 UTC', '2026-11-21 07:59:59 UTC']);
+    swept('ax1800', ['2026-11-20 23:00:00 UTC', '2026-11-20 23:00:00 UTC', '2026-11-20 23:00:00 UTC', '2026-11-20 23:00:00 UTC']);
+    swept('ax1800', ['2026-11-20 23:00:00 UTC'], { firmware: FIXED });
+    swept('mt6000', ['2026-11-19 00:00:00 UTC', '2026-11-18 23:59:59 UTC', '2026-11-22 00:00:00 UTC', '2026-11-21 12:00:00 UTC', '2026-11-21 12:30:00 UTC']);
+    // reports that shape() cannot read: left out, and they stop nothing
+    const BAD = [
+      { id: 'fxbad1', received: at(24, '12:00:00'), report: { schema: 9, platform: 'openwrt', model: 'mt6000', firmware: '4.8.3', ioc: 2, findings: ['marker /etc/config/.gl'] } },
+      { id: 'fxbad2', received: at(24, '12:01:00'), report: null },
+      { id: 'fxbad3', received: at(24, '12:02:00'), report: { ...base, platform: 7, ioc: 3, findings: MK } },
+    ];
+    const newest = Date.parse(at(27, '08:00:00'));
+    const HAND = {
+      as_of: '2026-11-27T08:00Z', devices: 67, routers: 58, kvm: 9,
+      updated: { routers: [5, 8], kvm: [1, 3] }, open: { routers: [40, 50], kvm: [3, 6] },
+      cleaned: { routers: 5, kvm: 1, still: 1 }, shell: 6, goodcloud: { on: [1, 2], off: [1, 1] },
+      pipe: { since22: 3, since24: 2, last: '2026-11-26T07:30Z' }, newest_command: '2026-11-21T18:58Z',
+      backdoor: { devices: 3, mt2500: 2, after_update: 1 }, kvm_release: { rm10_release8: [1, 2, 1], rm10rc_release3: [1, 1, 0] },
+      series: [{ name: '4.6 and older', hit: 1, of: 3 }, { name: '4.7', hit: 0, of: 3 }, { name: '4.8', hit: 37, of: 42 }, { name: '4.12', hit: 1, of: 1 }],
+      sweep: [{ model: 'GL-X3000', at: '2026-11-20T22:00Z', n: 1, of: 5 }, { model: 'GL-BE3600', at: '2026-11-20T22:15Z', n: 2, of: 5 }, { model: 'GL-MT3000', at: '2026-11-20T22:15Z', n: 4, of: 6 }],
+      hours: [['2026-11-19T00', 1], ['2026-11-20T21', 1], ['2026-11-20T22', 7], ['2026-11-20T23', 7], ['2026-11-21T07', 1], ['2026-11-21T08', 3], ['2026-11-21T09', 1], ['2026-11-21T12', 2], ['2026-11-21T18', 1]].map(([hour, n]) => ({ hour, n })),
+      hours_routers: 24,
+    };
+    const ALL = [...FX, ...BAD], mine = figuresOf(foldFigures(null, ALL), newest), want = ref(FX);
+    const part = (...keys) => same(keys.map((k) => mine[k]), keys.map((k) => HAND[k]));
+    expect('figures: the fields of docs/figures.md, in its order', Object.keys(mine).join() === 'as_of,devices,routers,kvm,updated,open,cleaned,shell,goodcloud,pipe,newest_command,backdoor,kvm_release,series,sweep,hours,hours_routers' && Object.keys(mine.cleaned).join() === 'routers,kvm,still' && Object.keys(mine.pipe).join() === 'since22,since24,last' && Object.keys(mine.sweep[0]).join() === 'model,at,n,of');
+    expect('figures: the pool takes per device the report with the most traces, then the newest, drops a device whose chosen report is a test, and counts each report without an ID', part('devices', 'routers', 'kvm', 'open') && same(mine.series[1], HAND.series[1]) && !mine.series.some((s) => s.name === '4.9'));
+    expect('figures: security firmware by build date for routers, V1.10.3 release1 for KVMs, 1.8.7 only on a GL-RMQ1', part('updated', 'open'));
+    expect('figures: cleaned counts traces before security firmware, not after it, by the last later report, and those still with traces', part('cleaned'));
+    expect('figures: the shell, GoodCloud on open routers, the pipe from 22 and from 24 November by device and to the minute', part('shell', 'goodcloud', 'pipe'));
+    expect('figures: the newest command is what shape() takes for one, outside security firmware', part('newest_command'));
+    expect('figures: the older backdoor by device, by the model of its first report, and after an update', part('backdoor'));
+    expect('figures: the KVM releases, with traces, all, with the malware files', part('kvm_release'));
+    expect('figures: the series group 4.6 and older, leave out an unknown version and put 4.12 after 4.8', part('series'));
+    expect('figures: the sweep keeps the window to the minute, needs five routers, takes the earliest of equal minutes and counts all times near it', part('sweep'));
+    expect('figures: the hours keep their window, sorted', part('hours', 'hours_routers', 'as_of'));
+    expect('figures: all of it, as worked out by hand', same(mine, HAND));
+    expect('figures: the same as the plain count of the reference over all reports at once', same(mine, want) && same(want, HAND));
+    expect('figures: a report shape() cannot read is left out', same(figuresOf(foldFigures(null, FX), newest), mine));
+    // the same reports in any chunks, in any order, some twice, through KV in between: the same state, to the byte
+    let seed = 20261128;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const once = JSON.stringify(foldFigures(null, ALL));
+    let alike = 0;
+    for (let t = 0; t < 40; t++) {
+      const rows = [...ALL, ...ALL.filter(() => rnd() < 0.3)];
+      for (let i = rows.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [rows[i], rows[j]] = [rows[j], rows[i]]; }
+      let state = null;
+      for (let i = 0; i < rows.length;) { const k = 1 + Math.floor(rnd() * 25); state = foldFigures(JSON.parse(JSON.stringify(state)), rows.slice(i, i + k)); i += k; }
+      if (JSON.stringify(state) === once) alike++;
+    }
+    expect('figures: the fold in random chunks, shuffled, with repeated reports, gives the state of one pass, 40 times', alike === 40);
+    const half = foldFigures(null, FX.slice(0, 50)), kept = JSON.stringify(half), more = foldFigures(half, FX.slice(50));
+    expect('figures: the fold leaves the state it was given as it was', JSON.stringify(half) === kept && JSON.stringify(more) === JSON.stringify(foldFigures(null, FX)));
+    const st = foldFigures(null, FX), stText = JSON.stringify(st), figText = JSON.stringify(mine);
+    expect('figures: the state is plain JSON, one short array per device, and the figures hold no device ID and no report', isFigureState(JSON.parse(stText)) && st.dev.every((e) => e.length <= 13) && st.dev.some((e) => e.length === 4) && !FX.some((x) => (x.report.device_id && figText.includes(x.report.device_id)) || figText.includes(x.id)) && !/AX1800|MT6000|AXT1800/.test(figText));
+    let threw = false; try { foldFigures({ v: 1, dev: 'x' }, FX); } catch { threw = true; }
+    expect('figures: a state of another shape is not taken for one', threw && !isFigureState({ v: 1, dev: [], one: [{}], cmd: null }) && !isFigureState(null) && isFigureState(foldFigures(null, [])));
+    const empty = figuresOf(foldFigures(null, []), newest);
+    expect('figures: without reports every count is 0 and every time null', empty.devices === 0 && empty.pipe.last === null && empty.newest_command === null && empty.series.length === 0 && empty.sweep.length === 0 && empty.hours_routers === 0);
+    // the tool, on the made-up reports as an export (which holds no ids)
+    const { exportFigures } = await import('../tools/figures.mjs');
+    const exported = byTime(FX).map((x) => JSON.stringify({ received: x.received, report: x.report })).join('\n') + '\n';
+    const tool = exportFigures(exported, { chunk: 20, overlap: 5 });
+    expect('tools/figures.mjs folds an export in overlapping chunks to the figures of the reference', tool.chunks > 5 && same(tool.figures, oracle(exported.trim().split('\n').map((l) => JSON.parse(l)))) && same(tool.figures, HAND));
+
+    // ---- through the worker: live.json with a D1 of the made-up reports
+    const { FIGURES_SQL, figuresRun } = await import('../src/index.js');
+    const fdb = d1(), fenv = { ...env, DB: fdb };
+    const fput = fdb.raw.prepare('INSERT INTO reports (id, received, report) VALUES (?, ?, ?)');
+    const insert = (rows) => { for (const x of rows) fput.run(x.id, x.received, x.report === null ? '{not json' : JSON.stringify(x.report)); };
+    insert(ALL);
+    // every read of the figures: its bounds and how many rows it gave
+    const reads = [], prep = fdb.prepare;
+    fdb.prepare = (sql) => { const s = prep(sql); return sql !== FIGURES_SQL ? s : { ...s, bind: (...a) => { const b = s.bind(...a); return { ...b, all: async () => { const r = await b.all(); reads.push({ from: a[0], upto: a[1], after: a[2], rows: r.results.length }); return r; } }; } }; };
+    const FKEY = 'figures/csa-2026-01', DKEY = 'figures/csa-2026-01-devices';
+    store.delete(FKEY); store.delete(DKEY); figuresRun.next = 0;
+    const ask = async (e = fenv, path = '/2026-01/live.json', init) => {
+      const later = [], r = await worker.fetch(new Request('https://csa.example.org' + path, init), e, { waitUntil: (p) => later.push(p) });
+      const storedAtAnswer = store.has(FKEY), raw = await r.text();
+      await Promise.all(later);
+      return { r, raw, j: raw ? JSON.parse(raw) : null, storedAtAnswer };
+    };
+    const devices = () => JSON.parse(store.get(DKEY)), stale = () => { store.set(FKEY, JSON.stringify({ ...JSON.parse(store.get(FKEY)), checked: 0 })); figuresRun.next = 0; };
+    const expectAs = (got, rows) => same({ ...got, as_of: ref(rows).as_of }, ref(rows));
+    const asOfNow = (f) => /^\d{4}-\d\d-\d\dT\d\d:\d\dZ$/.test(f.as_of) && Math.abs(Date.parse(f.as_of) - Date.now()) < 120_000;
+    const first = await ask();
+    expect('live.json: while nothing is kept, figures is null and the run starts behind the answer, not in it', first.r.status === 200 && first.j.figures === null && !first.storedAtAnswer && store.has(FKEY) && reads.length > 0 && reads[0].from === '');
+    const second = await ask();
+    expect('live.json: after the run it has script, reported and figures, the figures as the reference counts them, as of the run', Object.keys(second.j).join() === 'script,reported,figures' && expectAs(second.j.figures, FX) && asOfNow(second.j.figures));
+    expect('live.json: the figures are kept as checked and body, the devices as rules, upto, full and state', Object.keys(JSON.parse(store.get(FKEY))).join() === 'checked,body' && Object.keys(devices()).join() === 'rules,upto,full,state' && /^[0-9a-f]{64}$/.test(devices().rules) && devices().upto === at(27, '08:00:00') && devices().full === new Date(Date.now() - 4 * 3600_000).toISOString().slice(0, 10) && isFigureState(devices().state));
+    const served = /^VERSION=(.*)$/m.exec(JSON.parse(store.get('script/csa-2026-01-fix')).body)[1];
+    expect('live.json: script and reported are as before: the version served and the reported table', second.j.script.version === served && same(second.j.reported, await (await worker.fetch(new Request('https://csa.example.org/2026-01/reported.json'), fenv, { waitUntil() {} })).json()));
+    const n0 = reads.length, odd = await ask(fenv, '/2026-01/live.json?figures=0&as_of=2030-01-01T00:00Z&devices=1', { headers: { cookie: 'figures=<b>', 'x-forwarded-for': '<b>', 'if-none-match': '*' } });
+    expect('live.json: the figures take nothing from the request either, and a kept body starts no run', odd.raw === second.raw && reads.length === n0);
+    const head = await ask(fenv, '/2026-01/live.json', { method: 'HEAD' });
+    expect('live.json: HEAD answers without a body', head.r.status === 200 && head.raw === '' && head.r.headers.get('cache-control') === 'public, max-age=60');
+    // a later run reads from the last upto minus two minutes: a late report is caught, an older one waits for a full read
+    const NEW1 = { id: 'fxnew1', received: at(28, '09:00:00'), report: { ...base, device_id: D('n1'), ioc: 1, findings: MK } };
+    const LATE = { id: 'fxlate', received: at(27, '07:59:00'), report: { ...base, device_id: D('n2') } };
+    const OLD = { id: 'fxold', received: at(20, '12:00:00'), report: { ...base, device_id: D('n3'), model: 'mt3000' } };
+    insert([NEW1, LATE, OLD]);
+    const n1 = reads.length; stale(); const third = await ask();
+    expect('live.json: a later run reads only the reports received since the last upto, less two minutes', reads.length === n1 + 1 && reads[n1].from === new Date(Date.parse(at(27, '08:00:00')) - 120_000).toISOString() && reads[n1].upto === at(28, '09:00:00') && reads[n1].after === '' && reads[n1].rows === 3);
+    const fourth = await ask();
+    expect('live.json: so the new and the late report count, the one received long before does not yet', same(third.j.figures, second.j.figures) && expectAs(fourth.j.figures, [...FX, NEW1, LATE]) && !expectAs(fourth.j.figures, [...FX, NEW1, LATE, OLD]) && devices().upto === at(28, '09:00:00'));
+    store.set(DKEY, JSON.stringify({ ...devices(), rules: 'older rules' }));
+    const n2 = reads.length; stale(); await ask();
+    expect('live.json: when the rules change, all reports are read again', reads[n2].from === '' && expectAs((await ask()).j.figures, [...FX, NEW1, LATE, OLD]) && devices().rules !== 'older rules');
+    store.set(DKEY, JSON.stringify({ ...devices(), full: '2026-11-01' }));
+    const n3 = reads.length; stale(); await ask();
+    const n4 = reads.length; stale(); await ask();
+    expect('live.json: once a day, at the first run from 04:00 UTC, all reports are read again, then not until the next day', reads[n3].from === '' && devices().full === new Date(Date.now() - 4 * 3600_000).toISOString().slice(0, 10) && reads[n4].from !== '');
+    for (const [what, broken] of [['not JSON', () => '{'], ['a state of another shape', () => JSON.stringify({ ...devices(), state: { v: 1, cmd: null, dev: 'x', one: [] } })], ['no time read up to', () => JSON.stringify({ ...devices(), upto: 'later' })]]) {
+      store.set(DKEY, broken()); const n = reads.length; stale(); await ask();
+      expect(`live.json: kept devices with ${what} mean a full read`, reads[n].from === '' && isFigureState(devices().state));
+    }
+    // more than a page: by (received, id), every report once, also with equal times
+    const many = Array.from({ length: 2345 }, (_, i) => ({ id: 'fxpg' + String(i).padStart(5, '0'), received: '2026-11-28T10:00:00.' + String(i % 400).padStart(3, '0') + 'Z', report: { ...base, firmware: '4.7.5' } }));
+    insert(many);
+    const total = fdb.raw.prepare('SELECT count(*) AS n FROM reports').get().n;
+    store.set(DKEY, JSON.stringify({ ...devices(), rules: 'older rules' }));
+    const n5 = reads.length; stale(); await ask();
+    const pages = reads.slice(n5);
+    expect('live.json: a full read goes in pages of 1,000 by time and id, and reads every report once', pages.length === Math.floor(total / 1000) + 1 && pages.every((p, i) => p.rows === (i < pages.length - 1 ? 1000 : total % 1000)) && pages.slice(1).every((p) => p.after !== '') && pages.reduce((s, p) => s + p.rows, 0) === total);
+    expect('live.json: and its figures are those of the reference over all of them', expectAs((await ask()).j.figures, [...FX, NEW1, LATE, OLD, ...many]));
+    const plan = fdb.raw.prepare('EXPLAIN QUERY PLAN ' + FIGURES_SQL).all('a', 'b', 'c').map((r) => r.detail).join();
+    expect('live.json: the figures read the reports through the index on the time of receipt and id', /^SEARCH reports USING INDEX reports_received \(\(received,id\)>\(\?,\?\) AND received<\?\)$/.test(plan));
+    // when D1 fails: the last figures stay, the next try is in about three minutes
+    const kept1 = (await ask()).j, prepOk = fdb.prepare;
+    let tries = 0;
+    fdb.prepare = (sql) => { if (sql === FIGURES_SQL) { tries++; throw new Error('D1_ERROR: too many requests'); } return prepOk(sql); };
+    stale(); const t0 = Date.now(); const failed1 = await ask(), after1 = JSON.parse(store.get(FKEY));
+    expect('live.json: when D1 fails, the figures stay as they were and the next try is in about three minutes', tries === 1 && same(failed1.j, kept1) && same(after1.body, kept1.figures) && Math.abs(after1.checked - (t0 - 900_000 + 180_000)) < 5000 && figuresRun.next >= t0 + 170_000);
+    store.set(FKEY, JSON.stringify({ ...after1, checked: 0 })); await ask();
+    expect('live.json: and this copy of the worker does not try again before, even when KV could not keep the failure', tries === 1 && figuresRun.next > Date.now());
+    store.delete(FKEY); store.delete(DKEY); figuresRun.next = 0;
+    const none1 = await ask(), none2 = await ask();
+    expect('live.json: when D1 fails with nothing kept, figures is null, script and reported are as they were', tries === 2 && none1.j.figures === null && none2.j.figures === null && same(none2.j.script, kept1.script) && same(none2.j.reported, kept1.reported) && JSON.parse(store.get(FKEY)).body === null);
+    fdb.prepare = prepOk;
+    // when KV fails
+    figuresRun.next = 0; stale(); await ask(); const good1 = (await ask()).j;
+    const kvGetOk = env.REPORTS.get;
+    env.REPORTS.get = async (k) => { if (k.startsWith('figures/')) throw new Error('KV GET failed: 429 Too Many Requests'); return kvGetOk(k); };
+    kvMemo.clear(); const n7 = reads.length, kvBroken = await ask();
+    expect('live.json: when KV fails for the figures, figures is null, script and reported are as they were, and nothing is read', good1.figures !== null && kvBroken.j.figures === null && same(kvBroken.j.script, good1.script) && same(kvBroken.j.reported, good1.reported) && reads.length === n7);
+    env.REPORTS.get = async () => { throw new Error('KV GET failed: 429 Too Many Requests'); };
+    kvMemo.clear(); const allBroken = await ask();
+    expect('live.json: when KV fails altogether, it still answers, every part null as before', allBroken.r.status === 200 && allBroken.raw === '{"script":null,"reported":null,"figures":null}\n' && reads.length === n7);
+    env.REPORTS.get = kvGetOk; kvMemo.clear();
+    // a run that fails in the middle of a full read keeps the figures too
+    stale(); store.set(DKEY, JSON.stringify({ ...devices(), rules: 'older rules' }));
+    let calls = 0; fdb.prepare = (sql) => (sql === FIGURES_SQL && ++calls === 2 ? (() => { throw new Error('D1_ERROR: reset'); })() : prepOk(sql));
+    await ask();
+    expect('live.json: a full read that fails on its second page changes nothing it kept', calls === 2 && same(JSON.parse(store.get(FKEY)).body, good1.figures) && devices().rules === 'older rules');
+    fdb.prepare = prepOk; figuresRun.next = 0;
+    const noDb = await ask({ ...env, DB: undefined });
+    expect('live.json: without the database, figures is null', noDb.j.figures === null && Object.keys(noDb.j).join() === 'script,reported,figures');
+    store.delete(FKEY); store.delete(DKEY); figuresRun.next = 0;
   }
   globalThis.fetch = realFetch;
   console.log(failed ? `${failed} failed` : 'all passed');

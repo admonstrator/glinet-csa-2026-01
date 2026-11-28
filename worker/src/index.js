@@ -6,6 +6,8 @@
 import { DASHBOARD } from './dashboard.js';
 import { RESULT } from './result.js';
 import { KNOWN_RELEASE_HASHES } from './known.js';
+import { SHAPE_SHA256 } from './shape.js';
+import { foldFigures, figuresOf, isFigureState, FIGURES_RULES } from './figures.js';
 
 const MAX_BYTES = 49152;
 const SAFE = /^[A-Za-z0-9 ._:\/+@=,()-]*$/;
@@ -812,15 +814,95 @@ async function reported(request, env, ctx) {
   return body ? openJson(request, body, 300) : text('not available', 503);
 }
 
+// ---------------------------------------------------------------- the figures of the advisory
+// For the advisory on gl-i.net: how many devices sent a report, how many of them show
+// traces, the three charts and a few more, as docs/figures.md defines them. They are
+// counted in figures.js, with shape() of the dashboard, and kept like the reported table:
+// worked out at most every 15 minutes, always behind an answer, from the reports received
+// since the last run. The answer holds nothing about a single device.
+const FIGURES_KEY = 'figures/csa-2026-01';
+// What the figures need of every device, up to which time of receipt the reports have been
+// read, and the day of the last full read, kept apart from the figures. All reports are
+// read again when this is missing or unreadable, when the rules change, and once a day at
+// the first run from 04:00 UTC, before the advisory's daily build at 04:41: whatever went
+// wrong in the state lasts a day at most.
+const FIGURES_DEVICES_KEY = 'figures/csa-2026-01-devices';
+const FIGURES_OVERLAP = 120_000;
+const FIGURES_EVERY = 900_000;
+const FIGURES_FULL_FROM = 4 * 3600_000;
+// a page of the reports received up to ?2 that come after the report ?3 received at ?1 (all
+// from ?1 on for an empty ?3), through the index on (received, id); a full read takes a
+// few pages, each its own subrequest
+const FIGURES_PAGE = 1000;
+export const FIGURES_SQL = `SELECT id, received, report FROM reports WHERE (received, id) > (?1, ?3) AND received <= ?2 ORDER BY received, id LIMIT ${FIGURES_PAGE}`;
+// When this copy of the worker may start the next run: one at a time (one that never ended
+// counts as ended after a minute), and three minutes after a failure, also when KV refuses
+// to keep the failure. "next" can be reset, for the tests.
+export const figuresRun = { next: 0 };
+
+async function refreshFigures(env, have) {
+  try {
+    const rules = await sha256hex([SHAPE_SHA256, FIGURES_RULES, FIGURES_SQL].join('\n'));
+    // when KV refuses, this throws: better to wait than to read all reports on every call
+    const keptRaw = await env.REPORTS.get(FIGURES_DEVICES_KEY);
+    let kept = null;
+    try { kept = JSON.parse(keptRaw || 'null'); } catch { kept = null; }
+    const day = new Date(Date.now() - FIGURES_FULL_FROM).toISOString().slice(0, 10);
+    const again = !kept || kept.rules !== rules || kept.full !== day || !(Date.parse(kept.upto) > 0) || !isFigureState(kept.state);
+    // the newest report now, read from the index: one row
+    const upto = (await env.DB.prepare('SELECT max(received) AS latest FROM reports').first('latest')) || '';
+    let state = again ? null : kept.state, after = [again ? '' : new Date(Date.parse(kept.upto) - FIGURES_OVERLAP).toISOString(), ''];
+    for (;;) {
+      const { results } = await env.DB.prepare(FIGURES_SQL).bind(after[0], upto, after[1]).all();
+      // a report that cannot be read is left out by the fold, it does not stop the run
+      state = foldFigures(state, results.map((r) => { let report = null; try { report = JSON.parse(r.report); } catch { report = null; } return { id: r.id, received: r.received, report }; }));
+      if (results.length < FIGURES_PAGE) break;
+      after = [results[results.length - 1].received, results[results.length - 1].id];
+    }
+    if (again || upto !== kept.upto) await env.REPORTS.put(FIGURES_DEVICES_KEY, JSON.stringify({ rules, upto, full: again ? day : kept.full, state }));
+    const next = { checked: Date.now(), body: figuresOf(state, Date.now()) };
+    await kvPut(env, FIGURES_KEY, JSON.stringify(next));
+    figuresRun.next = 0;
+    return next;
+  } catch {
+    // keep what there is, and try again in a few minutes rather than on every call; with
+    // nothing yet, that too is kept, since every answer would else start a full read
+    figuresRun.next = Date.now() + 180_000;
+    try { await kvPut(env, FIGURES_KEY, JSON.stringify({ checked: Date.now() - FIGURES_EVERY + 180_000, body: have ? have.body : null })); } catch { /* KV refuses: this copy still waits */ }
+    return have;
+  }
+}
+
+// The figures as kept, or null: without the database, when KV refuses and nothing is known
+// here, and while nothing has been worked out yet. They are never worked out in the
+// answer's own path; once older than a quarter of an hour, or while there are none, a run
+// starts behind the answer.
+async function figuresNow(env, ctx) {
+  if (!env.DB) return null;
+  let raw;
+  try { raw = await kvGet(env, FIGURES_KEY); } catch { return null; }
+  let have = null;
+  try { have = JSON.parse(raw || 'null'); } catch { have = null; }
+  if ((!have || Date.now() - have.checked > FIGURES_EVERY) && Date.now() >= figuresRun.next) {
+    figuresRun.next = Date.now() + 60_000;
+    ctx.waitUntil(refreshFigures(env, have));
+  }
+  return (have && have.body) || null;
+}
+
 // For the advisory and the fix guide on gl-i.net: the version of the script served now
-// and its release time, with the reported table, in one small answer. Before, a reader's
-// browser fetched the whole script for its version and the table in a second call. Read
-// from memory and KV like the rest; a part that is not known is null.
+// and its release time, with the reported table and the figures of the advisory, in one
+// small answer. Before, a reader's browser fetched the whole script for its version and
+// the table in a second call. Read from memory and KV like the rest; a part that is not
+// known is null, and the figures never change what the other two parts say.
 async function live(request, env, ctx) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return text('method not allowed', 405);
   let script = null;
   try { script = servedVersion(JSON.parse((await kvGet(env, SCRIPT_KEY)) || 'null')); } catch { script = null; }
-  return openJson(request, { script, reported: await reportedNow(env, ctx) }, 60);
+  const reported = await reportedNow(env, ctx);
+  let figures = null;
+  try { figures = await figuresNow(env, ctx); } catch { figures = null; }
+  return openJson(request, { script, reported, figures }, 60);
 }
 
 // ---------------------------------------------------------------- the fingerprint check
