@@ -15,6 +15,15 @@
 import { shape, ts } from './shape.js';
 
 const MIN = 60_000;
+// A time on the device later than the report's own arrival comes from a wrong clock there;
+// such a time is left out, or one device could move a figure years ahead.
+const LATE = 10 * MIN;
+// A group of the firmware chart needs at least this many routers: fewer would say what
+// single devices run, and a made-up firmware would make its own bar.
+const SERIES_MIN = 5;
+// The model as the reported table names it, from what a report may carry: "GL-MT6000",
+// "GL.iNet GL-MT6000 (NAND)", "mt6000". Anything else names no model.
+const modelOf = (m) => { const v = String(m || '').toLowerCase().replace(/^gl\.?inet\s+/, '').replace(/^gl-/, '').replace(/\s*\(.*\)$/, ''); return /^[a-z0-9-]{2,16}$/.test(v) ? v : null; };
 const minute = (m) => new Date(m * MIN).toISOString().slice(0, 16) + 'Z';
 // the windows of the figures, in minutes since 1970
 const WINDOWS = {
@@ -58,22 +67,23 @@ function entryOf(x) {
     const r = shape(x);
     if (!Number.isFinite(r.recv) || !Number.isFinite(r.ioc)) return null;
     if (r.isTest && !r.dev) return null;
-    const e = new Array(SIZE).fill(null), fix = onFix(r), hit = r.ioc > 0, open = r.type === 'Router' && !fix, sf = ts(r.state_file_time);
+    const sane = (t) => (Number.isFinite(t) && t <= r.recv + LATE ? t : NaN);
+    const e = new Array(SIZE).fill(null), fix = onFix(r), hit = r.ioc > 0, open = r.type === 'Router' && !fix, sf = sane(ts(r.state_file_time));
     e[0] = String(r.dev || r.id);
     e[P.RECV] = r.recv;
     e[P.IOC] = r.ioc;
     e[P.BITS] = (r.isTest ? B.TEST : 0) | (r.type === 'Router' ? B.ROUTER : 0) | (r.kvm ? B.KVM : 0) | (fix ? B.FIX : 0) | (hit ? B.HIT : 0) | (r.shell ? B.SHELL : 0) |
       (r.goodcloud === 'on' ? B.GC_ON : 0) | (r.goodcloud === 'off' ? B.GC_OFF : 0) | (/V1\.10\.3 release8/.test(r.firmware) ? B.REL8 : 0) | (/V1\.10\.3 release3/.test(r.firmware) ? B.REL3 : 0) | (r.kinds.includes('marker') ? B.MARKER : 0);
-    const v = open ? /^(\d+)\.(\d+)/.exec(r.fw) : null;
+    const v = open ? /^(\d{1,2})\.(\d{1,3})(?!\d)/.exec(r.fw) : null;
     if (v) e[P.SERIES] = v[1] + '.' + v[2];
-    if (open && hit && Number.isFinite(sf)) { e[P.MODEL] = String(r.model); e[P.AT] = Math.floor(sf / MIN); }
+    if (open && hit && Number.isFinite(sf)) { e[P.MODEL] = modelOf(r.model); e[P.AT] = Math.floor(sf / MIN); }
     let more = 0, cmd = null;
     // tests count only for the pick of the report that counts
     if (!r.isTest) {
       // before and after the update: only devices with an ID can be followed
       if (r.dev && hit && !fix) e[P.TRACE] = r.recv;
       if (r.dev && fix) { e[P.FIXED] = r.recv; if (hit) e[P.FIXED_HIT] = r.recv; if (r.kvm) more |= M.FIX_KVM; }
-      const pipe = ts(r.pipe_time);
+      const pipe = sane(ts(r.pipe_time));
       if (!fix && pipe >= WINDOWS.pipe * MIN) e[P.PIPE] = Math.floor(pipe / MIN);
       if (r.bd) { e[P.BD] = r.recv; more |= (r.model === 'mt2500' ? M.BD_MT2500 : 0) | (fix ? M.BD_FIX : 0); }
       if (!fix && r.kinds.includes('cloud-command') && Number.isFinite(sf)) cmd = Math.floor(sf / MIN);
@@ -159,7 +169,7 @@ export function figuresOf(state, asOf) {
   f.goodcloud = { on: pair(Rn.filter((e) => is(e, B.GC_ON))), off: pair(Rn.filter((e) => is(e, B.GC_OFF))) };
   const all = [...s.dev, ...s.one];
   const pipes = all.map((e) => e[P.PIPE]).filter((t) => t != null);
-  f.pipe = { since22: pipes.length, since24: pipes.filter((t) => t >= WINDOWS.pipeLate).length, last: pipes.length ? minute(Math.max(...pipes)) : null };
+  f.pipe = { since22: pipes.length, since24: pipes.filter((t) => t >= WINDOWS.pipeLate).length, last: pipes.length ? minute(Math.max(...pipes)).slice(0, 10) : null };
   f.newest_command = s.cmd == null ? null : minute(s.cmd);
   const bd = all.filter((e) => e[P.BD] != null);
   f.backdoor = { devices: bd.length, mt2500: bd.filter((e) => has(e, M.BD_MT2500)).length, after_update: bd.filter((e) => has(e, M.BD_FIX)).length };
@@ -173,9 +183,9 @@ export function figuresOf(state, asOf) {
     const g = ser.get(name) || { name, hit: 0, of: 0, o: old ? [0, 0] : [major, minor] };
     g.of++; if (is(e, B.HIT)) g.hit++; ser.set(name, g);
   }
-  f.series = [...ser.values()].sort((a, b) => a.o[0] - b.o[0] || a.o[1] - b.o[1] || (a.name < b.name ? -1 : 1)).map(({ name, hit, of }) => ({ name, hit, of }));
+  f.series = [...ser.values()].filter((g) => g.of >= SERIES_MIN).sort((a, b) => a.o[0] - b.o[0] || a.o[1] - b.o[1] || (a.name < b.name ? -1 : 1)).map(({ name, hit, of }) => ({ name, hit, of }));
   const withT = Rn.filter((e) => is(e, B.HIT) && e[P.AT] != null), byModel = new Map();
-  for (const e of withT) { if (!byModel.has(e[P.MODEL])) byModel.set(e[P.MODEL], []); byModel.get(e[P.MODEL]).push(e[P.AT]); }
+  for (const e of withT) { if (e[P.MODEL] == null) continue; if (!byModel.has(e[P.MODEL])) byModel.set(e[P.MODEL], []); byModel.get(e[P.MODEL]).push(e[P.AT]); }
   const sweep = [];
   for (const [model, mins] of byModel) {
     if (mins.length < 5) continue;
@@ -202,4 +212,4 @@ export function figuresOf(state, asOf) {
 // What the rules of the figures are made of, for the worker's hash: every function and
 // constant of this file. A new one goes in here too; a change to one that is not here is
 // only picked up by the daily full read.
-export const FIGURES_RULES = [minute, built, onFix, entryOf, lower, higher, merge, isFigureState, foldFigures, figuresOf, JSON.stringify({ MIN, WINDOWS, P, SIZE, B, M, VERSION })].join('\n');
+export const FIGURES_RULES = [minute, modelOf, built, onFix, entryOf, lower, higher, merge, isFigureState, foldFigures, figuresOf, JSON.stringify({ MIN, LATE, SERIES_MIN, WINDOWS, P, SIZE, B, M, VERSION })].join('\n');

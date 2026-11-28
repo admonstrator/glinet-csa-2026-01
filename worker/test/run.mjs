@@ -381,6 +381,7 @@ if (process.argv[2] === 'serve') {
   expect('migrate needs the token', (await call('POST', undefined, {}, '/csa-2026-01-report/migrate')).status === 404);
   const m1 = await (await mig()).json();
   expect('migrate copies the KV reports', m1.copied === kvReports && m1.in_database === kvReports && m1.cursor === '');
+  expect('migrate makes the reported table and the figures read all reports again', store.get('reported/csa-2026-01-devices') === 'null' && store.get('figures/csa-2026-01-devices') === 'null');
   const m2 = await (await mig()).json();
   expect('migrate can be repeated without duplicates', m2.in_database === kvReports);
   expect('KV is left as it was', [...store.keys()].filter((k) => k.startsWith('csa-2026-01/')).length === kvReports);
@@ -891,6 +892,9 @@ if (process.argv[2] === 'serve') {
       const built = (r) => (/(\d{4}-\d\d-\d\d)\s*$/.exec(r.firmware || '') || [])[1] || '';
       const secFw = (r) => r.kvm ? (/V?1\.10\.3 release1\b/i.test(r.firmware) || (/^V?1\.8\.7/i.test(r.firmware) && /rmq1/i.test(r.model))) : r.type === 'Router' && built(r) >= '2026-11-22';
       const minute = (ms) => new Date(ms).toISOString().slice(0, 16) + 'Z';
+      // a time on the device later than ten minutes after the report arrived is left out
+      const sane = (r, s) => { const t = M.ts(s); return isFinite(t) && t <= r.recv + 600_000 ? t : NaN; };
+      const modelOf = (m) => { const v = String(m || '').toLowerCase().replace(/^gl\.?inet\s+/, '').replace(/^gl-/, '').replace(/\s*\(.*\)$/, ''); return /^[a-z0-9-]{2,16}$/.test(v) ? v : null; };
       const pair = (a) => [a.filter((r) => r.ioc > 0).length, a.length];
       const best = new Map();
       for (const r of all) { if (!r.dev) continue; const b = best.get(r.dev); if (!b || r.ioc > b.ioc || (r.ioc === b.ioc && r.recv > b.recv)) best.set(r.dev, r); }
@@ -916,9 +920,9 @@ if (process.argv[2] === 'serve') {
       f.shell = pool.filter((r) => r.shell).length;
       f.goodcloud = { on: pair(Rn.filter((r) => r.goodcloud === 'on')), off: pair(Rn.filter((r) => r.goodcloud === 'off')) };
       const pipe = new Map();
-      for (const r of nt) { if (secFw(r)) continue; const t = M.ts(r.pipe_time); if (t >= Date.parse('2026-11-22T00:00Z')) { const k = r.dev || r.id; pipe.set(k, Math.max(pipe.get(k) || 0, t)); } }
-      f.pipe = { since22: pipe.size, since24: [...pipe.values()].filter((t) => t >= Date.parse('2026-11-24T00:00Z')).length, last: pipe.size ? minute(Math.max(...pipe.values())) : null };
-      const cc = nt.filter((r) => !secFw(r) && r.kinds.includes('cloud-command')).map((r) => M.ts(r.state_file_time)).filter(isFinite);
+      for (const r of nt) { if (secFw(r)) continue; const t = sane(r, r.pipe_time); if (t >= Date.parse('2026-11-22T00:00Z')) { const k = r.dev || r.id; pipe.set(k, Math.max(pipe.get(k) || 0, t)); } }
+      f.pipe = { since22: pipe.size, since24: [...pipe.values()].filter((t) => t >= Date.parse('2026-11-24T00:00Z')).length, last: pipe.size ? minute(Math.max(...pipe.values())).slice(0, 10) : null };
+      const cc = nt.filter((r) => !secFw(r) && r.kinds.includes('cloud-command')).map((r) => sane(r, r.state_file_time)).filter(isFinite);
       f.newest_command = cc.length ? minute(Math.max(...cc)) : null;
       const bd = new Map();
       for (const r of nt) if (r.bd) { const k = r.dev || r.id; (bd.get(k) || bd.set(k, []).get(k)).push(r); }
@@ -926,12 +930,12 @@ if (process.argv[2] === 'serve') {
       const rel = (re) => { const a = K.filter((r) => re.test(r.firmware)); return [...pair(a), a.filter((r) => r.kinds.includes('marker')).length]; };
       f.kvm_release = { rm10_release8: rel(/V1\.10\.3 release8/), rm10rc_release3: rel(/V1\.10\.3 release3/) };
       const ser = new Map();
-      for (const r of Rn) { const m = /^(\d+)\.(\d+)/.exec(r.fw); if (!m) continue; const old = +m[1] < 4 || (+m[1] === 4 && +m[2] <= 6); const k = old ? '4.6 and older' : m[1] + '.' + m[2]; const s = ser.get(k) || { name: k, hit: 0, of: 0, o: old ? [0, 0] : [+m[1], +m[2]] }; s.of++; if (r.ioc > 0) s.hit++; ser.set(k, s); }
-      f.series = [...ser.values()].sort((a, b) => a.o[0] - b.o[0] || a.o[1] - b.o[1]).map(({ name, hit, of }) => ({ name, hit, of }));
-      const withT = Rn.filter((r) => r.ioc > 0 && isFinite(M.ts(r.state_file_time)));
+      for (const r of Rn) { const m = /^(\d{1,2})\.(\d{1,3})(?!\d)/.exec(r.fw); if (!m) continue; const old = +m[1] < 4 || (+m[1] === 4 && +m[2] <= 6); const k = old ? '4.6 and older' : m[1] + '.' + m[2]; const s = ser.get(k) || { name: k, hit: 0, of: 0, o: old ? [0, 0] : [+m[1], +m[2]] }; s.of++; if (r.ioc > 0) s.hit++; ser.set(k, s); }
+      f.series = [...ser.values()].filter((s) => s.of >= 5).sort((a, b) => a.o[0] - b.o[0] || a.o[1] - b.o[1]).map(({ name, hit, of }) => ({ name, hit, of }));
+      const withT = Rn.filter((r) => r.ioc > 0 && isFinite(sane(r, r.state_file_time)));
       const W0 = Date.parse('2026-11-20T22:00Z'), W1 = Date.parse('2026-11-21T08:00Z');
       const byModel = {};
-      for (const r of withT) (byModel[r.model] = byModel[r.model] || []).push(Math.floor(M.ts(r.state_file_time) / 60000));
+      for (const r of withT) { const k = modelOf(r.model); if (k) (byModel[k] = byModel[k] || []).push(Math.floor(sane(r, r.state_file_time) / 60000)); }
       const sw = [];
       for (const [model, mins] of Object.entries(byModel)) {
         const inW = mins.filter((m) => m * 60000 >= W0 && m * 60000 < W1); if (!inW.length || mins.length < 5) continue;
@@ -941,7 +945,7 @@ if (process.argv[2] === 'serve') {
       }
       f.sweep = sw.sort((a, b) => a.at.localeCompare(b.at) || a.model.localeCompare(b.model));
       const hours = {}; let used = 0;
-      for (const r of withT) { const t = M.ts(r.state_file_time); if (t < Date.parse('2026-11-19T00:00Z') || t >= Date.parse('2026-11-22T00:00Z')) continue; used++; const h = new Date(t).toISOString().slice(0, 13); hours[h] = (hours[h] || 0) + 1; }
+      for (const r of withT) { const t = sane(r, r.state_file_time); if (t < Date.parse('2026-11-19T00:00Z') || t >= Date.parse('2026-11-22T00:00Z')) continue; used++; const h = new Date(t).toISOString().slice(0, 13); hours[h] = (hours[h] || 0) + 1; }
       f.hours = Object.entries(hours).sort().map(([hour, n]) => ({ hour, n }));
       f.hours_routers = used;
       return f;
@@ -1010,10 +1014,14 @@ if (process.argv[2] === 'serve') {
     add('d4', at(25, '01:00:00'), { firmware: FIXED, ioc: 1, findings: PIPE, pipe_time: '2026-11-25 00:00:00 UTC' });
     add('', at(26, '08:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-26 07:30:45 UTC' });
     add('d6', at(27, '08:00:00'), { ...TEST, pipe_time: '2026-11-27 00:00:00 UTC' });
+    // a clock a few minutes ahead is kept, one far ahead is not: the pipe's last day stays a day of the reports
+    add('d7', at(26, '09:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2027-03-01 00:00:00 UTC' });
+    add('d8', at(27, '07:00:00'), { ioc: 1, findings: PIPE, pipe_time: '2026-11-27 07:09:00 UTC' });
     // the newest command from the cloud: shape() makes one of an empty state file with AstroWarp off, not with it on; security firmware left out
     add('e1', at(22, '03:00:00'), { state_file_size: 0, state_file_time: '2026-11-21 18:58:30 UTC' });
     add('e2', at(23, '03:00:00'), { astrowarp: 'on', state_file_size: 0, state_file_time: '2026-11-23 10:00:00 UTC' });
     add('e3', at(23, '04:00:00'), { firmware: FIXED, ioc: 1, findings: ['cloud-command /etc/mp_ip_mapping_info'], state_file_size: 0, state_file_time: '2026-11-21 20:00:00 UTC' });
+    add('e4', at(23, '05:00:00'), { state_file_size: 0, state_file_time: '2026-12-24 00:00:00 UTC' }); // a clock far ahead
     // the older backdoor: by the model of the first such report, on security firmware, a test left out
     add('f1', at(21, '14:00:00'), { model: 'mt2500', ioc: 1, findings: BDF });
     add('f1', at(24, '14:00:00'), { model: 'mt2500', firmware: FIXED, ioc: 1, findings: BDF });
@@ -1031,6 +1039,11 @@ if (process.argv[2] === 'serve') {
     add('h3', at(24, '10:10:00'), { firmware: '4.12.1 release1 build 700 2026-11-21', ioc: 1, findings: MK });
     add('h4', at(24, '10:15:00'), { firmware: 'unknown', ioc: 1, findings: MK });
     add('h5', at(24, '10:20:00'), { firmware: '3.215' });
+    add('h6', at(24, '10:25:00'), { firmware: '100.1 release1' });
+    ['4.6.8', '4.4.6 release1'].forEach((fw, i) => add('h7 ' + i, at(24, '10:30:00'), { firmware: fw }));
+    ['4.7.2', '4.7.0'].forEach((fw, i) => add('h8 ' + i, at(24, '10:35:00'), { firmware: fw }));
+    for (let i = 0; i < 4; i++) add('h9 ' + i, at(24, '10:40:00'), { firmware: '4.12.0 release1 build 700 2026-11-21' });
+    for (let i = 0; i < 4; i++) add('h10 ' + i, at(24, '10:45:00'), { firmware: '4.10.1 release1' });
     // GoodCloud on open routers only, and a remote shell on a device that is neither router nor KVM
     add('i1', at(24, '11:00:00'), { goodcloud: 'on', ioc: 1, findings: MK });
     add('i2', at(24, '11:05:00'), { goodcloud: 'on' });
@@ -1044,6 +1057,10 @@ if (process.argv[2] === 'serve') {
     swept('ax1800', ['2026-11-20 23:00:00 UTC', '2026-11-20 23:00:00 UTC', '2026-11-20 23:00:00 UTC', '2026-11-20 23:00:00 UTC']);
     swept('ax1800', ['2026-11-20 23:00:00 UTC'], { firmware: FIXED });
     swept('mt6000', ['2026-11-19 00:00:00 UTC', '2026-11-18 23:59:59 UTC', '2026-11-22 00:00:00 UTC', '2026-11-21 12:00:00 UTC', '2026-11-21 12:30:00 UTC']);
+    swept('GL-MT3000', ['2026-11-20 22:15:20 UTC']);
+    swept('GL.iNet GL-MT3000 (NAND)', ['2026-11-20 22:16:30 UTC']);
+    swept('Some Router!', Array(5).fill('2026-11-20 22:30:00 UTC'));
+    swept('mt3000', ['2027-01-01 00:00:00 UTC'], { firmware: '4.8.3 release3 build 541 2026-10-02' });
     // reports that shape() cannot read: left out, and they stop nothing
     const BAD = [
       { id: 'fxbad1', received: at(24, '12:00:00'), report: { schema: 9, platform: 'openwrt', model: 'mt6000', firmware: '4.8.3', ioc: 2, findings: ['marker /etc/config/.gl'] } },
@@ -1052,15 +1069,15 @@ if (process.argv[2] === 'serve') {
     ];
     const newest = Date.parse(at(27, '08:00:00'));
     const HAND = {
-      as_of: '2026-11-27T08:00Z', devices: 67, routers: 58, kvm: 9,
-      updated: { routers: [5, 8], kvm: [1, 3] }, open: { routers: [40, 50], kvm: [3, 6] },
-      cleaned: { routers: 5, kvm: 1, still: 1 }, shell: 6, goodcloud: { on: [1, 2], off: [1, 1] },
-      pipe: { since22: 3, since24: 2, last: '2026-11-26T07:30Z' }, newest_command: '2026-11-21T18:58Z',
+      as_of: '2026-11-27T08:00Z', devices: 91, routers: 82, kvm: 9,
+      updated: { routers: [5, 8], kvm: [1, 3] }, open: { routers: [51, 74], kvm: [3, 6] },
+      cleaned: { routers: 5, kvm: 1, still: 1 }, shell: 8, goodcloud: { on: [1, 2], off: [1, 1] },
+      pipe: { since22: 4, since24: 3, last: '2026-11-27' }, newest_command: '2026-11-21T18:58Z',
       backdoor: { devices: 3, mt2500: 2, after_update: 1 }, kvm_release: { rm10_release8: [1, 2, 1], rm10rc_release3: [1, 1, 0] },
-      series: [{ name: '4.6 and older', hit: 1, of: 3 }, { name: '4.7', hit: 0, of: 3 }, { name: '4.8', hit: 37, of: 42 }, { name: '4.12', hit: 1, of: 1 }],
-      sweep: [{ model: 'GL-X3000', at: '2026-11-20T22:00Z', n: 1, of: 5 }, { model: 'GL-BE3600', at: '2026-11-20T22:15Z', n: 2, of: 5 }, { model: 'GL-MT3000', at: '2026-11-20T22:15Z', n: 4, of: 6 }],
-      hours: [['2026-11-19T00', 1], ['2026-11-20T21', 1], ['2026-11-20T22', 7], ['2026-11-20T23', 7], ['2026-11-21T07', 1], ['2026-11-21T08', 3], ['2026-11-21T09', 1], ['2026-11-21T12', 2], ['2026-11-21T18', 1]].map(([hour, n]) => ({ hour, n })),
-      hours_routers: 24,
+      series: [{ name: '4.6 and older', hit: 1, of: 5 }, { name: '4.7', hit: 0, of: 5 }, { name: '4.8', hit: 48, of: 53 }, { name: '4.12', hit: 1, of: 5 }],
+      sweep: [{ model: 'GL-X3000', at: '2026-11-20T22:00Z', n: 1, of: 5 }, { model: 'GL-BE3600', at: '2026-11-20T22:15Z', n: 2, of: 5 }, { model: 'GL-MT3000', at: '2026-11-20T22:15Z', n: 6, of: 8 }],
+      hours: [['2026-11-19T00', 1], ['2026-11-20T21', 1], ['2026-11-20T22', 14], ['2026-11-20T23', 7], ['2026-11-21T07', 1], ['2026-11-21T08', 3], ['2026-11-21T09', 1], ['2026-11-21T12', 2], ['2026-11-21T18', 1]].map(([hour, n]) => ({ hour, n })),
+      hours_routers: 31,
     };
     const ALL = [...FX, ...BAD], mine = figuresOf(foldFigures(null, ALL), newest), want = ref(FX);
     const part = (...keys) => same(keys.map((k) => mine[k]), keys.map((k) => HAND[k]));
@@ -1068,13 +1085,13 @@ if (process.argv[2] === 'serve') {
     expect('figures: the pool takes per device the report with the most traces, then the newest, drops a device whose chosen report is a test, and counts each report without an ID', part('devices', 'routers', 'kvm', 'open') && same(mine.series[1], HAND.series[1]) && !mine.series.some((s) => s.name === '4.9'));
     expect('figures: security firmware by build date for routers, V1.10.3 release1 for KVMs, 1.8.7 only on a GL-RMQ1', part('updated', 'open'));
     expect('figures: cleaned counts traces before security firmware, not after it, by the last later report, and those still with traces', part('cleaned'));
-    expect('figures: the shell, GoodCloud on open routers, the pipe from 22 and from 24 November by device and to the minute', part('shell', 'goodcloud', 'pipe'));
-    expect('figures: the newest command is what shape() takes for one, outside security firmware', part('newest_command'));
+    expect('figures: the shell, GoodCloud on open routers, the pipe from 22 and from 24 November by device, its last day, a clock far ahead left out', part('shell', 'goodcloud', 'pipe'));
+    expect('figures: the newest command is what shape() takes for one, outside security firmware, a clock far ahead left out', part('newest_command'));
     expect('figures: the older backdoor by device, by the model of its first report, and after an update', part('backdoor'));
     expect('figures: the KVM releases, with traces, all, with the malware files', part('kvm_release'));
-    expect('figures: the series group 4.6 and older, leave out an unknown version and put 4.12 after 4.8', part('series'));
-    expect('figures: the sweep keeps the window to the minute, needs five routers, takes the earliest of equal minutes and counts all times near it', part('sweep'));
-    expect('figures: the hours keep their window, sorted', part('hours', 'hours_routers', 'as_of'));
+    expect('figures: the series group 4.6 and older, leave out an unknown version and one of three digits, a group of fewer than five, and put 4.12 after 4.8', part('series'));
+    expect('figures: the sweep keeps the window to the minute, needs five routers, takes the earliest of equal minutes, counts all times near it, names a model as the reported table does and leaves out a name that is none', part('sweep'));
+    expect('figures: the hours keep their window, sorted, also for a model without a name', part('hours', 'hours_routers', 'as_of'));
     expect('figures: all of it, as worked out by hand', same(mine, HAND));
     expect('figures: the same as the plain count of the reference over all reports at once', same(mine, want) && same(want, HAND));
     expect('figures: a report shape() cannot read is left out', same(figuresOf(foldFigures(null, FX), newest), mine));

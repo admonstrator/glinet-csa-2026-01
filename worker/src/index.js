@@ -385,8 +385,8 @@ async function migrate(request, env) {
   const items = await kvLoad(env, page.keys.map((k) => k.name));
   const insert = env.DB.prepare('INSERT OR IGNORE INTO reports (id, received, report) VALUES (?1, ?2, ?3)');
   if (items.length) await env.DB.batch(items.map((x) => insert.bind(x.id, x.received, JSON.stringify(x.report))));
-  // older reports came in: the reported table reads them all again
-  if (items.length) await env.REPORTS.put(REPORTED_DEVICES_KEY, 'null');
+  // older reports came in: the reported table and the figures read them all again
+  if (items.length) { await env.REPORTS.put(REPORTED_DEVICES_KEY, 'null'); await env.REPORTS.put(FIGURES_DEVICES_KEY, 'null'); }
   const total = await env.DB.prepare('SELECT count(*) AS n FROM reports').first('n');
   return new Response(JSON.stringify({ copied: items.length, in_database: total, cursor: page.list_complete ? '' : page.cursor }) + '\n', {
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
